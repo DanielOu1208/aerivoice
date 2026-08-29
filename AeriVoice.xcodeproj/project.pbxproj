@@ -1,0 +1,59 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 70;
+	objects = {
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = A10000000000000000000040; proxyType = 1; remoteGlobalIDString = A10000000000000000000030; remoteInfo = AeriVoice; };
+/* End PBXContainerItemProxy section */
+/* Begin PBXFileReference section */
+		A10000000000000000000002 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AeriVoice.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000003 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AeriVoiceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A10000000000000000000010 = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = AeriVoice; sourceTree = "<group>"; };
+		A10000000000000000000011 = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = AeriVoiceTests; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000020 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000021 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+/* Begin PBXGroup section */
+		A10000000000000000000012 = {isa = PBXGroup; children = (A10000000000000000000010, A10000000000000000000011, A10000000000000000000013); sourceTree = "<group>"; };
+		A10000000000000000000013 = {isa = PBXGroup; children = (A10000000000000000000002, A10000000000000000000003); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+/* Begin PBXNativeTarget section */
+		A10000000000000000000030 = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000061; buildPhases = (A10000000000000000000050, A10000000000000000000020, A10000000000000000000052); buildRules = (); dependencies = (); fileSystemSynchronizedGroups = (A10000000000000000000010); name = AeriVoice; packageProductDependencies = (); productName = AeriVoice; productReference = A10000000000000000000002; productType = "com.apple.product-type.application"; };
+		A10000000000000000000031 = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000062; buildPhases = (A10000000000000000000051, A10000000000000000000021, A10000000000000000000053); buildRules = (); dependencies = (A10000000000000000000032); fileSystemSynchronizedGroups = (A10000000000000000000011); name = AeriVoiceTests; packageProductDependencies = (); productName = AeriVoiceTests; productReference = A10000000000000000000003; productType = "com.apple.product-type.bundle.unit-test"; };
+/* End PBXNativeTarget section */
+/* Begin PBXProject section */
+		A10000000000000000000040 = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2640; LastUpgradeCheck = 2640; TargetAttributes = {A10000000000000000000030 = {CreatedOnToolsVersion = 26.4;}; A10000000000000000000031 = {CreatedOnToolsVersion = 26.4; TestTargetID = A10000000000000000000030;};};}; buildConfigurationList = A10000000000000000000060; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A10000000000000000000012; productRefGroup = A10000000000000000000013; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000030, A10000000000000000000031); };
+/* End PBXProject section */
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000052 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000053 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000050 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000051 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+/* Begin PBXTargetDependency section */
+		A10000000000000000000032 = {isa = PBXTargetDependency; target = A10000000000000000000030; targetProxy = A10000000000000000000001; };
+/* End PBXTargetDependency section */
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000070 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; ONLY_ACTIVE_ARCH = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone";}; name = Debug; };
+		A10000000000000000000071 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_NS_ASSERTIONS = NO; SWIFT_COMPILATION_MODE = wholemodule;}; name = Release; };
+		A10000000000000000000072 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = AeriVoice/AeriVoice.entitlements; CODE_SIGN_STYLE = Automatic; COMBINE_HIDPI_IMAGES = YES; DEVELOPMENT_TEAM = KGR3DQJZ8C; ENABLE_APP_SANDBOX = NO; ENABLE_HARDENED_RUNTIME = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AeriVoice; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity"; INFOPLIST_KEY_LSUIElement = YES; INFOPLIST_KEY_NSMicrophoneUsageDescription = "AeriVoice needs microphone access to transcribe your speech."; MACOSX_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.danielou.AeriVoice; PRODUCT_MODULE_NAME = AeriVoice; PRODUCT_NAME = AeriVoice; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0;}; name = Debug; };
+		A10000000000000000000073 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = AeriVoice/AeriVoice.entitlements; CODE_SIGN_STYLE = Automatic; COMBINE_HIDPI_IMAGES = YES; DEVELOPMENT_TEAM = KGR3DQJZ8C; ENABLE_APP_SANDBOX = NO; ENABLE_HARDENED_RUNTIME = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AeriVoice; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity"; INFOPLIST_KEY_LSUIElement = YES; INFOPLIST_KEY_NSMicrophoneUsageDescription = "AeriVoice needs microphone access to transcribe your speech."; MACOSX_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.danielou.AeriVoice; PRODUCT_MODULE_NAME = AeriVoice; PRODUCT_NAME = AeriVoice; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0;}; name = Release; };
+		A10000000000000000000074 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = KGR3DQJZ8C; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.danielou.AeriVoiceTests; PRODUCT_NAME = AeriVoiceTests; SDKROOT = macosx; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AeriVoice.app/Contents/MacOS/AeriVoice";}; name = Debug; };
+		A10000000000000000000075 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = KGR3DQJZ8C; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.danielou.AeriVoiceTests; PRODUCT_NAME = AeriVoiceTests; SDKROOT = macosx; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AeriVoice.app/Contents/MacOS/AeriVoice";}; name = Release; };
+/* End XCBuildConfiguration section */
+/* Begin XCConfigurationList section */
+		A10000000000000000000060 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000070, A10000000000000000000071); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000061 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000072, A10000000000000000000073); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000062 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000074, A10000000000000000000075); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000040;
+}
