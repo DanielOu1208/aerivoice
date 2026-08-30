@@ -320,12 +320,8 @@ private struct NotchContentView: View {
       } else {
         LiveTranscriptLine(snapshot: model.state.transcript)
       }
-    case .processing:
-      statusRow("Finishing…")
-    case .cleaning:
-      statusRow("Cleaning up…")
-    case .inserting:
-      statusRow("Inserting…")
+    case .processing, .cleaning, .inserting:
+      statusRow("Refining…")
     case .success:
       Image(systemName: "checkmark")
         .font(.system(size: 14, weight: .semibold))
