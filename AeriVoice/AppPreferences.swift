@@ -5,6 +5,8 @@ import ServiceManagement
 final class AppPreferences: ObservableObject {
   private enum Key {
     static let cleanupMode = "cleanupMode"
+    static let cleanupModel = "cleanupModel"
+    static let cleanupReasoningEfforts = "cleanupReasoningEfforts"
     static let vocabulary = "vocabulary"
     static let muteOutput = "muteOutput"
     static let soundCues = "soundCues"
@@ -16,6 +18,9 @@ final class AppPreferences: ObservableObject {
 
   @Published var cleanupMode: CleanupMode {
     didSet { defaults.set(cleanupMode.rawValue, forKey: Key.cleanupMode) }
+  }
+  @Published var cleanupModel: CleanupModel {
+    didSet { defaults.set(cleanupModel.rawValue, forKey: Key.cleanupModel) }
   }
   @Published var vocabulary: String { didSet { defaults.set(vocabulary, forKey: Key.vocabulary) } }
   @Published var muteOutput: Bool { didSet { defaults.set(muteOutput, forKey: Key.muteOutput) } }
@@ -30,10 +35,38 @@ final class AppPreferences: ObservableObject {
   }
 
   private let defaults: UserDefaults
+  private var savedReasoningEfforts: [String: String] = [:]
+
+  var cleanupReasoningEffort: CleanupReasoningEffort {
+    get {
+      let saved = savedReasoningEfforts[cleanupModel.rawValue].flatMap {
+        CleanupReasoningEffort(rawValue: $0)
+      }
+      return cleanupModel.normalizedReasoningEffort(saved)
+    }
+    set {
+      let normalized = cleanupModel.normalizedReasoningEffort(newValue)
+      guard cleanupReasoningEffort != normalized else { return }
+      objectWillChange.send()
+      savedReasoningEfforts[cleanupModel.rawValue] = normalized.rawValue
+      persistReasoningEfforts()
+    }
+  }
+
+  var cleanupConfiguration: CleanupConfiguration {
+    CleanupConfiguration(model: cleanupModel, reasoningEffort: cleanupReasoningEffort)
+  }
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .faithful
+    cleanupModel =
+      CleanupModel(rawValue: defaults.string(forKey: Key.cleanupModel) ?? "") ?? .defaultModel
+    if let data = defaults.data(forKey: Key.cleanupReasoningEfforts),
+      let saved = try? JSONDecoder().decode([String: String].self, from: data)
+    {
+      savedReasoningEfforts = saved
+    }
     vocabulary = defaults.string(forKey: Key.vocabulary) ?? ""
     muteOutput = defaults.object(forKey: Key.muteOutput) as? Bool ?? true
     soundCues = defaults.object(forKey: Key.soundCues) as? Bool ?? true
@@ -64,6 +97,12 @@ final class AppPreferences: ObservableObject {
       defaults.set(data, forKey: Key.shortcut)
     } else {
       defaults.removeObject(forKey: Key.shortcut)
+    }
+  }
+
+  private func persistReasoningEfforts() {
+    if let data = try? JSONEncoder().encode(savedReasoningEfforts) {
+      defaults.set(data, forKey: Key.cleanupReasoningEfforts)
     }
   }
 }

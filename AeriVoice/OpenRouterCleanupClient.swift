@@ -1,13 +1,14 @@
 import Foundation
 
 struct OpenRouterCleanupClient: CleaningText {
-  static let modelID = "google/gemini-3.7-flash"
-
   private let session: URLSession
 
   init(session: URLSession = .shared) { self.session = session }
 
-  func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> CleanupTextResult {
+  func clean(
+    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+  ) async throws -> CleanupTextResult {
+    let route = configuration.model.providerRoute
     var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
     request.httpMethod = "POST"
     request.timeoutInterval = 10
@@ -17,13 +18,15 @@ struct OpenRouterCleanupClient: CleaningText {
     request.setValue("enabled", forHTTPHeaderField: "X-OpenRouter-Metadata")
     request.httpBody = try JSONEncoder().encode(
       OpenRouterRequest(
-        model: Self.modelID,
+        model: configuration.model.rawValue,
         messages: [
           .init(role: "system", content: CleanupPrompt.system(mode: mode)),
           .init(role: "user", content: text),
         ],
-        reasoning: .init(effort: "low", exclude: true),
-        provider: .init(sort: "latency", zdr: true, allowFallbacks: true, requireParameters: true),
+        reasoning: .init(effort: configuration.reasoningEffort.rawValue, exclude: true),
+        provider: .init(
+          only: route.only, sort: route.sort, zdr: route.requiresZeroDataRetention,
+          allowFallbacks: route.allowsFallbacks, requireParameters: true),
         responseFormat: .init(
           type: "json_schema",
           jsonSchema: .init(
@@ -94,7 +97,7 @@ struct OpenRouterCleanupClient: CleaningText {
         httpStatus: http.statusCode))
   }
 
-  func validate(apiKey: String) async throws {
+  func validate(apiKey: String, configuration: CleanupConfiguration) async throws {
     var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/auth/key")!)
     request.timeoutInterval = 10
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -102,7 +105,8 @@ struct OpenRouterCleanupClient: CleaningText {
     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
       throw AppError.provider("OpenRouter rejected this key.")
     }
-    _ = try await clean("Test.", mode: .faithful, apiKey: apiKey)
+    _ = try await clean(
+      "Test.", mode: .faithful, configuration: configuration, apiKey: apiKey)
   }
 }
 
@@ -140,12 +144,13 @@ private struct OpenRouterRequest: Encodable {
     let exclude: Bool
   }
   struct Provider: Encodable {
-    let sort: String
+    let only: [String]?
+    let sort: String?
     let zdr: Bool
     let allowFallbacks: Bool
     let requireParameters: Bool
     enum CodingKeys: String, CodingKey {
-      case sort, zdr
+      case only, sort, zdr
       case allowFallbacks = "allow_fallbacks"
       case requireParameters = "require_parameters"
     }

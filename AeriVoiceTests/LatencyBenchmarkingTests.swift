@@ -13,7 +13,10 @@ final class LatencyBenchmarkingTests: XCTestCase {
     let recorder = makeRecorder(directory: directory, clock: clock, wallClock: wallClock)
     await recorder.flushForTesting()
 
-    recorder.begin(enabled: true, cleanupMode: .faithful)
+    recorder.begin(
+      enabled: true, cleanupMode: .faithful,
+      cleanupConfiguration: CleanupConfiguration(
+        model: .gptOSS120BCerebras, reasoningEffort: .high))
     clock.milliseconds = 1_010
     recorder.mark(.captureStarted)
     clock.milliseconds = 1_015
@@ -62,7 +65,9 @@ final class LatencyBenchmarkingTests: XCTestCase {
     wallClock.date = wallClock.date.addingTimeInterval(0.405)
     recorder.finish(.inserted, stage: nil, category: nil, httpStatus: nil)
     clock.milliseconds = 2_000
-    recorder.begin(enabled: true, cleanupMode: .polished)
+    recorder.begin(
+      enabled: true, cleanupMode: .polished,
+      cleanupConfiguration: defaultCleanupConfiguration)
     recorder.recordCleanupFallback(
       rawCharacters: 14,
       error: ProviderHTTPError(statusCode: 503, message: "SECRET_PROVIDER_ERROR"))
@@ -81,6 +86,10 @@ final class LatencyBenchmarkingTests: XCTestCase {
     XCTAssertEqual(record.workload.transcriptUpdates, 2)
     XCTAssertEqual(record.stt.finalAudioProcessedMS, 100)
     XCTAssertEqual(record.cleanup.selectedProvider, "provider")
+    XCTAssertEqual(record.cleanup.requestedModel, "openai/gpt-oss-120b")
+    XCTAssertEqual(record.cleanup.requestedReasoningEffort, .high)
+    XCTAssertEqual(record.cleanup.requestedProviderTag, "cerebras/fp16")
+    XCTAssertEqual(record.cleanup.zeroDataRetentionRequired, true)
     XCTAssertEqual(record.cleanup.result, .applied)
     XCTAssertEqual(record.outcome?.terminalResult, .inserted)
     XCTAssertEqual(record.durationsMS.activationToCaptureMS, 10)
@@ -109,7 +118,9 @@ final class LatencyBenchmarkingTests: XCTestCase {
       wallClock: TestWallClock(date: Date()))
     await recorder.flushForTesting()
 
-    recorder.begin(enabled: false, cleanupMode: .polished)
+    recorder.begin(
+      enabled: false, cleanupMode: .polished,
+      cleanupConfiguration: defaultCleanupConfiguration)
     recorder.mark(.captureStarted)
     recorder.finish(.inserted, stage: nil, category: nil, httpStatus: nil)
     await recorder.flushForTesting()
@@ -120,6 +131,45 @@ final class LatencyBenchmarkingTests: XCTestCase {
         atPath: directory.appending(path: LatencyBenchmarkStore.logFilename).path))
   }
 
+  func testLegacyRecordWithoutRoutingMetadataStillDecodes() throws {
+    let legacyJSON = #"""
+      {
+        "schemaVersion": 1,
+        "interactionID": "00000000-0000-0000-0000-000000000001",
+        "startedAt": "2033-05-18T03:33:20Z",
+        "lastCheckpointAt": "2033-05-18T03:33:20Z",
+        "environment": {
+          "macOSVersion": "TestOS",
+          "architecture": "arm64"
+        },
+        "milestonesMS": {},
+        "durationsMS": {},
+        "workload": {
+          "audioBytes": 0,
+          "audioBytesSent": 0,
+          "audioChunks": 0,
+          "maxBufferedAudioBytes": 0,
+          "transcriptUpdates": 0
+        },
+        "stt": { "model": "stt-rt-v5" },
+        "cleanup": {
+          "mode": "Faithful",
+          "requestedModel": "google/gemini-3.7-flash",
+          "result": "notReached"
+        }
+      }
+      """#
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    let record = try decoder.decode(LatencyBenchmarkRecord.self, from: Data(legacyJSON.utf8))
+
+    XCTAssertEqual(record.cleanup.requestedModel, "google/gemini-3.7-flash")
+    XCTAssertNil(record.cleanup.requestedReasoningEffort)
+    XCTAssertNil(record.cleanup.requestedProviderTag)
+    XCTAssertNil(record.cleanup.zeroDataRetentionRequired)
+  }
+
   func testActiveCheckpointRecoversAsInterruptedOnNextLaunch() async throws {
     let directory = makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -127,7 +177,9 @@ final class LatencyBenchmarkingTests: XCTestCase {
     let wallClock = TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000))
     let firstRecorder = makeRecorder(directory: directory, clock: clock, wallClock: wallClock)
     await firstRecorder.flushForTesting()
-    firstRecorder.begin(enabled: true, cleanupMode: .faithful)
+    firstRecorder.begin(
+      enabled: true, cleanupMode: .faithful,
+      cleanupConfiguration: defaultCleanupConfiguration)
     clock.milliseconds = 25
     recorderMarkCapture(firstRecorder)
     await firstRecorder.flushForTesting()
@@ -172,7 +224,9 @@ final class LatencyBenchmarkingTests: XCTestCase {
     let wallClock = TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000))
     let recorder = makeRecorder(directory: directory, clock: clock, wallClock: wallClock)
 
-    recorder.begin(enabled: true, cleanupMode: .faithful)
+    recorder.begin(
+      enabled: true, cleanupMode: .faithful,
+      cleanupConfiguration: defaultCleanupConfiguration)
     clock.milliseconds = 10
     recorder.finish(.cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
 
@@ -239,8 +293,7 @@ final class LatencyBenchmarkingTests: XCTestCase {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     return try Data(contentsOf: url).split(separator: 0x0A).compactMap { line in
-      do { return try decoder.decode(LatencyBenchmarkRecord.self, from: Data(line)) }
-      catch {
+      do { return try decoder.decode(LatencyBenchmarkRecord.self, from: Data(line)) } catch {
         if ignoringMalformed { return nil }
         throw error
       }
@@ -259,9 +312,15 @@ final class LatencyBenchmarkingTests: XCTestCase {
       durationsMS: BenchmarkDurations(totalMS: 1), workload: BenchmarkWorkload(),
       stt: BenchmarkSTTMetadata(model: "stt-rt-v5"),
       cleanup: BenchmarkCleanupMetadata(
-        mode: .faithful, requestedModel: OpenRouterCleanupClient.modelID),
+        mode: .faithful, requestedModel: CleanupModel.defaultModel.rawValue,
+        requestedReasoningEffort: nil, requestedProviderTag: nil,
+        zeroDataRetentionRequired: nil),
       outcome: BenchmarkOutcome(
         terminalResult: .inserted, failureStage: nil, failureCategory: nil, httpStatus: nil))
+  }
+
+  private var defaultCleanupConfiguration: CleanupConfiguration {
+    CleanupConfiguration(model: .defaultModel, reasoningEffort: .low)
   }
 }
 

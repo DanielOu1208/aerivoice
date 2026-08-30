@@ -100,6 +100,9 @@ struct BenchmarkSTTMetadata: Codable, Equatable, Sendable {
 struct BenchmarkCleanupMetadata: Codable, Equatable, Sendable {
   var mode: CleanupMode
   let requestedModel: String
+  let requestedReasoningEffort: CleanupReasoningEffort?
+  let requestedProviderTag: String?
+  let zeroDataRetentionRequired: Bool?
   var actualModel: String?
   var selectedProvider: String?
   var selectedProviderModel: String?
@@ -162,7 +165,8 @@ protocol LatencyBenchmarkRecording: AnyObject {
   var directoryURL: URL { get }
   var isRecording: Bool { get }
 
-  func begin(enabled: Bool, cleanupMode: CleanupMode)
+  func begin(
+    enabled: Bool, cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration)
   func mark(_ milestone: BenchmarkMilestone)
   func recordAudioCaptured(bytes: Int, bufferedBytes: Int)
   func recordAudioSent(bytes: Int)
@@ -211,9 +215,12 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     enqueue { store in try await store.recoverAndPrune(now: recoveryNow) }
   }
 
-  func begin(enabled: Bool, cleanupMode: CleanupMode) {
+  func begin(
+    enabled: Bool, cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration
+  ) {
     guard enabled, active == nil else { return }
     let wallTime = wallNow()
+    let route = cleanupConfiguration.model.providerRoute
     let record = LatencyBenchmarkRecord(
       schemaVersion: 1,
       interactionID: UUID(),
@@ -225,7 +232,10 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
       workload: BenchmarkWorkload(),
       stt: BenchmarkSTTMetadata(model: "stt-rt-v5"),
       cleanup: BenchmarkCleanupMetadata(
-        mode: cleanupMode, requestedModel: OpenRouterCleanupClient.modelID))
+        mode: cleanupMode, requestedModel: cleanupConfiguration.model.rawValue,
+        requestedReasoningEffort: cleanupConfiguration.reasoningEffort,
+        requestedProviderTag: route.requestedProviderTag,
+        zeroDataRetentionRequired: route.requiresZeroDataRetention))
     active = ActiveInteraction(originMS: monotonicNowMS(), record: record)
     checkpoint()
   }
@@ -260,7 +270,8 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     guard var active else { return }
     active.record.workload.audioBytesSent += bytes
     if active.record.milestonesMS[BenchmarkMilestone.firstAudioSent.rawValue] == nil {
-      active.record.milestonesMS[BenchmarkMilestone.firstAudioSent.rawValue] = elapsedMS(for: active)
+      active.record.milestonesMS[BenchmarkMilestone.firstAudioSent.rawValue] = elapsedMS(
+        for: active)
       active.record.lastCheckpointAt = wallNow()
       self.active = active
       checkpoint()
@@ -281,11 +292,13 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     let elapsed = elapsedMS(for: active)
     var needsCheckpoint = setIfMissing(.firstSTTResponse, elapsed: elapsed, active: &active)
     if update.hasTranscript {
-      needsCheckpoint = setIfMissing(.firstTranscript, elapsed: elapsed, active: &active)
+      needsCheckpoint =
+        setIfMissing(.firstTranscript, elapsed: elapsed, active: &active)
         || needsCheckpoint
     }
     if update.hasFinalText {
-      needsCheckpoint = setIfMissing(.firstFinalTranscript, elapsed: elapsed, active: &active)
+      needsCheckpoint =
+        setIfMissing(.firstFinalTranscript, elapsed: elapsed, active: &active)
         || needsCheckpoint
     }
     if needsCheckpoint { active.record.lastCheckpointAt = wallNow() }
@@ -527,8 +540,9 @@ actor LatencyBenchmarkStore {
     var line = try encoder.encode(record)
     line.append(0x0A)
     if !fileManager.fileExists(atPath: url.path) {
-      guard fileManager.createFile(
-        atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
+      guard
+        fileManager.createFile(
+          atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
       else { throw CocoaError(.fileWriteUnknown) }
     }
     let handle = try FileHandle(forWritingTo: url)

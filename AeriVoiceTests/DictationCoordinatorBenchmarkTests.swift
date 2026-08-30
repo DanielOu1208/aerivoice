@@ -109,6 +109,33 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     fixture.coordinator.cancel()
   }
 
+  func testCleanupSettingsAreSnapshottedForEachDictation() async throws {
+    let fixture = makeFixture()
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+
+    fixture.preferences.cleanupModel = .gpt56LunaFast
+    fixture.preferences.cleanupReasoningEffort = .max
+    fixture.preferences.cleanupMode = .polished
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+
+    XCTAssertEqual(
+      fixture.cleaner.lastConfiguration,
+      CleanupConfiguration(model: .gemini37Flash, reasoningEffort: .low))
+    XCTAssertEqual(fixture.cleaner.lastMode, .faithful)
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+
+    XCTAssertEqual(
+      fixture.cleaner.lastConfiguration,
+      CleanupConfiguration(model: .gpt56LunaFast, reasoningEffort: .max))
+    XCTAssertEqual(fixture.cleaner.lastMode, .polished)
+  }
+
   private func makeFixture(
     hasSonioxKey: Bool = true, cleanupError: ProviderHTTPError? = nil,
     provisionalText: String = "Raw", cleanupWaitsForCancellation: Bool = false
@@ -136,8 +163,9 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
       transcriber: transcriber, cleaner: cleaner, muter: FakeMuter(), inserter: inserter,
       notch: notch, benchmark: benchmark, readiness: FakeReadiness())
     return CoordinatorFixture(
-      coordinator: coordinator, audio: audio, transcriber: transcriber, inserter: inserter,
-      cleaner: cleaner, notch: notch, benchmark: benchmark, defaultsSuite: suite)
+      preferences: preferences, coordinator: coordinator, audio: audio, transcriber: transcriber,
+      inserter: inserter, cleaner: cleaner, notch: notch, benchmark: benchmark,
+      defaultsSuite: suite)
   }
 
   private func waitUntil(
@@ -154,6 +182,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
 @MainActor
 private struct CoordinatorFixture {
+  let preferences: AppPreferences
   let coordinator: DictationCoordinator
   let audio: FakeAudioCapture
   let transcriber: FakeTranscriber
@@ -225,6 +254,8 @@ private final class FakeCleaner: CleaningText, @unchecked Sendable {
   let waitsForCancellation: Bool
   private let lock = NSLock()
   private var exited = false
+  private var recordedConfiguration: CleanupConfiguration?
+  private var recordedMode: CleanupMode?
 
   init(error: ProviderHTTPError?, waitsForCancellation: Bool) {
     self.error = error
@@ -232,8 +263,16 @@ private final class FakeCleaner: CleaningText, @unchecked Sendable {
   }
 
   var hasExited: Bool { lock.withLock { exited } }
+  var lastConfiguration: CleanupConfiguration? { lock.withLock { recordedConfiguration } }
+  var lastMode: CleanupMode? { lock.withLock { recordedMode } }
 
-  func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> CleanupTextResult {
+  func clean(
+    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+  ) async throws -> CleanupTextResult {
+    lock.withLock {
+      recordedMode = mode
+      recordedConfiguration = configuration
+    }
     defer { lock.withLock { exited = true } }
     if waitsForCancellation { try await Task.sleep(for: .seconds(10)) }
     if let error { throw error }
@@ -288,7 +327,9 @@ private final class BenchmarkSpy: LatencyBenchmarkRecording {
   var failureStage: BenchmarkFailureStage?
   var failureCategory: BenchmarkFailureCategory?
 
-  func begin(enabled: Bool, cleanupMode: CleanupMode) {
+  func begin(
+    enabled: Bool, cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration
+  ) {
     didBegin = enabled
     isRecording = enabled
   }

@@ -26,6 +26,11 @@ struct SystemDictationReadiness: DictationReadinessChecking {
 
 @MainActor
 final class DictationCoordinator: ObservableObject {
+  private struct ActiveCleanupSettings {
+    let mode: CleanupMode
+    let configuration: CleanupConfiguration
+  }
+
   @Published private(set) var phase: DictationPhase = .idle
 
   private let preferences: AppPreferences
@@ -41,6 +46,7 @@ final class DictationCoordinator: ObservableObject {
   private let cuePlayer: SoundCuePlaying
 
   private var sessionID: DictationSessionID?
+  private var activeCleanupSettings: ActiveCleanupSettings?
   private var state = NotchState(phase: .idle)
   private var bufferedAudio: [Data] = []
   private var bufferedBytes = 0
@@ -96,7 +102,13 @@ final class DictationCoordinator: ObservableObject {
     switch phase {
     case .idle, .success, .error:
       guard startTask == nil else { return }
-      benchmark.begin(enabled: preferences.latencyLogging, cleanupMode: preferences.cleanupMode)
+      let cleanupConfiguration = preferences.cleanupConfiguration
+      let cleanupMode = preferences.cleanupMode
+      activeCleanupSettings = ActiveCleanupSettings(
+        mode: cleanupMode, configuration: cleanupConfiguration)
+      benchmark.begin(
+        enabled: preferences.latencyLogging, cleanupMode: cleanupMode,
+        cleanupConfiguration: cleanupConfiguration)
       let generation = UUID()
       lifecycleGeneration = generation
       startTask = Task { @MainActor [weak self] in
@@ -130,6 +142,7 @@ final class DictationCoordinator: ObservableObject {
     stopAudioIfNeeded(playCue: false)
     benchmark.finish(
       .cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    activeCleanupSettings = nil
     phase = .error("Cancelled")
     state.phase = phase
     state.warning = nil
@@ -240,12 +253,16 @@ final class DictationCoordinator: ObservableObject {
       guard let openRouterKey = credentials.value(for: .openRouter) else {
         throw AppError.missingOpenRouterKey
       }
-      benchmark.recordCleanupMode(preferences.cleanupMode)
+      guard let cleanupSettings = activeCleanupSettings else {
+        throw AppError.provider("Cleanup settings were unavailable.")
+      }
+      benchmark.recordCleanupMode(cleanupSettings.mode)
       benchmark.mark(.cleanupStarted)
       let finalText: String
       do {
         let cleanup = try await cleaner.clean(
-          raw, mode: preferences.cleanupMode, apiKey: openRouterKey)
+          raw, mode: cleanupSettings.mode, configuration: cleanupSettings.configuration,
+          apiKey: openRouterKey)
         guard sessionID == id else { return }
         finalText = cleanup.text
         benchmark.recordCleanup(cleanup.metrics)
@@ -426,6 +443,7 @@ final class DictationCoordinator: ObservableObject {
     bufferedAudio.removeAll()
     bufferedBytes = 0
     sessionID = nil
+    activeCleanupSettings = nil
     let generation = lifecycleGeneration
     Task { @MainActor [weak self] in
       try? await Task.sleep(for: .seconds(2.1))
@@ -436,6 +454,7 @@ final class DictationCoordinator: ObservableObject {
 
   private func showReadinessError(_ error: Error, category: BenchmarkFailureCategory) {
     benchmark.finish(.failed, stage: .readiness, category: category, httpStatus: nil)
+    activeCleanupSettings = nil
     let generation = lifecycleGeneration
     phase = .error(error.localizedDescription)
     state = NotchState(phase: phase)

@@ -5,6 +5,69 @@ import XCTest
 @testable import AeriVoice
 
 final class ModelTests: XCTestCase {
+  func testCleanupModelCatalogAndCapabilities() {
+    XCTAssertEqual(
+      CleanupModel.allCases,
+      [.gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast])
+    XCTAssertEqual(CleanupModel.defaultModel, .gemini37Flash)
+    XCTAssertEqual(
+      CleanupModel.gemini37Flash.supportedReasoningEfforts, [.low, .medium, .high])
+    XCTAssertEqual(
+      CleanupModel.gptOSS120BCerebras.supportedReasoningEfforts, [.low, .medium, .high])
+    XCTAssertEqual(
+      CleanupModel.gemini35FlashLite.supportedReasoningEfforts,
+      [.minimal, .low, .medium, .high])
+    XCTAssertEqual(
+      CleanupModel.gpt56LunaFast.supportedReasoningEfforts,
+      [.none, .low, .medium, .high, .xhigh, .max])
+    XCTAssertEqual(CleanupModel.gptOSS120BCerebras.providerRoute.only, ["cerebras/fp16"])
+    XCTAssertTrue(CleanupModel.gptOSS120BCerebras.providerRoute.requiresZeroDataRetention)
+    XCTAssertEqual(CleanupModel.gpt56LunaFast.providerRoute.only, ["openai/fast"])
+    XCTAssertFalse(CleanupModel.gpt56LunaFast.providerRoute.requiresZeroDataRetention)
+  }
+
+  @MainActor
+  func testCleanupPreferencesRememberReasoningPerModel() {
+    let suite = "AeriVoiceTests.Preferences.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    let preferences = AppPreferences(defaults: defaults)
+
+    XCTAssertEqual(preferences.cleanupModel, .gemini37Flash)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .low)
+    preferences.cleanupReasoningEffort = .high
+    preferences.cleanupModel = .gemini35FlashLite
+    preferences.cleanupReasoningEffort = .minimal
+    preferences.cleanupModel = .gemini37Flash
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .high)
+
+    preferences.cleanupModel = .gemini35FlashLite
+    let restored = AppPreferences(defaults: defaults)
+    XCTAssertEqual(restored.cleanupModel, .gemini35FlashLite)
+    XCTAssertEqual(restored.cleanupReasoningEffort, .minimal)
+  }
+
+  @MainActor
+  func testCleanupPreferencesRecoverUnknownOrUnsupportedValues() throws {
+    let suite = "AeriVoiceTests.Preferences.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    defaults.set("removed-model", forKey: "cleanupModel")
+    defaults.set(
+      try JSONEncoder().encode([CleanupModel.gemini37Flash.rawValue: "max"]),
+      forKey: "cleanupReasoningEfforts")
+
+    let preferences = AppPreferences(defaults: defaults)
+
+    XCTAssertEqual(preferences.cleanupModel, .gemini37Flash)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .low)
+    XCTAssertEqual(
+      CleanupConfiguration(model: .gptOSS120BCerebras, reasoningEffort: .max).reasoningEffort,
+      .low)
+  }
+
   func testVocabularyTrimsDeduplicatesAndPreservesFirstSpelling() {
     XCTAssertEqual(
       VocabularyNormalizer.normalize("  Soniox  \nsoniox\n Gemini\n\nAeri"),
@@ -31,8 +94,10 @@ final class ModelTests: XCTestCase {
   }
 
   func testSonioxResponseDecodesAudioProgressAndFinalText() throws {
-    let data = #"{"tokens":[{"text":"Hello","is_final":true},{"text":"<fin>","is_final":true}],"final_audio_proc_ms":760,"total_audio_proc_ms":880}"#.data(
-      using: .utf8)!
+    let data =
+      #"{"tokens":[{"text":"Hello","is_final":true},{"text":"<fin>","is_final":true}],"final_audio_proc_ms":760,"total_audio_proc_ms":880}"#
+      .data(
+        using: .utf8)!
     let response = try JSONDecoder().decode(SonioxResponse.self, from: data)
 
     XCTAssertEqual(response.finalAudioProcessedMS, 760)
@@ -41,8 +106,10 @@ final class ModelTests: XCTestCase {
   }
 
   func testSonioxWhitespaceAndFinishTokensAreNotFinalText() throws {
-    let data = #"{"tokens":[{"text":"  \n","is_final":true},{"text":"<fin>","is_final":true}],"final_audio_proc_ms":100,"total_audio_proc_ms":100}"#.data(
-      using: .utf8)!
+    let data =
+      #"{"tokens":[{"text":"  \n","is_final":true},{"text":"<fin>","is_final":true}],"final_audio_proc_ms":100,"total_audio_proc_ms":100}"#
+      .data(
+        using: .utf8)!
     let response = try JSONDecoder().decode(SonioxResponse.self, from: data)
 
     XCTAssertFalse(response.hasFinalText)

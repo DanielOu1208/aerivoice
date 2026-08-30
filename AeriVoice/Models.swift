@@ -57,6 +57,98 @@ enum CleanupMode: String, CaseIterable, Codable, Sendable {
   case polished = "Polished"
 }
 
+enum CleanupReasoningEffort: String, CaseIterable, Codable, Sendable {
+  case none
+  case minimal
+  case low
+  case medium
+  case high
+  case xhigh
+  case max
+
+  var displayName: String {
+    switch self {
+    case .none: "None"
+    case .minimal: "Minimal"
+    case .low: "Low"
+    case .medium: "Medium"
+    case .high: "High"
+    case .xhigh: "Extra High"
+    case .max: "Max"
+    }
+  }
+}
+
+struct CleanupProviderRoute: Equatable, Sendable {
+  let only: [String]?
+  let sort: String?
+  let requiresZeroDataRetention: Bool
+  let allowsFallbacks: Bool
+
+  var requestedProviderTag: String? { only?.first }
+}
+
+enum CleanupModel: String, CaseIterable, Codable, Sendable {
+  case gemini37Flash = "google/gemini-3.7-flash"
+  case gptOSS120BCerebras = "openai/gpt-oss-120b"
+  case gemini35FlashLite = "google/gemini-3.5-flash-lite"
+  case gpt56LunaFast = "openai/gpt-5.6-luna"
+
+  static let defaultModel: CleanupModel = .gemini37Flash
+
+  var displayName: String {
+    switch self {
+    case .gemini37Flash: "Gemini 3.7 Flash"
+    case .gptOSS120BCerebras: "GPT-OSS 120B · Cerebras"
+    case .gemini35FlashLite: "Gemini 3.5 Flash Lite"
+    case .gpt56LunaFast: "GPT-5.6 Luna · Fast"
+    }
+  }
+
+  var supportedReasoningEfforts: [CleanupReasoningEffort] {
+    switch self {
+    case .gemini37Flash, .gptOSS120BCerebras:
+      [.low, .medium, .high]
+    case .gemini35FlashLite:
+      [.minimal, .low, .medium, .high]
+    case .gpt56LunaFast:
+      [.none, .low, .medium, .high, .xhigh, .max]
+    }
+  }
+
+  var providerRoute: CleanupProviderRoute {
+    switch self {
+    case .gemini37Flash, .gemini35FlashLite:
+      CleanupProviderRoute(
+        only: nil, sort: "latency", requiresZeroDataRetention: true,
+        allowsFallbacks: true)
+    case .gptOSS120BCerebras:
+      CleanupProviderRoute(
+        only: ["cerebras/fp16"], sort: nil, requiresZeroDataRetention: true,
+        allowsFallbacks: false)
+    case .gpt56LunaFast:
+      CleanupProviderRoute(
+        only: ["openai/fast"], sort: nil, requiresZeroDataRetention: false,
+        allowsFallbacks: false)
+    }
+  }
+
+  func normalizedReasoningEffort(_ effort: CleanupReasoningEffort?) -> CleanupReasoningEffort {
+    guard let effort, supportedReasoningEfforts.contains(effort) else { return .low }
+    return effort
+  }
+}
+
+struct CleanupConfiguration: Equatable, Sendable {
+  let model: CleanupModel
+  let reasoningEffort: CleanupReasoningEffort
+
+  init(model: CleanupModel, reasoningEffort: CleanupReasoningEffort) {
+    self.model = model
+    self.reasoningEffort = model.normalizedReasoningEffort(reasoningEffort)
+  }
+}
+
 struct ShortcutDefinition: Codable, Equatable, Sendable {
   let keyCode: UInt16
   let modifiers: UInt
@@ -160,7 +252,9 @@ protocol RealtimeTranscribing: AnyObject {
 }
 
 protocol CleaningText: Sendable {
-  func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> CleanupTextResult
+  func clean(
+    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+  ) async throws -> CleanupTextResult
 }
 
 struct CleanupTextResult: Equatable, Sendable {

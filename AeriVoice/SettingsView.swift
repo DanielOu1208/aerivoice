@@ -72,8 +72,10 @@ struct SettingsView: View {
   private var header: some View {
     VStack(alignment: .leading, spacing: 5) {
       Text("AeriVoice").font(.system(size: 26, weight: .bold))
-      Text("Fast, private-by-default dictation with live Soniox transcription and Gemini cleanup.")
-        .foregroundStyle(.secondary)
+      Text(
+        "Fast, private-by-default dictation with live Soniox transcription and configurable AI cleanup."
+      )
+      .foregroundStyle(.secondary)
     }
   }
 
@@ -146,6 +148,29 @@ struct SettingsView: View {
   private var behaviorSection: some View {
     GroupBox("Behavior") {
       VStack(alignment: .leading, spacing: 10) {
+        Picker("Model", selection: $preferences.cleanupModel) {
+          ForEach(CleanupModel.allCases, id: \.self) { cleanupModel in
+            Text(cleanupModel.displayName).tag(cleanupModel)
+          }
+        }.pickerStyle(.menu)
+        Picker(
+          "Reasoning",
+          selection: Binding(
+            get: { preferences.cleanupReasoningEffort },
+            set: { preferences.cleanupReasoningEffort = $0 })
+        ) {
+          ForEach(preferences.cleanupModel.supportedReasoningEfforts, id: \.self) { effort in
+            Text(effort.displayName).tag(effort)
+          }
+        }.pickerStyle(.menu)
+        if preferences.cleanupModel == .gpt56LunaFast {
+          Label(
+            "Luna Fast may retain prompts at the provider; use another model for zero data retention.",
+            systemImage: "exclamationmark.triangle.fill"
+          )
+          .font(.caption)
+          .foregroundStyle(.orange)
+        }
         Picker("Cleanup", selection: $preferences.cleanupMode) {
           ForEach(CleanupMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }.pickerStyle(.segmented)

@@ -96,7 +96,8 @@ final class AppModel: ObservableObject {
     do {
       switch kind {
       case .openRouter:
-        try await OpenRouterCleanupClient().validate(apiKey: trimmed)
+        try await OpenRouterCleanupClient().validate(
+          apiKey: trimmed, configuration: preferences.cleanupConfiguration)
       case .soniox:
         let client = SonioxRealtimeClient()
         try await client.connect(apiKey: trimmed, vocabulary: [], sessionID: DictationSessionID())
