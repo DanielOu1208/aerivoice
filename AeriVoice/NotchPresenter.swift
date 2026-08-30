@@ -283,6 +283,10 @@ final class NotchPresenter: NSObject, NotchPresenting {
   }
 }
 
+private enum NotchStyle {
+  static let normalText = Color.white.opacity(0.78)
+}
+
 private struct NotchContentView: View {
   @ObservedObject var model: NotchViewModel
 
@@ -314,14 +318,12 @@ private struct NotchContentView: View {
           .foregroundStyle(.orange)
           .lineLimit(1)
       } else if model.state.transcript.displayText.isEmpty {
-        Text("Listening…")
-          .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(.white.opacity(0.62))
+        AnimatedEllipsisLabel(label: "Listening", fontSize: 13)
       } else {
         LiveTranscriptLine(snapshot: model.state.transcript)
       }
     case .processing, .cleaning, .inserting:
-      statusRow("Refining…")
+      AnimatedEllipsisLabel(label: "Refining", fontSize: 12)
     case .success:
       Image(systemName: "checkmark")
         .font(.system(size: 14, weight: .semibold))
@@ -335,13 +337,47 @@ private struct NotchContentView: View {
     case .idle: EmptyView()
     }
   }
+}
 
-  private func statusRow(_ label: String) -> some View {
-    HStack(spacing: 7) {
-      ProgressView().controlSize(.small).tint(.white.opacity(0.72))
-      Text(label).foregroundStyle(.white.opacity(0.72))
+private struct AnimatedEllipsisLabel: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var activeDot = 0
+
+  let label: String
+  let fontSize: CGFloat
+
+  var body: some View {
+    HStack(spacing: 3) {
+      Text(label)
+      HStack(spacing: 2) {
+        ForEach(0..<3, id: \.self) { index in
+          Circle()
+            .fill(NotchStyle.normalText)
+            .frame(width: 2.5, height: 2.5)
+            .opacity(dotOpacity(at: index))
+        }
+      }
     }
-    .font(.system(size: 12, weight: .medium))
+    .font(.system(size: fontSize, weight: .medium))
+    .foregroundStyle(NotchStyle.normalText)
+    .task(id: reduceMotion) {
+      guard !reduceMotion else { return }
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: .milliseconds(280))
+        } catch {
+          return
+        }
+        withAnimation(.easeInOut(duration: 0.18)) {
+          activeDot = (activeDot + 1) % 3
+        }
+      }
+    }
+  }
+
+  private func dotOpacity(at index: Int) -> Double {
+    guard !reduceMotion else { return 1 }
+    return index == activeDot ? 1 : 0.3
   }
 }
 
@@ -382,11 +418,10 @@ private struct LiveTranscriptLine: View {
     .clipped()
   }
 
-  private func transcriptText(_ tail: TranscriptSnapshot) -> Text {
-    Text(
-      "\(Text(tail.confirmed).foregroundStyle(.white))\(Text(tail.provisional).foregroundStyle(.white.opacity(0.58)))"
-    )
-    .font(.system(size: 13, weight: .medium))
+  private func transcriptText(_ tail: TranscriptSnapshot) -> some View {
+    Text(tail.displayText)
+      .font(.system(size: 13, weight: .medium))
+      .foregroundStyle(NotchStyle.normalText)
   }
 }
 
