@@ -19,6 +19,18 @@ private struct PanelFrameAnimation {
   let startTime: TimeInterval
 }
 
+private final class WorkspaceNotificationObserver: @unchecked Sendable {
+  private let center: NotificationCenter
+  private let token: NSObjectProtocol
+
+  init(center: NotificationCenter, token: NSObjectProtocol) {
+    self.center = center
+    self.token = token
+  }
+
+  deinit { center.removeObserver(token) }
+}
+
 @MainActor
 final class NotchPresenter: NSObject, NotchPresenting {
   private let model: NotchViewModel
@@ -28,6 +40,8 @@ final class NotchPresenter: NSObject, NotchPresenting {
   private var panelDisplayLink: CADisplayLink?
   private var panelFrameAnimation: PanelFrameAnimation?
   private var activeGeometry: NotchGeometry?
+  private var activeSpaceSyncTask: Task<Void, Never>?
+  private var activeSpaceObserver: WorkspaceNotificationObserver?
   private var presentationGeneration = 0
   private var transitionGeneration = 0
   private var targetVisible = false
@@ -49,9 +63,18 @@ final class NotchPresenter: NSObject, NotchPresenting {
     NotificationCenter.default.addObserver(
       self, selector: #selector(screenParametersChanged(_:)),
       name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    let workspaceCenter = NSWorkspace.shared.notificationCenter
+    let activeSpaceToken = workspaceCenter.addObserver(
+      forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in self?.scheduleActiveSpaceSync() }
+    }
+    activeSpaceObserver = WorkspaceNotificationObserver(
+      center: workspaceCenter, token: activeSpaceToken)
   }
 
   deinit {
+    activeSpaceSyncTask?.cancel()
     NotificationCenter.default.removeObserver(self)
   }
 
@@ -210,7 +233,7 @@ final class NotchPresenter: NSObject, NotchPresenting {
 
   private func resolveGeometry() -> (NSScreen, NotchGeometry)? {
     let screen =
-      NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main
+      NSScreen.main ?? NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
       ?? NSScreen.screens.first
     return screen.map { ($0, NotchGeometry.calculate(for: $0)) }
   }
@@ -247,6 +270,24 @@ final class NotchPresenter: NSObject, NotchPresenting {
     updateLayout(for: geometry)
     panel.setFrame(geometry.frame, display: true)
     model.contentVisible = true
+  }
+
+  private func scheduleActiveSpaceSync() {
+    activeSpaceSyncTask?.cancel()
+    activeSpaceSyncTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard !Task.isCancelled, let self, self.targetVisible,
+        let (_, geometry) = self.resolveGeometry()
+      else { return }
+
+      self.stopTransition()
+      self.transitionGeneration += 1
+      self.activeGeometry = geometry
+      self.updateLayout(for: geometry)
+      self.panel.setFrame(geometry.frame, display: true)
+      self.panel.orderFrontRegardless()
+      self.model.contentVisible = true
+    }
   }
 }
 

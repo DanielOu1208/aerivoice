@@ -1,20 +1,23 @@
 import Foundation
 
 struct OpenRouterCleanupClient: CleaningText {
+  static let modelID = "google/gemini-3.7-flash"
+
   private let session: URLSession
 
   init(session: URLSession = .shared) { self.session = session }
 
-  func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> String {
+  func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> CleanupTextResult {
     var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
     request.httpMethod = "POST"
     request.timeoutInterval = 10
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("AeriVoice", forHTTPHeaderField: "X-Title")
+    request.setValue("enabled", forHTTPHeaderField: "X-OpenRouter-Metadata")
     request.httpBody = try JSONEncoder().encode(
       OpenRouterRequest(
-        model: "google/gemini-3.7-flash",
+        model: Self.modelID,
         messages: [
           .init(role: "system", content: CleanupPrompt.system(mode: mode)),
           .init(role: "user", content: text),
@@ -43,11 +46,27 @@ struct OpenRouterCleanupClient: CleaningText {
       group.cancelAll()
       return first
     }
-    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-      let message =
-        (try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: data).error.message)
-        ?? "OpenRouter request failed."
-      throw AppError.provider(message)
+    guard let http = response as? HTTPURLResponse else {
+      throw AppError.provider("OpenRouter returned an invalid response.")
+    }
+    guard (200..<300).contains(http.statusCode) else {
+      let envelope = try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: data)
+      let selectedEndpoint = envelope?.openRouterMetadata?.endpoints?.available?.first {
+        $0.selected == true
+      }
+      let metrics = CleanupRequestMetrics(
+        actualModel: envelope?.model,
+        selectedProvider: selectedEndpoint?.provider,
+        selectedProviderModel: selectedEndpoint?.model,
+        routingStrategy: envelope?.openRouterMetadata?.strategy,
+        routingAttempt: envelope?.openRouterMetadata?.attempt,
+        serviceTier: envelope?.serviceTier,
+        promptTokens: nil, completionTokens: nil, totalTokens: nil,
+        httpStatus: http.statusCode)
+      throw ProviderHTTPError(
+        statusCode: http.statusCode,
+        message: envelope?.error.message ?? "OpenRouter request failed.",
+        cleanupMetrics: metrics)
     }
     let envelope = try JSONDecoder().decode(OpenRouterResponse.self, from: data)
     guard let content = envelope.choices.first?.message.content,
@@ -57,7 +76,22 @@ struct OpenRouterCleanupClient: CleaningText {
     else {
       throw AppError.provider("OpenRouter returned an empty or malformed cleanup.")
     }
-    return cleaned.text
+    let selectedEndpoint = envelope.openRouterMetadata?.endpoints?.available?.first {
+      $0.selected == true
+    }
+    return CleanupTextResult(
+      text: cleaned.text,
+      metrics: CleanupRequestMetrics(
+        actualModel: envelope.model,
+        selectedProvider: selectedEndpoint?.provider,
+        selectedProviderModel: selectedEndpoint?.model,
+        routingStrategy: envelope.openRouterMetadata?.strategy,
+        routingAttempt: envelope.openRouterMetadata?.attempt,
+        serviceTier: envelope.serviceTier,
+        promptTokens: envelope.usage?.promptTokens,
+        completionTokens: envelope.usage?.completionTokens,
+        totalTokens: envelope.usage?.totalTokens,
+        httpStatus: http.statusCode))
   }
 
   func validate(apiKey: String) async throws {
@@ -140,11 +174,54 @@ private struct OpenRouterRequest: Encodable {
 
 private struct OpenRouterResponse: Decodable {
   let choices: [Choice]
+  let model: String?
+  let serviceTier: String?
+  let usage: Usage?
+  let openRouterMetadata: RouterMetadata?
+
+  enum CodingKeys: String, CodingKey {
+    case choices, model, usage
+    case serviceTier = "service_tier"
+    case openRouterMetadata = "openrouter_metadata"
+  }
+
   struct Choice: Decodable { let message: Message }
   struct Message: Decodable { let content: String? }
+  struct Usage: Decodable {
+    let promptTokens: Int?
+    let completionTokens: Int?
+    let totalTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+      case promptTokens = "prompt_tokens"
+      case completionTokens = "completion_tokens"
+      case totalTokens = "total_tokens"
+    }
+  }
+  struct RouterMetadata: Decodable {
+    let strategy: String?
+    let attempt: Int?
+    let endpoints: Endpoints?
+  }
+  struct Endpoints: Decodable { let available: [Endpoint]? }
+  struct Endpoint: Decodable {
+    let provider: String?
+    let model: String?
+    let selected: Bool?
+  }
 }
 private struct CleanedText: Decodable { let text: String }
 private struct OpenRouterErrorEnvelope: Decodable {
   let error: ErrorValue
+  let model: String?
+  let serviceTier: String?
+  let openRouterMetadata: OpenRouterResponse.RouterMetadata?
+
+  enum CodingKeys: String, CodingKey {
+    case error, model
+    case serviceTier = "service_tier"
+    case openRouterMetadata = "openrouter_metadata"
+  }
+
   struct ErrorValue: Decodable { let message: String }
 }

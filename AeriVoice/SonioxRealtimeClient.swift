@@ -2,7 +2,7 @@ import Foundation
 
 @MainActor
 final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
-  var onTranscript: ((TranscriptSnapshot) -> Void)?
+  var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
 
   private var session: URLSession?
@@ -123,8 +123,14 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
     if let message = response.errorMessage, !message.isEmpty {
       throw AppError.provider(message)
     }
-    snapshot = assembler.consume((response.tokens ?? []).map { ($0.text, $0.isFinal == true) })
-    onTranscript?(snapshot)
+    let tokens = response.tokens ?? []
+    snapshot = assembler.consume(tokens.map { ($0.text, $0.isFinal == true) })
+    onTranscript?(
+      RealtimeTranscriptUpdate(
+        snapshot: snapshot,
+        hasFinalText: response.hasFinalText,
+        finalAudioProcessedMS: response.finalAudioProcessedMS,
+        totalAudioProcessedMS: response.totalAudioProcessedMS))
     if response.finished == true {
       finished = true
       let result = snapshot.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -141,18 +147,29 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
   }
 }
 
-private struct SonioxResponse: Decodable {
+struct SonioxResponse: Decodable {
   let tokens: [SonioxToken]?
   let finished: Bool?
   let errorMessage: String?
+  let finalAudioProcessedMS: Double?
+  let totalAudioProcessedMS: Double?
 
   enum CodingKeys: String, CodingKey {
     case tokens, finished
     case errorMessage = "error_message"
+    case finalAudioProcessedMS = "final_audio_proc_ms"
+    case totalAudioProcessedMS = "total_audio_proc_ms"
+  }
+
+  var hasFinalText: Bool {
+    (tokens ?? []).contains {
+      $0.isFinal == true && $0.text != "<fin>"
+        && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
   }
 }
 
-private struct SonioxToken: Decodable {
+struct SonioxToken: Decodable {
   let text: String
   let isFinal: Bool?
 

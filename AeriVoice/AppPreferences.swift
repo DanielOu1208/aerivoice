@@ -11,6 +11,7 @@ final class AppPreferences: ObservableObject {
     static let shortcut = "shortcut"
     static let onboardingComplete = "onboardingComplete"
     static let launchAtLogin = "launchAtLogin"
+    static let latencyLogging = "latencyLogging"
   }
 
   @Published var cleanupMode: CleanupMode {
@@ -24,6 +25,9 @@ final class AppPreferences: ObservableObject {
     didSet { defaults.set(onboardingComplete, forKey: Key.onboardingComplete) }
   }
   @Published var launchAtLogin: Bool
+  @Published var latencyLogging: Bool {
+    didSet { defaults.set(latencyLogging, forKey: Key.latencyLogging) }
+  }
 
   private let defaults: UserDefaults
 
@@ -35,6 +39,7 @@ final class AppPreferences: ObservableObject {
     soundCues = defaults.object(forKey: Key.soundCues) as? Bool ?? true
     onboardingComplete = defaults.bool(forKey: Key.onboardingComplete)
     launchAtLogin = defaults.object(forKey: Key.launchAtLogin) as? Bool ?? true
+    latencyLogging = defaults.object(forKey: Key.latencyLogging) as? Bool ?? true
     if let data = defaults.data(forKey: Key.shortcut) {
       shortcut = try? JSONDecoder().decode(ShortcutDefinition.self, from: data)
     }

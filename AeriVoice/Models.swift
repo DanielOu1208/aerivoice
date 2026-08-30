@@ -24,6 +24,13 @@ struct TranscriptSnapshot: Equatable, Sendable {
   var displayText: String { confirmed + provisional }
 }
 
+struct RealtimeTranscriptUpdate: Equatable, Sendable {
+  let snapshot: TranscriptSnapshot
+  let hasFinalText: Bool
+  let finalAudioProcessedMS: Double?
+  let totalAudioProcessedMS: Double?
+}
+
 struct TranscriptAssembler: Sendable {
   private(set) var confirmed = ""
 
@@ -144,7 +151,7 @@ protocol AudioCapturing: AnyObject {
 
 @MainActor
 protocol RealtimeTranscribing: AnyObject {
-  var onTranscript: ((TranscriptSnapshot) -> Void)? { get set }
+  var onTranscript: ((RealtimeTranscriptUpdate) -> Void)? { get set }
   var onError: ((Error) -> Void)? { get set }
   func connect(apiKey: String, vocabulary: [String], sessionID: DictationSessionID) async throws
   func send(_ audio: Data) async throws
@@ -153,7 +160,39 @@ protocol RealtimeTranscribing: AnyObject {
 }
 
 protocol CleaningText: Sendable {
-  func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> String
+  func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> CleanupTextResult
+}
+
+struct CleanupTextResult: Equatable, Sendable {
+  let text: String
+  let metrics: CleanupRequestMetrics
+}
+
+struct CleanupRequestMetrics: Equatable, Sendable {
+  let actualModel: String?
+  let selectedProvider: String?
+  let selectedProviderModel: String?
+  let routingStrategy: String?
+  let routingAttempt: Int?
+  let serviceTier: String?
+  let promptTokens: Int?
+  let completionTokens: Int?
+  let totalTokens: Int?
+  let httpStatus: Int
+}
+
+struct ProviderHTTPError: LocalizedError, Sendable {
+  let statusCode: Int
+  let message: String
+  let cleanupMetrics: CleanupRequestMetrics?
+
+  init(statusCode: Int, message: String, cleanupMetrics: CleanupRequestMetrics? = nil) {
+    self.statusCode = statusCode
+    self.message = message
+    self.cleanupMetrics = cleanupMetrics
+  }
+
+  var errorDescription: String? { message }
 }
 
 protocol OutputMuting: AnyObject {

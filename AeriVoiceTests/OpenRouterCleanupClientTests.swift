@@ -22,9 +22,9 @@ final class OpenRouterCleanupClientTests: XCTestCase {
       XCTAssertEqual(provider["zdr"] as? Bool, true)
       XCTAssertEqual(provider["allow_fallbacks"] as? Bool, true)
       XCTAssertEqual(provider["require_parameters"] as? Bool, true)
+      XCTAssertEqual(request.value(forHTTPHeaderField: "X-OpenRouter-Metadata"), "enabled")
       XCTAssertNil(json["temperature"])
-      let response = #"{"choices":[{"message":{"content":"{\"text\":\"Hello, world.\"}"}}]}"#.data(
-        using: .utf8)!
+      let response = #"{"model":"google/gemini-3.7-flash","service_tier":"default","usage":{"prompt_tokens":21,"completion_tokens":5,"total_tokens":26},"openrouter_metadata":{"strategy":"direct","attempt":2,"unknown_future_field":true,"endpoints":{"available":[{"provider":"Google AI Studio","model":"gemini-3.7-flash","selected":true}]}},"choices":[{"message":{"content":"{\"text\":\"Hello, world.\"}"}}]}"#.data(using: .utf8)!
       return (
         HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
         response
@@ -32,7 +32,17 @@ final class OpenRouterCleanupClientTests: XCTestCase {
     }
     let result = try await OpenRouterCleanupClient(session: makeSession()).clean(
       "hello world", mode: .faithful, apiKey: "key")
-    XCTAssertEqual(result, "Hello, world.")
+    XCTAssertEqual(result.text, "Hello, world.")
+    XCTAssertEqual(result.metrics.actualModel, "google/gemini-3.7-flash")
+    XCTAssertEqual(result.metrics.selectedProvider, "Google AI Studio")
+    XCTAssertEqual(result.metrics.selectedProviderModel, "gemini-3.7-flash")
+    XCTAssertEqual(result.metrics.routingStrategy, "direct")
+    XCTAssertEqual(result.metrics.routingAttempt, 2)
+    XCTAssertEqual(result.metrics.serviceTier, "default")
+    XCTAssertEqual(result.metrics.promptTokens, 21)
+    XCTAssertEqual(result.metrics.completionTokens, 5)
+    XCTAssertEqual(result.metrics.totalTokens, 26)
+    XCTAssertEqual(result.metrics.httpStatus, 200)
   }
 
   func testMalformedCleanupFails() async {
@@ -52,7 +62,7 @@ final class OpenRouterCleanupClientTests: XCTestCase {
 
   func testProviderErrorIncludesMessage() async {
     URLProtocolStub.handler = { request in
-      let response = #"{"error":{"message":"Rate limited"}}"#.data(using: .utf8)!
+      let response = #"{"model":"google/gemini-3.7-flash","service_tier":"default","error":{"message":"Rate limited"},"openrouter_metadata":{"strategy":"fallback","attempt":2,"endpoints":{"available":[{"provider":"Google Vertex","model":"gemini-3.7-flash","selected":true}]}}}"#.data(using: .utf8)!
       return (
         HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: nil)!,
         response
@@ -64,6 +74,12 @@ final class OpenRouterCleanupClientTests: XCTestCase {
       XCTFail("Expected 429 to fail")
     } catch {
       XCTAssertTrue(error.localizedDescription.contains("Rate limited"))
+      XCTAssertEqual((error as? ProviderHTTPError)?.statusCode, 429)
+      XCTAssertEqual((error as? ProviderHTTPError)?.cleanupMetrics?.actualModel, "google/gemini-3.7-flash")
+      XCTAssertEqual((error as? ProviderHTTPError)?.cleanupMetrics?.selectedProvider, "Google Vertex")
+      XCTAssertEqual((error as? ProviderHTTPError)?.cleanupMetrics?.routingStrategy, "fallback")
+      XCTAssertEqual((error as? ProviderHTTPError)?.cleanupMetrics?.routingAttempt, 2)
+      XCTAssertEqual((error as? ProviderHTTPError)?.cleanupMetrics?.serviceTier, "default")
     }
   }
 

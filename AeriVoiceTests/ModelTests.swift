@@ -30,6 +30,24 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(assembler.consume([("Hi", true), ("<fin>", true)]).displayText, "Hi")
   }
 
+  func testSonioxResponseDecodesAudioProgressAndFinalText() throws {
+    let data = #"{"tokens":[{"text":"Hello","is_final":true},{"text":"<fin>","is_final":true}],"final_audio_proc_ms":760,"total_audio_proc_ms":880}"#.data(
+      using: .utf8)!
+    let response = try JSONDecoder().decode(SonioxResponse.self, from: data)
+
+    XCTAssertEqual(response.finalAudioProcessedMS, 760)
+    XCTAssertEqual(response.totalAudioProcessedMS, 880)
+    XCTAssertTrue(response.hasFinalText)
+  }
+
+  func testSonioxWhitespaceAndFinishTokensAreNotFinalText() throws {
+    let data = #"{"tokens":[{"text":"  \n","is_final":true},{"text":"<fin>","is_final":true}],"final_audio_proc_ms":100,"total_audio_proc_ms":100}"#.data(
+      using: .utf8)!
+    let response = try JSONDecoder().decode(SonioxResponse.self, from: data)
+
+    XCTAssertFalse(response.hasFinalText)
+  }
+
   func testTranscriptTailKeepsNewestConfirmedAndProvisionalText() {
     let tail = TranscriptTail.make(
       from: TranscriptSnapshot(confirmed: "0123456789", provisional: "abc"), limit: 7)

@@ -3,17 +3,42 @@ import AppKit
 import UserNotifications
 
 @MainActor
+protocol DictationReadinessChecking: Sendable {
+  func requestMicrophone() async -> Bool
+  func accessibilityReady(prompt: Bool) -> Bool
+}
+
+struct SystemDictationReadiness: DictationReadinessChecking {
+  func requestMicrophone() async -> Bool {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized: true
+    case .notDetermined: await AVCaptureDevice.requestAccess(for: .audio)
+    default: false
+    }
+  }
+
+  func accessibilityReady(prompt: Bool) -> Bool {
+    guard !AXIsProcessTrusted(), prompt else { return AXIsProcessTrusted() }
+    _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+    return false
+  }
+}
+
+@MainActor
 final class DictationCoordinator: ObservableObject {
   @Published private(set) var phase: DictationPhase = .idle
 
   private let preferences: AppPreferences
-  private let credentials: KeychainStore
+  private let credentials: CredentialReading
   private let audio: AudioCapturing
   private let transcriber: RealtimeTranscribing
   private let cleaner: CleaningText
   private let muter: OutputMuting
   private let inserter: TextInserting
   private let notch: NotchPresenting
+  private let benchmark: LatencyBenchmarkRecording
+  private let readiness: DictationReadinessChecking
+  private let cuePlayer: SoundCuePlaying
 
   private var sessionID: DictationSessionID?
   private var state = NotchState(phase: .idle)
@@ -37,11 +62,14 @@ final class DictationCoordinator: ObservableObject {
   }
 
   init(
-    preferences: AppPreferences, credentials: KeychainStore,
+    preferences: AppPreferences, credentials: CredentialReading,
     audio: AudioCapturing = AudioCaptureService(),
     transcriber: RealtimeTranscribing = SonioxRealtimeClient(),
     cleaner: CleaningText = OpenRouterCleanupClient(), muter: OutputMuting = OutputMuteController(),
-    inserter: TextInserting = TextInsertionService(), notch: NotchPresenting = NotchPresenter()
+    inserter: TextInserting = TextInsertionService(), notch: NotchPresenting = NotchPresenter(),
+    benchmark: LatencyBenchmarkRecording = LatencyBenchmarkRecorder(),
+    readiness: DictationReadinessChecking = SystemDictationReadiness(),
+    cuePlayer: SoundCuePlaying = SoundCuePlayer()
   ) {
     self.preferences = preferences
     self.credentials = credentials
@@ -51,13 +79,16 @@ final class DictationCoordinator: ObservableObject {
     self.muter = muter
     self.inserter = inserter
     self.notch = notch
+    self.benchmark = benchmark
+    self.readiness = readiness
+    self.cuePlayer = cuePlayer
     audio.onAudio = { [weak self] data in
       DispatchQueue.main.async { self?.enqueue(data) }
     }
-    transcriber.onTranscript = { [weak self] snapshot in self?.updateTranscript(snapshot) }
+    transcriber.onTranscript = { [weak self] update in self?.updateTranscript(update) }
     transcriber.onError = { [weak self] error in
       guard let self, let id = self.sessionID else { return }
-      self.fail(error, id: id)
+      self.fail(error, id: id, stage: .sttStream)
     }
   }
 
@@ -65,6 +96,7 @@ final class DictationCoordinator: ObservableObject {
     switch phase {
     case .idle, .success, .error:
       guard startTask == nil else { return }
+      benchmark.begin(enabled: preferences.latencyLogging, cleanupMode: preferences.cleanupMode)
       let generation = UUID()
       lifecycleGeneration = generation
       startTask = Task { @MainActor [weak self] in
@@ -96,6 +128,8 @@ final class DictationCoordinator: ObservableObject {
     limitTask?.cancel()
     transcriber.cancel()
     stopAudioIfNeeded(playCue: false)
+    benchmark.finish(
+      .cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
     phase = .error("Cancelled")
     state.phase = phase
     state.warning = nil
@@ -113,22 +147,22 @@ final class DictationCoordinator: ObservableObject {
   private func start(generation: UUID) async {
     guard phase == .idle || phase.isTerminal else { return }
     guard let sonioxKey = credentials.value(for: .soniox), !sonioxKey.isEmpty else {
-      showReadinessError(AppError.missingSonioxKey)
+      showReadinessError(AppError.missingSonioxKey, category: .missingCredential)
       return
     }
     guard credentials.value(for: .openRouter).map({ !$0.isEmpty }) == true else {
-      showReadinessError(AppError.missingOpenRouterKey)
+      showReadinessError(AppError.missingOpenRouterKey, category: .missingCredential)
       return
     }
-    guard await requestMicrophone() else {
-      showReadinessError(AppError.microphoneUnavailable)
+    guard await readiness.requestMicrophone() else {
+      showReadinessError(AppError.microphoneUnavailable, category: .microphonePermission)
       return
     }
     guard lifecycleGeneration == generation, !Task.isCancelled else { return }
-    guard AXIsProcessTrusted() else {
-      let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-      _ = AXIsProcessTrustedWithOptions(options)
-      showReadinessError(AppError.provider("Accessibility access is required to insert text."))
+    guard readiness.accessibilityReady(prompt: true) else {
+      showReadinessError(
+        AppError.provider("Accessibility access is required to insert text."),
+        category: .accessibilityPermission)
       return
     }
 
@@ -138,7 +172,7 @@ final class DictationCoordinator: ObservableObject {
     state = NotchState(phase: .starting)
     notch.present(state: state)
     play(.start)
-    if preferences.soundCues { try? await Task.sleep(for: .milliseconds(60)) }
+    if preferences.soundCues { try? await Task.sleep(for: cuePlayer.startCaptureDelay) }
     guard sessionID == id, lifecycleGeneration == generation, !Task.isCancelled else { return }
     state.warning = preferences.muteOutput && !muter.mute() ? "Output could not be muted" : nil
     notch.present(state: state)
@@ -148,8 +182,9 @@ final class DictationCoordinator: ObservableObject {
     connected = false
     do {
       try audio.start()
+      benchmark.mark(.captureStarted)
     } catch {
-      fail(error, id: id)
+      fail(error, id: id, stage: .audioCapture)
       return
     }
     beginLimitTimer(id: id)
@@ -158,6 +193,7 @@ final class DictationCoordinator: ObservableObject {
       try await transcriber.connect(
         apiKey: sonioxKey, vocabulary: VocabularyNormalizer.normalize(preferences.vocabulary),
         sessionID: id)
+      benchmark.mark(.sttConfigured)
       guard sessionID == id, phase == .starting || phase == .processing else { return }
       connected = true
       if phase == .starting {
@@ -167,7 +203,7 @@ final class DictationCoordinator: ObservableObject {
       }
       drain()
     } catch {
-      fail(error, id: id)
+      fail(error, id: id, stage: .sttSetup)
     }
   }
 
@@ -175,6 +211,7 @@ final class DictationCoordinator: ObservableObject {
     guard let id = sessionID, phase == .starting || phase == .recording else { return }
     stopAudioIfNeeded(playCue: true)
     await flushPendingAudioCallbacks()
+    benchmark.mark(.audioCallbacksFlushed)
     guard sessionID == id else { return }
     phase = .processing
     state.phase = .processing
@@ -190,38 +227,53 @@ final class DictationCoordinator: ObservableObject {
       }
       drain()
       if let drainTask { await drainTask.value }
+      benchmark.mark(.audioQueueDrained)
       guard sessionID == id else { return }
+      benchmark.mark(.sttFinalizeStarted)
       let raw = try await transcriber.finish()
+      benchmark.mark(.sttFinalized)
+      benchmark.recordRawCharacters(raw.count)
       guard sessionID == id else { return }
-      guard let openRouterKey = credentials.value(for: .openRouter) else {
-        throw AppError.missingOpenRouterKey
-      }
       phase = .cleaning
       state.phase = .cleaning
       notch.present(state: state)
+      guard let openRouterKey = credentials.value(for: .openRouter) else {
+        throw AppError.missingOpenRouterKey
+      }
+      benchmark.recordCleanupMode(preferences.cleanupMode)
+      benchmark.mark(.cleanupStarted)
       let finalText: String
       do {
-        finalText = try await cleaner.clean(
+        let cleanup = try await cleaner.clean(
           raw, mode: preferences.cleanupMode, apiKey: openRouterKey)
+        finalText = cleanup.text
+        benchmark.recordCleanup(cleanup.metrics)
       } catch {
         finalText = raw
+        benchmark.recordCleanupFallback(rawCharacters: raw.count, error: error)
         state.warning = "Cleanup failed—used raw text"
         notch.present(state: state)
       }
+      benchmark.recordCleanedCharacters(finalText.count)
+      benchmark.mark(.cleanupFinished)
       guard sessionID == id else { return }
       phase = .inserting
       state.phase = .inserting
       notch.present(state: state)
+      benchmark.mark(.insertionStarted)
       let result = await inserter.insert(finalText)
+      benchmark.mark(.insertionFinished)
       guard sessionID == id else { return }
       switch result {
       case .inserted:
+        benchmark.finish(.inserted, stage: nil, category: nil, httpStatus: nil)
         phase = .success
         state.phase = .success
         state.warning = nil
         notch.present(state: state)
         notch.hide(after: .milliseconds(350))
       case .copied(let warning):
+        benchmark.finish(.copied, stage: nil, category: nil, httpStatus: nil)
         phase = .error(warning)
         state.phase = phase
         state.warning = warning
@@ -230,9 +282,11 @@ final class DictationCoordinator: ObservableObject {
       }
       finishSession(id: id)
     } catch AppError.emptyTranscript {
+      benchmark.finish(
+        .emptyTranscript, stage: .sttFinalize, category: .emptyTranscript, httpStatus: nil)
       showTerminal("No speech detected", id: id, delay: .milliseconds(1200))
     } catch {
-      fail(error, id: id)
+      fail(error, id: id, stage: phase == .cleaning ? .cleanup : .sttFinalize)
     }
   }
 
@@ -240,11 +294,16 @@ final class DictationCoordinator: ObservableObject {
     guard phase == .starting || phase == .recording else { return }
     let maximumBytes = connected ? 512_000 : 96_000
     guard bufferedBytes + data.count <= maximumBytes else {
-      if let id = sessionID { fail(AppError.provider("Audio could not keep up."), id: id) }
+      if let id = sessionID {
+        fail(
+          AppError.provider("Audio could not keep up."), id: id, stage: .sttStream,
+          category: .bufferOverflow)
+      }
       return
     }
     bufferedAudio.append(data)
     bufferedBytes += data.count
+    benchmark.recordAudioCaptured(bytes: data.count, bufferedBytes: bufferedBytes)
     if connected { drain() }
   }
 
@@ -259,9 +318,12 @@ final class DictationCoordinator: ObservableObject {
       {
         let data = self.bufferedAudio.removeFirst()
         self.bufferedBytes -= data.count
-        do { try await self.transcriber.send(data) } catch {
+        do {
+          try await self.transcriber.send(data)
+          self.benchmark.recordAudioSent(bytes: data.count)
+        } catch {
           guard self.sessionID == id else { break }
-          self.fail(error, id: id)
+          self.fail(error, id: id, stage: .sttStream)
           break
         }
       }
@@ -272,9 +334,17 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
-  private func updateTranscript(_ snapshot: TranscriptSnapshot) {
+  private func updateTranscript(_ update: RealtimeTranscriptUpdate) {
+    benchmark.recordSTTUpdate(
+      STTBenchmarkUpdate(
+        hasTranscript: !update.snapshot.displayText.trimmingCharacters(
+          in: .whitespacesAndNewlines
+        ).isEmpty,
+        hasFinalText: update.hasFinalText,
+        finalAudioProcessedMS: update.finalAudioProcessedMS,
+        totalAudioProcessedMS: update.totalAudioProcessedMS))
     guard phase == .recording || phase == .starting else { return }
-    state.transcript = snapshot
+    state.transcript = update.snapshot
     notch.present(state: state)
   }
 
@@ -289,6 +359,7 @@ final class DictationCoordinator: ObservableObject {
 
   private func beginStopTask() {
     guard stopTask == nil else { return }
+    benchmark.mark(.stopRequested)
     let taskID = UUID()
     stopTaskID = taskID
     stopTask = Task { @MainActor [weak self] in
@@ -296,14 +367,6 @@ final class DictationCoordinator: ObservableObject {
       guard let self, self.stopTaskID == taskID else { return }
       self.stopTask = nil
       self.stopTaskID = nil
-    }
-  }
-
-  private func requestMicrophone() async -> Bool {
-    switch AVCaptureDevice.authorizationStatus(for: .audio) {
-    case .authorized: true
-    case .notDetermined: await AVCaptureDevice.requestAccess(for: .audio)
-    default: false
     }
   }
 
@@ -328,8 +391,15 @@ final class DictationCoordinator: ObservableObject {
     drainTaskID = nil
   }
 
-  private func fail(_ error: Error, id: DictationSessionID) {
+  private func fail(
+    _ error: Error, id: DictationSessionID, stage: BenchmarkFailureStage,
+    category explicitCategory: BenchmarkFailureCategory? = nil
+  ) {
     guard sessionID == id else { return }
+    let failure = benchmarkFailure(for: error)
+    benchmark.finish(
+      .failed, stage: stage, category: explicitCategory ?? failure.category,
+      httpStatus: failure.httpStatus)
     cancelDrain()
     transcriber.cancel()
     stopAudioIfNeeded(playCue: false)
@@ -362,7 +432,8 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
-  private func showReadinessError(_ error: Error) {
+  private func showReadinessError(_ error: Error, category: BenchmarkFailureCategory) {
+    benchmark.finish(.failed, stage: .readiness, category: category, httpStatus: nil)
     let generation = lifecycleGeneration
     phase = .error(error.localizedDescription)
     state = NotchState(phase: phase)
@@ -382,16 +453,29 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
-  private enum Cue { case start, stop, error }
-  private func play(_ cue: Cue) {
-    guard preferences.soundCues else { return }
-    let name: NSSound.Name =
-      switch cue {
-      case .start: "Tink"
-      case .stop: "Pop"
-      case .error: "Basso"
+  private func benchmarkFailure(for error: Error) -> (
+    category: BenchmarkFailureCategory, httpStatus: Int?
+  ) {
+    if let error = error as? ProviderHTTPError {
+      return (.provider, error.statusCode)
+    }
+    if error is URLError { return (.network, nil) }
+    if let error = error as? AppError {
+      switch error {
+      case .missingSonioxKey, .missingOpenRouterKey: return (.missingCredential, nil)
+      case .microphoneUnavailable: return (.microphonePermission, nil)
+      case .connectionTimeout: return (.connectionTimeout, nil)
+      case .finalizeTimeout: return (.finalizeTimeout, nil)
+      case .emptyTranscript: return (.emptyTranscript, nil)
+      case .provider: return (.provider, nil)
       }
-    NSSound(named: name)?.play()
+    }
+    return (.unknown, nil)
+  }
+
+  private func play(_ cue: DictationCue) {
+    guard preferences.soundCues else { return }
+    cuePlayer.play(cue)
   }
 }
 

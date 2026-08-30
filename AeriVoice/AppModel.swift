@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
   let preferences: AppPreferences
   let coordinator: DictationCoordinator
   let credentials: KeychainStore
+  let benchmarkRecorder: LatencyBenchmarkRecorder
 
   @Published var sonioxStatus: CredentialStatus
   @Published var openRouterStatus: CredentialStatus
@@ -27,9 +28,12 @@ final class AppModel: ObservableObject {
   init() {
     let preferences = AppPreferences()
     let credentials = KeychainStore()
+    let benchmarkRecorder = LatencyBenchmarkRecorder()
     self.preferences = preferences
     self.credentials = credentials
-    coordinator = DictationCoordinator(preferences: preferences, credentials: credentials)
+    self.benchmarkRecorder = benchmarkRecorder
+    coordinator = DictationCoordinator(
+      preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder)
     sonioxStatus = credentials.value(for: .soniox) == nil ? .missing : .saved
     openRouterStatus = credentials.value(for: .openRouter) == nil ? .missing : .saved
     shortcutMonitor.onToggle = { [weak coordinator] in coordinator?.toggle() }
@@ -139,6 +143,17 @@ final class AppModel: ObservableObject {
       _ = await AVCaptureDevice.requestAccess(for: .audio)
     }
     permissionRefresh += 1
+  }
+
+  func revealBenchmarkFolder() {
+    try? FileManager.default.createDirectory(
+      at: benchmarkRecorder.directoryURL, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    NSWorkspace.shared.activateFileViewerSelecting([benchmarkRecorder.directoryURL])
+  }
+
+  func clearCompletedBenchmarkHistory() {
+    benchmarkRecorder.clearCompletedHistory()
   }
 
   private func setStatus(_ status: CredentialStatus, kind: CredentialKind) {

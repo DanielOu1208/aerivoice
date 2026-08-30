@@ -13,7 +13,11 @@ enum CredentialKind: String, CaseIterable, Sendable {
   }
 }
 
-final class KeychainStore: @unchecked Sendable {
+protocol CredentialReading: Sendable {
+  func value(for kind: CredentialKind) -> String?
+}
+
+final class KeychainStore: CredentialReading, @unchecked Sendable {
   private let service = "com.danielou.AeriVoice.credentials"
 
   func value(for kind: CredentialKind) -> String? {

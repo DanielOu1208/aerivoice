@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
   func applicationWillTerminate(_ notification: Notification) {
     model.coordinator.cancel()
+    model.benchmarkRecorder.flushBeforeTermination()
   }
 
   private func configureMenu() {

@@ -8,6 +8,7 @@ struct SettingsView: View {
   @State private var sonioxKey = ""
   @State private var openRouterKey = ""
   @State private var removeKind: CredentialKind?
+  @State private var confirmsBenchmarkClear = false
 
   init(model: AppModel) {
     self.model = model
@@ -22,6 +23,7 @@ struct SettingsView: View {
         credentialSection
         shortcutSection
         behaviorSection
+        latencySection
         vocabularySection
         permissionSection
         if !model.setupComplete {
@@ -56,6 +58,14 @@ struct SettingsView: View {
         if let kind = removeKind { model.remove(kind) }
         removeKind = nil
       }
+    }
+    .alert("Clear completed latency history?", isPresented: $confirmsBenchmarkClear) {
+      Button("Cancel", role: .cancel) {}
+      Button("Clear History", role: .destructive) {
+        model.clearCompletedBenchmarkHistory()
+      }
+    } message: {
+      Text("This removes completed benchmark records. A dictation currently in progress is kept.")
     }
   }
 
@@ -145,6 +155,26 @@ struct SettingsView: View {
           "Launch at login",
           isOn: Binding(
             get: { preferences.launchAtLogin }, set: { preferences.setLaunchAtLogin($0) }))
+      }.padding(8)
+    }
+  }
+
+  private var latencySection: some View {
+    GroupBox("Latency diagnostics") {
+      VStack(alignment: .leading, spacing: 10) {
+        Toggle("Log privacy-safe latency measurements", isOn: $preferences.latencyLogging)
+        Text(
+          "Stores timings, workload sizes, provider routing, and outcomes for 90 days. Transcript text, vocabulary, credentials, clipboard contents, and raw errors are never written."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        HStack {
+          Button("Reveal Benchmark Folder") { model.revealBenchmarkFolder() }
+          Button("Clear Completed History", role: .destructive) {
+            confirmsBenchmarkClear = true
+          }
+          Spacer()
+        }
       }.padding(8)
     }
   }

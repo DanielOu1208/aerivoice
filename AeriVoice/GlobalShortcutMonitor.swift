@@ -22,6 +22,29 @@ struct ModifierShortcutLatch {
   mutating func reset() { isActive = false }
 }
 
+enum TargetedPasteEvent {
+  static let marker: Int64 = 0x4145_5249
+
+  static func makePair() -> (down: CGEvent, up: CGEvent)? {
+    guard let source = CGEventSource(stateID: .combinedSessionState) else { return nil }
+    source.userData = marker
+    guard
+      let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
+    else { return nil }
+    down.flags = .maskCommand
+    up.flags = .maskCommand
+    return (down, up)
+  }
+
+  static func post(to processIdentifier: pid_t) -> Bool {
+    guard let events = makePair() else { return false }
+    events.down.postToPid(processIdentifier)
+    events.up.postToPid(processIdentifier)
+    return true
+  }
+}
+
 @MainActor
 final class GlobalShortcutMonitor {
   var onToggle: (() -> Void)?
@@ -33,7 +56,6 @@ final class GlobalShortcutMonitor {
   private var definition: ShortcutDefinition?
   private var modifierLatch = ModifierShortcutLatch()
   private var shortcutPressed = false
-  private static let syntheticMarker: Int64 = 0x4145_5249
 
   func start(definition: ShortcutDefinition) {
     stop()
@@ -49,7 +71,7 @@ final class GlobalShortcutMonitor {
         if let tap = monitor.tap { CGEvent.tapEnable(tap: tap, enable: true) }
         return Unmanaged.passUnretained(event)
       }
-      if event.getIntegerValueField(.eventSourceUserData) == GlobalShortcutMonitor.syntheticMarker {
+      if event.getIntegerValueField(.eventSourceUserData) == TargetedPasteEvent.marker {
         return Unmanaged.passUnretained(event)
       }
       return monitor.handle(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
@@ -117,18 +139,5 @@ final class GlobalShortcutMonitor {
       return consumed
     }
     return false
-  }
-
-  static func postPaste() -> Bool {
-    guard let source = CGEventSource(stateID: .combinedSessionState),
-      let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
-      let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-    else { return false }
-    source.userData = syntheticMarker
-    down.flags = .maskCommand
-    up.flags = .maskCommand
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
-    return true
   }
 }
