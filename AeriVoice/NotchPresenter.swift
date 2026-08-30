@@ -19,16 +19,27 @@ private struct PanelFrameAnimation {
   let startTime: TimeInterval
 }
 
-private final class WorkspaceNotificationObserver: @unchecked Sendable {
-  private let center: NotificationCenter
-  private let token: NSObjectProtocol
-
-  init(center: NotificationCenter, token: NSObjectProtocol) {
-    self.center = center
-    self.token = token
+@MainActor
+enum NotchPanelPinning {
+  static func configure(_ panel: NSPanel) {
+    panel.hidesOnDeactivate = false
+    panel.isMovable = false
+    panel.ignoresMouseEvents = true
+    panel.collectionBehavior = [
+      .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle,
+    ]
   }
 
-  deinit { center.removeObserver(token) }
+  static func keepOrderedWhileHidden(_ panel: NSPanel) {
+    panel.alphaValue = 0
+    panel.orderFrontRegardless()
+  }
+
+  static func openingFrame(
+    panelAlpha: CGFloat, currentFrame: CGRect, collapsedFrame: CGRect
+  ) -> CGRect {
+    panelAlpha == 0 ? collapsedFrame : currentFrame
+  }
 }
 
 @MainActor
@@ -40,8 +51,6 @@ final class NotchPresenter: NSObject, NotchPresenting {
   private var panelDisplayLink: CADisplayLink?
   private var panelFrameAnimation: PanelFrameAnimation?
   private var activeGeometry: NotchGeometry?
-  private var activeSpaceSyncTask: Task<Void, Never>?
-  private var activeSpaceObserver: WorkspaceNotificationObserver?
   private var presentationGeneration = 0
   private var transitionGeneration = 0
   private var targetVisible = false
@@ -63,18 +72,9 @@ final class NotchPresenter: NSObject, NotchPresenting {
     NotificationCenter.default.addObserver(
       self, selector: #selector(screenParametersChanged(_:)),
       name: NSApplication.didChangeScreenParametersNotification, object: nil)
-    let workspaceCenter = NSWorkspace.shared.notificationCenter
-    let activeSpaceToken = workspaceCenter.addObserver(
-      forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
-    ) { [weak self] _ in
-      Task { @MainActor [weak self] in self?.scheduleActiveSpaceSync() }
-    }
-    activeSpaceObserver = WorkspaceNotificationObserver(
-      center: workspaceCenter, token: activeSpaceToken)
   }
 
   deinit {
-    activeSpaceSyncTask?.cancel()
     NotificationCenter.default.removeObserver(self)
   }
 
@@ -85,20 +85,25 @@ final class NotchPresenter: NSObject, NotchPresenting {
     let wasTargetVisible = targetVisible
     targetVisible = true
 
-    guard !panel.isVisible || !wasTargetVisible else { return }
-    guard let (screen, geometry) = resolveGeometry() else { return }
+    guard !wasTargetVisible else {
+      panel.orderFrontRegardless()
+      return
+    }
+    guard let (screen, geometry) = resolveGeometry() else {
+      targetVisible = false
+      return
+    }
     activeGeometry = geometry
     updateLayout(for: geometry)
 
-    let startFrame =
-      panel.isVisible
-      ? panel.frame
-      : NotchFrameInterpolator.collapsedFrame(for: geometry, screenFrame: screen.frame)
-    if !panel.isVisible {
-      model.contentVisible = false
-      panel.setFrame(startFrame, display: false)
-      panel.orderFrontRegardless()
-    }
+    let collapsedFrame = NotchFrameInterpolator.collapsedFrame(
+      for: geometry, screenFrame: screen.frame)
+    let startFrame = NotchPanelPinning.openingFrame(
+      panelAlpha: panel.alphaValue, currentFrame: panel.frame, collapsedFrame: collapsedFrame)
+    if panel.alphaValue == 0 { model.contentVisible = false }
+    panel.setFrame(startFrame, display: false)
+    panel.alphaValue = 1
+    panel.orderFrontRegardless()
     beginTransition(
       isOpening: true, from: startFrame, to: geometry.frame, screenFrame: screen.frame)
   }
@@ -120,27 +125,26 @@ final class NotchPresenter: NSObject, NotchPresenting {
     panel.isOpaque = false
     panel.hasShadow = false
     panel.animationBehavior = .none
-    panel.ignoresMouseEvents = true
-    panel.collectionBehavior = [
-      .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle,
-    ]
+    NotchPanelPinning.configure(panel)
   }
 
   private func prewarmPanel() {
-    guard let (_, geometry) = resolveGeometry() else { return }
+    guard let (screen, geometry) = resolveGeometry() else { return }
     updateLayout(for: geometry)
-    panel.setFrame(geometry.frame, display: false)
+    let collapsedFrame = NotchFrameInterpolator.collapsedFrame(
+      for: geometry, screenFrame: screen.frame)
+    panel.setFrame(collapsedFrame, display: false)
     panel.contentView?.layoutSubtreeIfNeeded()
+    pinHiddenPanel()
   }
 
   private func beginHide() {
-    guard panel.isVisible else { return }
+    guard targetVisible else { return }
     targetVisible = false
     let screen = panel.screen ?? resolveGeometry()?.0
     guard let screen else {
-      panel.orderOut(nil)
       activeGeometry = nil
-      model.contentVisible = false
+      pinHiddenPanel()
       return
     }
     let geometry = activeGeometry ?? NotchGeometry.calculate(for: screen)
@@ -225,10 +229,14 @@ final class NotchPresenter: NSObject, NotchPresenting {
   private func completeTransition(_ plan: NotchTransitionPlan, generation: Int) {
     guard generation == transitionGeneration, targetVisible == plan.isOpening else { return }
     if !plan.isOpening {
-      panel.orderOut(nil)
       activeGeometry = nil
-      model.contentVisible = false
+      pinHiddenPanel()
     }
+  }
+
+  private func pinHiddenPanel() {
+    model.contentVisible = false
+    NotchPanelPinning.keepOrderedWhileHidden(panel)
   }
 
   private func resolveGeometry() -> (NSScreen, NotchGeometry)? {
@@ -251,42 +259,26 @@ final class NotchPresenter: NSObject, NotchPresenting {
 
   @objc private func screenParametersChanged(_: Notification) {
     activeGeometry = nil
-    guard panel.isVisible else { return }
     stopTransition()
     transitionGeneration += 1
 
-    guard targetVisible else {
-      panel.orderOut(nil)
-      model.contentVisible = false
-      return
-    }
-    guard let (_, geometry) = resolveGeometry() else {
-      panel.orderOut(nil)
+    guard let (screen, geometry) = resolveGeometry() else {
       targetVisible = false
-      model.contentVisible = false
+      pinHiddenPanel()
       return
     }
-    activeGeometry = geometry
     updateLayout(for: geometry)
-    panel.setFrame(geometry.frame, display: true)
-    model.contentVisible = true
-  }
-
-  private func scheduleActiveSpaceSync() {
-    activeSpaceSyncTask?.cancel()
-    activeSpaceSyncTask = Task { @MainActor [weak self] in
-      await Task.yield()
-      guard !Task.isCancelled, let self, self.targetVisible,
-        let (_, geometry) = self.resolveGeometry()
-      else { return }
-
-      self.stopTransition()
-      self.transitionGeneration += 1
-      self.activeGeometry = geometry
-      self.updateLayout(for: geometry)
-      self.panel.setFrame(geometry.frame, display: true)
-      self.panel.orderFrontRegardless()
-      self.model.contentVisible = true
+    if targetVisible {
+      activeGeometry = geometry
+      panel.setFrame(geometry.frame, display: true)
+      panel.alphaValue = 1
+      panel.orderFrontRegardless()
+      model.contentVisible = true
+    } else {
+      let collapsedFrame = NotchFrameInterpolator.collapsedFrame(
+        for: geometry, screenFrame: screen.frame)
+      panel.setFrame(collapsedFrame, display: false)
+      pinHiddenPanel()
     }
   }
 }
