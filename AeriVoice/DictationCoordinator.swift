@@ -246,9 +246,11 @@ final class DictationCoordinator: ObservableObject {
       do {
         let cleanup = try await cleaner.clean(
           raw, mode: preferences.cleanupMode, apiKey: openRouterKey)
+        guard sessionID == id else { return }
         finalText = cleanup.text
         benchmark.recordCleanup(cleanup.metrics)
       } catch {
+        guard sessionID == id else { return }
         finalText = raw
         benchmark.recordCleanupFallback(rawCharacters: raw.count, error: error)
         state.warning = "Cleanup failed—used raw text"

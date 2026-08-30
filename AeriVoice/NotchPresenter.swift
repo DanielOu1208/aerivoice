@@ -284,7 +284,11 @@ final class NotchPresenter: NSObject, NotchPresenting {
 }
 
 private enum NotchStyle {
-  static let normalText = Color.white.opacity(0.78)
+  static let normalTextOpacity = 0.72
+  static let pulseMinimumOpacity = normalTextOpacity * 0.55
+  static let pulseMaximumOpacity = 0.82
+  static let normalText = Color.white.opacity(normalTextOpacity)
+  static let textFont = Font.system(size: 13, weight: .medium)
 }
 
 private struct NotchContentView: View {
@@ -314,16 +318,16 @@ private struct NotchContentView: View {
     case .starting, .recording:
       if let warning = model.state.warning, model.state.transcript.displayText.isEmpty {
         Text(warning)
-          .font(.system(size: 12, weight: .medium))
+          .font(NotchStyle.textFont)
           .foregroundStyle(.orange)
           .lineLimit(1)
       } else if model.state.transcript.displayText.isEmpty {
-        AnimatedEllipsisLabel(label: "Listening", fontSize: 13)
+        PulsingEllipsisLabel(label: "Listening")
       } else {
         LiveTranscriptLine(snapshot: model.state.transcript)
       }
     case .processing, .cleaning, .inserting:
-      AnimatedEllipsisLabel(label: "Refining", fontSize: 12)
+      PulsingEllipsisLabel(label: "Refining")
     case .success:
       Image(systemName: "checkmark")
         .font(.system(size: 14, weight: .semibold))
@@ -331,53 +335,46 @@ private struct NotchContentView: View {
     case .error(let message):
       HStack(spacing: 6) {
         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        Text(message).foregroundStyle(.white).lineLimit(1).truncationMode(.tail)
+        Text(message)
+          .foregroundStyle(NotchStyle.normalText)
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
-      .font(.system(size: 12, weight: .medium))
+      .font(NotchStyle.textFont)
     case .idle: EmptyView()
     }
   }
 }
 
-private struct AnimatedEllipsisLabel: View {
+private struct PulsingEllipsisLabel: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var activeDot = 0
 
   let label: String
-  let fontSize: CGFloat
+
+  private let cycleDuration = 1.8 / 1.75
 
   var body: some View {
-    HStack(spacing: 3) {
-      Text(label)
-      HStack(spacing: 2) {
-        ForEach(0..<3, id: \.self) { index in
-          Circle()
-            .fill(NotchStyle.normalText)
-            .frame(width: 2.5, height: 2.5)
-            .opacity(dotOpacity(at: index))
+    let characters = Array(label + "...")
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+      HStack(alignment: .firstTextBaseline, spacing: 0) {
+        ForEach(characters.indices, id: \.self) { index in
+          Text(String(characters[index]))
+            .opacity(opacity(for: index, outOf: characters.count, at: context.date))
         }
       }
     }
-    .font(.system(size: fontSize, weight: .medium))
-    .foregroundStyle(NotchStyle.normalText)
-    .task(id: reduceMotion) {
-      guard !reduceMotion else { return }
-      while !Task.isCancelled {
-        do {
-          try await Task.sleep(for: .milliseconds(280))
-        } catch {
-          return
-        }
-        withAnimation(.easeInOut(duration: 0.18)) {
-          activeDot = (activeDot + 1) % 3
-        }
-      }
-    }
+    .font(NotchStyle.textFont)
+    .foregroundStyle(.white)
   }
 
-  private func dotOpacity(at index: Int) -> Double {
-    guard !reduceMotion else { return 1 }
-    return index == activeDot ? 1 : 0.3
+  private func opacity(for index: Int, outOf characterCount: Int, at date: Date) -> Double {
+    guard !reduceMotion else { return NotchStyle.normalTextOpacity }
+    let progress = date.timeIntervalSinceReferenceDate / cycleDuration
+    let phaseOffset = Double(index) / Double(characterCount)
+    let wave = (sin(2 * .pi * (progress - phaseOffset)) + 1) / 2
+    let focusedWave = pow(wave, 3)
+    return NotchStyle.pulseMinimumOpacity
+      + ((NotchStyle.pulseMaximumOpacity - NotchStyle.pulseMinimumOpacity) * focusedWave)
   }
 }
 
@@ -420,7 +417,7 @@ private struct LiveTranscriptLine: View {
 
   private func transcriptText(_ tail: TranscriptSnapshot) -> some View {
     Text(tail.displayText)
-      .font(.system(size: 13, weight: .medium))
+      .font(NotchStyle.textFont)
       .foregroundStyle(NotchStyle.normalText)
   }
 }

@@ -81,6 +81,25 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertTrue(fixture.audio.didStop)
   }
 
+  func testCancellationDuringCleanupDoesNotPresentAfterSchedulingHide() async throws {
+    let fixture = makeFixture(cleanupWaitsForCancellation: true)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .cleaning }
+    let presentationCountBeforeCancellation = fixture.notch.presentedStates.count
+
+    fixture.coordinator.cancel()
+    try await waitUntil { fixture.cleaner.hasExited }
+    await Task.yield()
+
+    XCTAssertEqual(
+      fixture.notch.presentedStates.count, presentationCountBeforeCancellation + 1)
+    XCTAssertEqual(fixture.notch.presentedStates.last?.phase, .error("Cancelled"))
+    XCTAssertEqual(fixture.notch.hideDelays, [.milliseconds(600)])
+  }
+
   func testWhitespaceOnlyUpdateDoesNotCountAsFirstTranscript() async throws {
     let fixture = makeFixture(provisionalText: "  \n")
     fixture.coordinator.toggle()
@@ -92,7 +111,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
   private func makeFixture(
     hasSonioxKey: Bool = true, cleanupError: ProviderHTTPError? = nil,
-    provisionalText: String = "Raw"
+    provisionalText: String = "Raw", cleanupWaitsForCancellation: Bool = false
   ) -> CoordinatorFixture {
     let suite = "AeriVoiceTests.Coordinator.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -107,16 +126,18 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
       ])
     let audio = FakeAudioCapture()
     let transcriber = FakeTranscriber(provisionalText: provisionalText)
-    let cleaner = FakeCleaner(error: cleanupError)
+    let cleaner = FakeCleaner(
+      error: cleanupError, waitsForCancellation: cleanupWaitsForCancellation)
     let inserter = FakeInserter()
     let benchmark = BenchmarkSpy()
+    let notch = FakeNotch()
     let coordinator = DictationCoordinator(
       preferences: preferences, credentials: credentials, audio: audio,
       transcriber: transcriber, cleaner: cleaner, muter: FakeMuter(), inserter: inserter,
-      notch: FakeNotch(), benchmark: benchmark, readiness: FakeReadiness())
+      notch: notch, benchmark: benchmark, readiness: FakeReadiness())
     return CoordinatorFixture(
       coordinator: coordinator, audio: audio, transcriber: transcriber, inserter: inserter,
-      benchmark: benchmark, defaultsSuite: suite)
+      cleaner: cleaner, notch: notch, benchmark: benchmark, defaultsSuite: suite)
   }
 
   private func waitUntil(
@@ -137,21 +158,10 @@ private struct CoordinatorFixture {
   let audio: FakeAudioCapture
   let transcriber: FakeTranscriber
   let inserter: FakeInserter
+  let cleaner: FakeCleaner
+  let notch: FakeNotch
   let benchmark: BenchmarkSpy
   let defaultsSuite: String
-
-  init(
-    coordinator: DictationCoordinator, audio: FakeAudioCapture,
-    transcriber: FakeTranscriber, inserter: FakeInserter, benchmark: BenchmarkSpy,
-    defaultsSuite: String
-  ) {
-    self.coordinator = coordinator
-    self.audio = audio
-    self.transcriber = transcriber
-    self.inserter = inserter
-    self.benchmark = benchmark
-    self.defaultsSuite = defaultsSuite
-  }
 }
 
 private final class FakeCredentialReader: CredentialReading, @unchecked Sendable {
@@ -210,10 +220,22 @@ private final class FakeTranscriber: RealtimeTranscribing {
   func cancel() { didCancel = true }
 }
 
-private struct FakeCleaner: CleaningText {
+private final class FakeCleaner: CleaningText, @unchecked Sendable {
   let error: ProviderHTTPError?
+  let waitsForCancellation: Bool
+  private let lock = NSLock()
+  private var exited = false
+
+  init(error: ProviderHTTPError?, waitsForCancellation: Bool) {
+    self.error = error
+    self.waitsForCancellation = waitsForCancellation
+  }
+
+  var hasExited: Bool { lock.withLock { exited } }
 
   func clean(_ text: String, mode: CleanupMode, apiKey: String) async throws -> CleanupTextResult {
+    defer { lock.withLock { exited = true } }
+    if waitsForCancellation { try await Task.sleep(for: .seconds(10)) }
     if let error { throw error }
     return CleanupTextResult(
       text: "Cleaned text.",
@@ -241,8 +263,11 @@ private final class FakeInserter: TextInserting, @unchecked Sendable {
 
 @MainActor
 private final class FakeNotch: NotchPresenting {
-  func present(state: NotchState) {}
-  func hide(after delay: Duration) {}
+  private(set) var presentedStates: [NotchState] = []
+  private(set) var hideDelays: [Duration] = []
+
+  func present(state: NotchState) { presentedStates.append(state) }
+  func hide(after delay: Duration) { hideDelays.append(delay) }
 }
 
 @MainActor
