@@ -7,6 +7,7 @@ struct SettingsView: View {
   @ObservedObject private var preferences: AppPreferences
   @State private var sonioxKey = ""
   @State private var openRouterKey = ""
+  @State private var groqKey = ""
   @State private var removeKind: CredentialKind?
   @State private var confirmsBenchmarkClear = false
 
@@ -31,7 +32,8 @@ struct SettingsView: View {
             .buttonStyle(.borderedProminent)
             .disabled(
               model.preferences.shortcut == nil || !model.hasCredential(.soniox)
-                || !model.hasCredential(.openRouter) || !model.permissionsReady)
+                || !model.hasCredential(preferences.cleanupProvider.credentialKind)
+                || !model.permissionsReady)
         }
       }
       .padding(24)
@@ -91,6 +93,8 @@ struct SettingsView: View {
         credentialRow(kind: .soniox, value: $sonioxKey, status: model.sonioxStatus)
         Divider()
         credentialRow(kind: .openRouter, value: $openRouterKey, status: model.openRouterStatus)
+        Divider()
+        credentialRow(kind: .groq, value: $groqKey, status: model.groqStatus)
       }.padding(8)
     }
   }
@@ -111,7 +115,7 @@ struct SettingsView: View {
           let candidate = value.wrappedValue
           Task {
             await model.validateAndSave(candidate, kind: kind)
-            if (kind == .soniox ? model.sonioxStatus : model.openRouterStatus) == .saved {
+            if model.credentialStatus(for: kind) == .saved {
               value.wrappedValue = ""
             }
           }
@@ -148,8 +152,13 @@ struct SettingsView: View {
   private var behaviorSection: some View {
     GroupBox("Behavior") {
       VStack(alignment: .leading, spacing: 10) {
+        Picker("Provider", selection: $preferences.cleanupProvider) {
+          ForEach(CleanupProvider.allCases, id: \.self) { provider in
+            Text(provider.displayName).tag(provider)
+          }
+        }.pickerStyle(.segmented)
         Picker("Model", selection: $preferences.cleanupModel) {
-          ForEach(CleanupModel.allCases, id: \.self) { cleanupModel in
+          ForEach(preferences.cleanupProvider.models, id: \.self) { cleanupModel in
             Text(cleanupModel.displayName).tag(cleanupModel)
           }
         }.pickerStyle(.menu)
@@ -166,6 +175,14 @@ struct SettingsView: View {
         if preferences.cleanupModel == .gpt56LunaFast {
           Label(
             "Luna Fast may retain prompts at the provider; use another model for zero data retention.",
+            systemImage: "exclamationmark.triangle.fill"
+          )
+          .font(.caption)
+          .foregroundStyle(.orange)
+        }
+        if preferences.cleanupProvider == .groq {
+          Label(
+            "Groq may temporarily log inputs and outputs for reliability or abuse monitoring. Enable Zero Data Retention in Groq Data Controls to opt out.",
             systemImage: "exclamationmark.triangle.fill"
           )
           .font(.caption)

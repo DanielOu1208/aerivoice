@@ -79,6 +79,43 @@ enum CleanupReasoningEffort: String, CaseIterable, Codable, Sendable {
   }
 }
 
+enum CleanupProvider: String, CaseIterable, Codable, Sendable {
+  case openRouter
+  case groq
+
+  var displayName: String {
+    switch self {
+    case .openRouter: "OpenRouter"
+    case .groq: "Groq"
+    }
+  }
+
+  var credentialKind: CredentialKind {
+    switch self {
+    case .openRouter: .openRouter
+    case .groq: .groq
+    }
+  }
+
+  var models: [CleanupModel] {
+    CleanupModel.allCases.filter { $0.provider == self }
+  }
+
+  var defaultModel: CleanupModel {
+    switch self {
+    case .openRouter: .gemini37Flash
+    case .groq: .qwen38_27BGroq
+    }
+  }
+
+  var missingCredentialError: AppError {
+    switch self {
+    case .openRouter: .missingOpenRouterKey
+    case .groq: .missingGroqKey
+    }
+  }
+}
+
 struct CleanupProviderRoute: Equatable, Sendable {
   let only: [String]?
   let sort: String?
@@ -93,6 +130,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
   case gptOSS120BCerebras = "openai/gpt-oss-120b"
   case gemini35FlashLite = "google/gemini-3.5-flash-lite"
   case gpt56LunaFast = "openai/gpt-5.6-luna"
+  case qwen38_27BGroq = "qwen/qwen3.8-27b"
 
   static let defaultModel: CleanupModel = .gemini37Flash
 
@@ -102,6 +140,16 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     case .gptOSS120BCerebras: "GPT-OSS 120B · Cerebras"
     case .gemini35FlashLite: "Gemini 3.5 Flash Lite"
     case .gpt56LunaFast: "GPT-5.6 Luna · Fast"
+    case .qwen38_27BGroq: "Qwen 3.8 27B"
+    }
+  }
+
+  var provider: CleanupProvider {
+    switch self {
+    case .gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast:
+      .openRouter
+    case .qwen38_27BGroq:
+      .groq
     }
   }
 
@@ -113,6 +161,15 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
       [.minimal, .low, .medium, .high]
     case .gpt56LunaFast:
       [.none, .low, .medium, .high, .xhigh, .max]
+    case .qwen38_27BGroq:
+      [.none, .low]
+    }
+  }
+
+  var defaultReasoningEffort: CleanupReasoningEffort {
+    switch self {
+    case .qwen38_27BGroq: .none
+    default: .low
     }
   }
 
@@ -130,11 +187,17 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
       CleanupProviderRoute(
         only: ["openai/fast"], sort: nil, requiresZeroDataRetention: false,
         allowsFallbacks: false)
+    case .qwen38_27BGroq:
+      CleanupProviderRoute(
+        only: nil, sort: nil, requiresZeroDataRetention: false,
+        allowsFallbacks: false)
     }
   }
 
   func normalizedReasoningEffort(_ effort: CleanupReasoningEffort?) -> CleanupReasoningEffort {
-    guard let effort, supportedReasoningEfforts.contains(effort) else { return .low }
+    guard let effort, supportedReasoningEfforts.contains(effort) else {
+      return defaultReasoningEffort
+    }
     return effort
   }
 }
@@ -142,6 +205,8 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
 struct CleanupConfiguration: Equatable, Sendable {
   let model: CleanupModel
   let reasoningEffort: CleanupReasoningEffort
+
+  var provider: CleanupProvider { model.provider }
 
   init(model: CleanupModel, reasoningEffort: CleanupReasoningEffort) {
     self.model = model
@@ -319,6 +384,7 @@ struct NotchState: Equatable, Sendable {
 enum AppError: LocalizedError {
   case missingSonioxKey
   case missingOpenRouterKey
+  case missingGroqKey
   case microphoneUnavailable
   case connectionTimeout
   case finalizeTimeout
@@ -329,6 +395,7 @@ enum AppError: LocalizedError {
     switch self {
     case .missingSonioxKey: "Add and verify a Soniox API key in Settings."
     case .missingOpenRouterKey: "Add and verify an OpenRouter API key in Settings."
+    case .missingGroqKey: "Add and verify a Groq API key in Settings."
     case .microphoneUnavailable: "Microphone access is required."
     case .connectionTimeout: "Soniox did not connect in time."
     case .finalizeTimeout: "Soniox did not finish in time."

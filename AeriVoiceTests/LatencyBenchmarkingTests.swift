@@ -131,6 +131,29 @@ final class LatencyBenchmarkingTests: XCTestCase {
         atPath: directory.appending(path: LatencyBenchmarkStore.logFilename).path))
   }
 
+  func testDirectGroqConfigurationRecordsProviderWithoutContent() async throws {
+    let directory = makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = makeRecorder(
+      directory: directory, clock: TestClock(milliseconds: 0),
+      wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
+    await recorder.flushForTesting()
+
+    recorder.begin(
+      enabled: true, cleanupMode: .faithful,
+      cleanupConfiguration: CleanupConfiguration(
+        model: .qwen38_27BGroq, reasoningEffort: .none))
+    recorder.finish(.cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    await recorder.flushForTesting()
+
+    let record = try XCTUnwrap(
+      try decodeRecords(at: directory.appending(path: LatencyBenchmarkStore.logFilename)).first)
+    XCTAssertEqual(record.cleanup.requestedModel, "qwen/qwen3.8-27b")
+    XCTAssertEqual(record.cleanup.requestedReasoningEffort, .some(.none))
+    XCTAssertEqual(record.cleanup.requestedProviderTag, "groq-direct")
+    XCTAssertEqual(record.cleanup.zeroDataRetentionRequired, false)
+  }
+
   func testLegacyRecordWithoutRoutingMetadataStillDecodes() throws {
     let legacyJSON = #"""
       {

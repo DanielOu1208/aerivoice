@@ -67,6 +67,31 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertFalse(fixture.audio.didStart)
   }
 
+  func testSelectedGroqProviderUsesGroqCredential() async throws {
+    let fixture = makeFixture(cleanupProvider: .groq)
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+
+    XCTAssertEqual(fixture.cleaner.lastConfiguration?.provider, .groq)
+    XCTAssertEqual(fixture.cleaner.lastAPIKey, "groq-key")
+  }
+
+  func testMissingSelectedGroqCredentialFailsBeforeAudioCapture() async throws {
+    let fixture = makeFixture(hasGroqKey: false, cleanupProvider: .groq)
+
+    fixture.coordinator.toggle()
+    try await waitUntil {
+      if case .error = fixture.coordinator.phase { return true }
+      return false
+    }
+
+    XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
+    XCTAssertFalse(fixture.audio.didStart)
+  }
+
   func testCancellationRecordsTerminalCancellation() async throws {
     let fixture = makeFixture()
     fixture.coordinator.toggle()
@@ -137,7 +162,8 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
   }
 
   private func makeFixture(
-    hasSonioxKey: Bool = true, cleanupError: ProviderHTTPError? = nil,
+    hasSonioxKey: Bool = true, hasGroqKey: Bool = true,
+    cleanupProvider: CleanupProvider = .openRouter, cleanupError: ProviderHTTPError? = nil,
     provisionalText: String = "Raw", cleanupWaitsForCancellation: Bool = false
   ) -> CoordinatorFixture {
     let suite = "AeriVoiceTests.Coordinator.\(UUID().uuidString)"
@@ -146,10 +172,12 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     defaults.set(false, forKey: "soundCues")
     defaults.set(false, forKey: "muteOutput")
     let preferences = AppPreferences(defaults: defaults)
+    preferences.cleanupProvider = cleanupProvider
     let credentials = FakeCredentialReader(
       values: [
         .soniox: hasSonioxKey ? "soniox-key" : nil,
         .openRouter: "openrouter-key",
+        .groq: hasGroqKey ? "groq-key" : nil,
       ])
     let audio = FakeAudioCapture()
     let transcriber = FakeTranscriber(provisionalText: provisionalText)
@@ -256,6 +284,7 @@ private final class FakeCleaner: CleaningText, @unchecked Sendable {
   private var exited = false
   private var recordedConfiguration: CleanupConfiguration?
   private var recordedMode: CleanupMode?
+  private var recordedAPIKey: String?
 
   init(error: ProviderHTTPError?, waitsForCancellation: Bool) {
     self.error = error
@@ -265,6 +294,7 @@ private final class FakeCleaner: CleaningText, @unchecked Sendable {
   var hasExited: Bool { lock.withLock { exited } }
   var lastConfiguration: CleanupConfiguration? { lock.withLock { recordedConfiguration } }
   var lastMode: CleanupMode? { lock.withLock { recordedMode } }
+  var lastAPIKey: String? { lock.withLock { recordedAPIKey } }
 
   func clean(
     _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
@@ -272,6 +302,7 @@ private final class FakeCleaner: CleaningText, @unchecked Sendable {
     lock.withLock {
       recordedMode = mode
       recordedConfiguration = configuration
+      recordedAPIKey = apiKey
     }
     defer { lock.withLock { exited = true } }
     if waitsForCancellation { try await Task.sleep(for: .seconds(10)) }

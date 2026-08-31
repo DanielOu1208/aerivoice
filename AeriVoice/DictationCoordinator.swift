@@ -71,7 +71,7 @@ final class DictationCoordinator: ObservableObject {
     preferences: AppPreferences, credentials: CredentialReading,
     audio: AudioCapturing = AudioCaptureService(),
     transcriber: RealtimeTranscribing = SonioxRealtimeClient(),
-    cleaner: CleaningText = OpenRouterCleanupClient(), muter: OutputMuting = OutputMuteController(),
+    cleaner: CleaningText = CleanupClientRouter(), muter: OutputMuting = OutputMuteController(),
     inserter: TextInserting = TextInsertionService(), notch: NotchPresenting = NotchPresenter(),
     benchmark: LatencyBenchmarkRecording = LatencyBenchmarkRecorder(),
     readiness: DictationReadinessChecking = SystemDictationReadiness(),
@@ -163,8 +163,14 @@ final class DictationCoordinator: ObservableObject {
       showReadinessError(AppError.missingSonioxKey, category: .missingCredential)
       return
     }
-    guard credentials.value(for: .openRouter).map({ !$0.isEmpty }) == true else {
-      showReadinessError(AppError.missingOpenRouterKey, category: .missingCredential)
+    guard let cleanupSettings = activeCleanupSettings else {
+      showReadinessError(
+        AppError.provider("Cleanup settings were unavailable."), category: .unknown)
+      return
+    }
+    let cleanupProvider = cleanupSettings.configuration.provider
+    guard credentials.value(for: cleanupProvider.credentialKind).map({ !$0.isEmpty }) == true else {
+      showReadinessError(cleanupProvider.missingCredentialError, category: .missingCredential)
       return
     }
     guard await readiness.requestMicrophone() else {
@@ -250,11 +256,14 @@ final class DictationCoordinator: ObservableObject {
       phase = .cleaning
       state.phase = .cleaning
       notch.present(state: state)
-      guard let openRouterKey = credentials.value(for: .openRouter) else {
-        throw AppError.missingOpenRouterKey
-      }
       guard let cleanupSettings = activeCleanupSettings else {
         throw AppError.provider("Cleanup settings were unavailable.")
+      }
+      let cleanupProvider = cleanupSettings.configuration.provider
+      guard let cleanupKey = credentials.value(for: cleanupProvider.credentialKind),
+        !cleanupKey.isEmpty
+      else {
+        throw cleanupProvider.missingCredentialError
       }
       benchmark.recordCleanupMode(cleanupSettings.mode)
       benchmark.mark(.cleanupStarted)
@@ -262,7 +271,7 @@ final class DictationCoordinator: ObservableObject {
       do {
         let cleanup = try await cleaner.clean(
           raw, mode: cleanupSettings.mode, configuration: cleanupSettings.configuration,
-          apiKey: openRouterKey)
+          apiKey: cleanupKey)
         guard sessionID == id else { return }
         finalText = cleanup.text
         benchmark.recordCleanup(cleanup.metrics)
@@ -483,7 +492,8 @@ final class DictationCoordinator: ObservableObject {
     if error is URLError { return (.network, nil) }
     if let error = error as? AppError {
       switch error {
-      case .missingSonioxKey, .missingOpenRouterKey: return (.missingCredential, nil)
+      case .missingSonioxKey, .missingOpenRouterKey, .missingGroqKey:
+        return (.missingCredential, nil)
       case .microphoneUnavailable: return (.microphonePermission, nil)
       case .connectionTimeout: return (.connectionTimeout, nil)
       case .finalizeTimeout: return (.finalizeTimeout, nil)

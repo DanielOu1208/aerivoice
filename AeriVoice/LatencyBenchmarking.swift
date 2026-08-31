@@ -221,6 +221,8 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     guard enabled, active == nil else { return }
     let wallTime = wallNow()
     let route = cleanupConfiguration.model.providerRoute
+    let requestedProviderTag =
+      cleanupConfiguration.provider == .groq ? "groq-direct" : route.requestedProviderTag
     let record = LatencyBenchmarkRecord(
       schemaVersion: 1,
       interactionID: UUID(),
@@ -234,7 +236,7 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
       cleanup: BenchmarkCleanupMetadata(
         mode: cleanupMode, requestedModel: cleanupConfiguration.model.rawValue,
         requestedReasoningEffort: cleanupConfiguration.reasoningEffort,
-        requestedProviderTag: route.requestedProviderTag,
+        requestedProviderTag: requestedProviderTag,
         zeroDataRetentionRequired: route.requiresZeroDataRetention))
     active = ActiveInteraction(originMS: monotonicNowMS(), record: record)
     checkpoint()

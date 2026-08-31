@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
 
   @Published var sonioxStatus: CredentialStatus
   @Published var openRouterStatus: CredentialStatus
+  @Published var groqStatus: CredentialStatus
   @Published var shortcutConfirmation: ShortcutDefinition?
   @Published var permissionRefresh = 0
 
@@ -36,6 +37,7 @@ final class AppModel: ObservableObject {
       preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder)
     sonioxStatus = credentials.value(for: .soniox) == nil ? .missing : .saved
     openRouterStatus = credentials.value(for: .openRouter) == nil ? .missing : .saved
+    groqStatus = credentials.value(for: .groq) == nil ? .missing : .saved
     shortcutMonitor.onToggle = { [weak coordinator] in coordinator?.toggle() }
     shortcutMonitor.onCancel = { [weak coordinator] in coordinator?.cancel() }
     shortcutMonitor.shouldCancel = { [weak coordinator] in coordinator?.canCancel == true }
@@ -60,11 +62,19 @@ final class AppModel: ObservableObject {
 
   var setupComplete: Bool {
     preferences.onboardingComplete && preferences.shortcut != nil && hasCredential(.soniox)
-      && hasCredential(.openRouter) && permissionsReady
+      && hasCredential(preferences.cleanupProvider.credentialKind) && permissionsReady
   }
 
   func hasCredential(_ kind: CredentialKind) -> Bool {
     credentials.value(for: kind).map { !$0.isEmpty } == true
+  }
+
+  func credentialStatus(for kind: CredentialKind) -> CredentialStatus {
+    switch kind {
+    case .soniox: sonioxStatus
+    case .openRouter: openRouterStatus
+    case .groq: groqStatus
+    }
   }
 
   var permissionsReady: Bool {
@@ -97,7 +107,10 @@ final class AppModel: ObservableObject {
       switch kind {
       case .openRouter:
         try await OpenRouterCleanupClient().validate(
-          apiKey: trimmed, configuration: preferences.cleanupConfiguration)
+          apiKey: trimmed, configuration: preferences.cleanupConfiguration(for: .openRouter))
+      case .groq:
+        try await GroqCleanupClient().validate(
+          apiKey: trimmed, model: preferences.cleanupConfiguration(for: .groq).model)
       case .soniox:
         let client = SonioxRealtimeClient()
         try await client.connect(apiKey: trimmed, vocabulary: [], sessionID: DictationSessionID())
@@ -122,7 +135,8 @@ final class AppModel: ObservableObject {
   }
 
   func finishSetup() {
-    guard preferences.shortcut != nil, hasCredential(.soniox), hasCredential(.openRouter),
+    guard preferences.shortcut != nil, hasCredential(.soniox),
+      hasCredential(preferences.cleanupProvider.credentialKind),
       permissionsReady
     else { return }
     preferences.onboardingComplete = true
@@ -161,6 +175,7 @@ final class AppModel: ObservableObject {
     switch kind {
     case .soniox: sonioxStatus = status
     case .openRouter: openRouterStatus = status
+    case .groq: groqStatus = status
     }
     objectWillChange.send()
   }

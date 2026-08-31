@@ -5,7 +5,9 @@ import ServiceManagement
 final class AppPreferences: ObservableObject {
   private enum Key {
     static let cleanupMode = "cleanupMode"
+    static let cleanupProvider = "cleanupProvider"
     static let cleanupModel = "cleanupModel"
+    static let cleanupModels = "cleanupModels"
     static let cleanupReasoningEfforts = "cleanupReasoningEfforts"
     static let vocabulary = "vocabulary"
     static let muteOutput = "muteOutput"
@@ -19,8 +21,22 @@ final class AppPreferences: ObservableObject {
   @Published var cleanupMode: CleanupMode {
     didSet { defaults.set(cleanupMode.rawValue, forKey: Key.cleanupMode) }
   }
+  @Published var cleanupProvider: CleanupProvider {
+    didSet {
+      defaults.set(cleanupProvider.rawValue, forKey: Key.cleanupProvider)
+      guard cleanupModel.provider != cleanupProvider else { return }
+      cleanupModel = selectedModel(for: cleanupProvider)
+    }
+  }
   @Published var cleanupModel: CleanupModel {
-    didSet { defaults.set(cleanupModel.rawValue, forKey: Key.cleanupModel) }
+    didSet {
+      if cleanupProvider != cleanupModel.provider {
+        cleanupProvider = cleanupModel.provider
+      }
+      savedModels[cleanupModel.provider.rawValue] = cleanupModel.rawValue
+      defaults.set(cleanupModel.rawValue, forKey: Key.cleanupModel)
+      persistModels()
+    }
   }
   @Published var vocabulary: String { didSet { defaults.set(vocabulary, forKey: Key.vocabulary) } }
   @Published var muteOutput: Bool { didSet { defaults.set(muteOutput, forKey: Key.muteOutput) } }
@@ -35,6 +51,7 @@ final class AppPreferences: ObservableObject {
   }
 
   private let defaults: UserDefaults
+  private var savedModels: [String: String] = [:]
   private var savedReasoningEfforts: [String: String] = [:]
 
   var cleanupReasoningEffort: CleanupReasoningEffort {
@@ -57,11 +74,31 @@ final class AppPreferences: ObservableObject {
     CleanupConfiguration(model: cleanupModel, reasoningEffort: cleanupReasoningEffort)
   }
 
+  func cleanupConfiguration(for provider: CleanupProvider) -> CleanupConfiguration {
+    let model = selectedModel(for: provider)
+    let effort = savedReasoningEfforts[model.rawValue].flatMap(CleanupReasoningEffort.init)
+    return CleanupConfiguration(
+      model: model, reasoningEffort: model.normalizedReasoningEffort(effort))
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .faithful
-    cleanupModel =
+    let legacyModel =
       CleanupModel(rawValue: defaults.string(forKey: Key.cleanupModel) ?? "") ?? .defaultModel
+    if let data = defaults.data(forKey: Key.cleanupModels),
+      let saved = try? JSONDecoder().decode([String: String].self, from: data)
+    {
+      savedModels = saved
+    }
+    savedModels[legacyModel.provider.rawValue] = legacyModel.rawValue
+    let initialProvider =
+      CleanupProvider(rawValue: defaults.string(forKey: Key.cleanupProvider) ?? "")
+      ?? legacyModel.provider
+    cleanupProvider = initialProvider
+    cleanupModel = savedModels[initialProvider.rawValue].flatMap(CleanupModel.init)
+      .flatMap { $0.provider == initialProvider ? $0 : nil }
+      ?? initialProvider.defaultModel
     if let data = defaults.data(forKey: Key.cleanupReasoningEfforts),
       let saved = try? JSONDecoder().decode([String: String].self, from: data)
     {
@@ -103,6 +140,18 @@ final class AppPreferences: ObservableObject {
   private func persistReasoningEfforts() {
     if let data = try? JSONEncoder().encode(savedReasoningEfforts) {
       defaults.set(data, forKey: Key.cleanupReasoningEfforts)
+    }
+  }
+
+  private func selectedModel(for provider: CleanupProvider) -> CleanupModel {
+    savedModels[provider.rawValue].flatMap(CleanupModel.init)
+      .flatMap { $0.provider == provider ? $0 : nil }
+      ?? provider.defaultModel
+  }
+
+  private func persistModels() {
+    if let data = try? JSONEncoder().encode(savedModels) {
+      defaults.set(data, forKey: Key.cleanupModels)
     }
   }
 }

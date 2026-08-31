@@ -5,11 +5,28 @@ import XCTest
 @testable import AeriVoice
 
 final class ModelTests: XCTestCase {
+  func testKeychainServiceIsNamespacedByBundleIdentifier() {
+    XCTAssertEqual(
+      KeychainStore.serviceName(bundleIdentifier: "com.danielou.AeriVoice"),
+      "com.danielou.AeriVoice.credentials")
+    XCTAssertEqual(
+      KeychainStore.serviceName(bundleIdentifier: "com.danielou.AeriVoice.GroqQA"),
+      "com.danielou.AeriVoice.GroqQA.credentials")
+    XCTAssertEqual(
+      KeychainStore.serviceName(bundleIdentifier: nil), "com.danielou.AeriVoice.credentials")
+  }
+
   func testCleanupModelCatalogAndCapabilities() {
     XCTAssertEqual(
       CleanupModel.allCases,
-      [.gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast])
+      [
+        .gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast,
+        .qwen38_27BGroq,
+      ])
     XCTAssertEqual(CleanupModel.defaultModel, .gemini37Flash)
+    XCTAssertEqual(CleanupProvider.openRouter.defaultModel, .gemini37Flash)
+    XCTAssertEqual(CleanupProvider.groq.defaultModel, .qwen38_27BGroq)
+    XCTAssertEqual(CleanupProvider.groq.models, [.qwen38_27BGroq])
     XCTAssertEqual(
       CleanupModel.gemini37Flash.supportedReasoningEfforts, [.low, .medium, .high])
     XCTAssertEqual(
@@ -20,10 +37,39 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(
       CleanupModel.gpt56LunaFast.supportedReasoningEfforts,
       [.none, .low, .medium, .high, .xhigh, .max])
+    XCTAssertEqual(CleanupModel.qwen38_27BGroq.supportedReasoningEfforts, [.none, .low])
+    XCTAssertEqual(CleanupModel.qwen38_27BGroq.defaultReasoningEffort, .none)
     XCTAssertEqual(CleanupModel.gptOSS120BCerebras.providerRoute.only, ["cerebras/fp16"])
     XCTAssertTrue(CleanupModel.gptOSS120BCerebras.providerRoute.requiresZeroDataRetention)
     XCTAssertEqual(CleanupModel.gpt56LunaFast.providerRoute.only, ["openai/fast"])
     XCTAssertFalse(CleanupModel.gpt56LunaFast.providerRoute.requiresZeroDataRetention)
+  }
+
+  @MainActor
+  func testCleanupPreferencesRememberModelAndReasoningPerProvider() {
+    let suite = "AeriVoiceTests.ProviderPreferences.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    let preferences = AppPreferences(defaults: defaults)
+
+    preferences.cleanupModel = .gpt56LunaFast
+    preferences.cleanupReasoningEffort = .xhigh
+    preferences.cleanupProvider = .groq
+    XCTAssertEqual(preferences.cleanupModel, .qwen38_27BGroq)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .none)
+    preferences.cleanupReasoningEffort = .low
+
+    preferences.cleanupProvider = .openRouter
+    XCTAssertEqual(preferences.cleanupModel, .gpt56LunaFast)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .xhigh)
+
+    let restored = AppPreferences(defaults: defaults)
+    XCTAssertEqual(restored.cleanupProvider, .openRouter)
+    XCTAssertEqual(restored.cleanupModel, .gpt56LunaFast)
+    restored.cleanupProvider = .groq
+    XCTAssertEqual(restored.cleanupModel, .qwen38_27BGroq)
+    XCTAssertEqual(restored.cleanupReasoningEffort, .low)
   }
 
   @MainActor
@@ -66,6 +112,9 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(
       CleanupConfiguration(model: .gptOSS120BCerebras, reasoningEffort: .max).reasoningEffort,
       .low)
+    XCTAssertEqual(
+      CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .medium).reasoningEffort,
+      .none)
   }
 
   func testVocabularyTrimsDeduplicatesAndPreservesFirstSpelling() {

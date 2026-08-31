@@ -4,11 +4,13 @@ import Security
 enum CredentialKind: String, CaseIterable, Sendable {
   case soniox
   case openRouter
+  case groq
 
   var label: String {
     switch self {
     case .soniox: "Soniox"
     case .openRouter: "OpenRouter"
+    case .groq: "Groq"
     }
   }
 }
@@ -18,7 +20,15 @@ protocol CredentialReading: Sendable {
 }
 
 final class KeychainStore: CredentialReading, @unchecked Sendable {
-  private let service = "com.danielou.AeriVoice.credentials"
+  private let service: String
+
+  init(bundleIdentifier: String? = Bundle.main.bundleIdentifier) {
+    service = Self.serviceName(bundleIdentifier: bundleIdentifier)
+  }
+
+  static func serviceName(bundleIdentifier: String?) -> String {
+    "\(bundleIdentifier ?? "com.danielou.AeriVoice").credentials"
+  }
 
   func value(for kind: CredentialKind) -> String? {
     let query: [String: Any] = [

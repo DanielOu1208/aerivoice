@@ -8,6 +8,9 @@ struct OpenRouterCleanupClient: CleaningText {
   func clean(
     _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult {
+    guard configuration.provider == .openRouter else {
+      throw AppError.provider("The selected cleanup model is not available through OpenRouter.")
+    }
     let route = configuration.model.providerRoute
     var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
     request.httpMethod = "POST"
