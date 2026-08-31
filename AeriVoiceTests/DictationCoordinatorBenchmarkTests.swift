@@ -106,6 +106,36 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertTrue(fixture.audio.didStop)
   }
 
+  func testStoppingDuringCueDelayCancelsBeforeCaptureStarts() async throws {
+    let fixture = makeFixture(soundCues: true, cueDelay: .milliseconds(80))
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.cuePlayer.playedCues == [.start] }
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
+    try await Task.sleep(for: .milliseconds(120))
+
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertFalse(fixture.muter.didMute)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+  }
+
+  func testCancellationWhileMicrophoneReadinessIsSuspendedNeverStartsCapture() async throws {
+    let readiness = SuspendedReadiness()
+    let fixture = makeFixture(readiness: readiness)
+    fixture.coordinator.toggle()
+    try await waitUntil { readiness.didRequestMicrophone }
+
+    fixture.coordinator.cancel()
+    readiness.resolveMicrophoneRequest(true)
+    try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
+    try await Task.sleep(for: .milliseconds(20))
+
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertFalse(fixture.muter.didMute)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+  }
+
   func testCancellationDuringCleanupDoesNotPresentAfterSchedulingHide() async throws {
     let fixture = makeFixture(cleanupWaitsForCancellation: true)
     fixture.coordinator.toggle()
@@ -164,12 +194,14 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
   private func makeFixture(
     hasSonioxKey: Bool = true, hasGroqKey: Bool = true,
     cleanupProvider: CleanupProvider = .openRouter, cleanupError: ProviderHTTPError? = nil,
-    provisionalText: String = "Raw", cleanupWaitsForCancellation: Bool = false
+    provisionalText: String = "Raw", cleanupWaitsForCancellation: Bool = false,
+    soundCues: Bool = false, cueDelay: Duration = .zero,
+    readiness: DictationReadinessChecking? = nil
   ) -> CoordinatorFixture {
     let suite = "AeriVoiceTests.Coordinator.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defaults.removePersistentDomain(forName: suite)
-    defaults.set(false, forKey: "soundCues")
+    defaults.set(soundCues, forKey: "soundCues")
     defaults.set(false, forKey: "muteOutput")
     let preferences = AppPreferences(defaults: defaults)
     preferences.cleanupProvider = cleanupProvider
@@ -186,14 +218,17 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     let inserter = FakeInserter()
     let benchmark = BenchmarkSpy()
     let notch = FakeNotch()
+    let muter = FakeMuter()
+    let cuePlayer = FakeCuePlayer(startCaptureDelay: cueDelay)
     let coordinator = DictationCoordinator(
       preferences: preferences, credentials: credentials, audio: audio,
-      transcriber: transcriber, cleaner: cleaner, muter: FakeMuter(), inserter: inserter,
-      notch: notch, benchmark: benchmark, readiness: FakeReadiness())
+      transcriber: transcriber, cleaner: cleaner, muter: muter, inserter: inserter,
+      notch: notch, benchmark: benchmark, readiness: readiness ?? FakeReadiness(),
+      cuePlayer: cuePlayer)
     return CoordinatorFixture(
       preferences: preferences, coordinator: coordinator, audio: audio, transcriber: transcriber,
-      inserter: inserter, cleaner: cleaner, notch: notch, benchmark: benchmark,
-      defaultsSuite: suite)
+      inserter: inserter, cleaner: cleaner, muter: muter, notch: notch, benchmark: benchmark,
+      cuePlayer: cuePlayer, defaultsSuite: suite)
   }
 
   private func waitUntil(
@@ -216,8 +251,10 @@ private struct CoordinatorFixture {
   let transcriber: FakeTranscriber
   let inserter: FakeInserter
   let cleaner: FakeCleaner
+  let muter: FakeMuter
   let notch: FakeNotch
   let benchmark: BenchmarkSpy
+  let cuePlayer: FakeCuePlayer
   let defaultsSuite: String
 }
 
@@ -230,6 +267,24 @@ private final class FakeCredentialReader: CredentialReading, @unchecked Sendable
 private struct FakeReadiness: DictationReadinessChecking {
   func requestMicrophone() async -> Bool { true }
   func accessibilityReady(prompt: Bool) -> Bool { true }
+}
+
+@MainActor
+private final class SuspendedReadiness: DictationReadinessChecking {
+  private var microphoneContinuation: CheckedContinuation<Bool, Never>?
+  private(set) var didRequestMicrophone = false
+
+  func requestMicrophone() async -> Bool {
+    didRequestMicrophone = true
+    return await withCheckedContinuation { microphoneContinuation = $0 }
+  }
+
+  func accessibilityReady(prompt: Bool) -> Bool { true }
+
+  func resolveMicrophoneRequest(_ result: Bool) {
+    microphoneContinuation?.resume(returning: result)
+    microphoneContinuation = nil
+  }
 }
 
 private final class FakeAudioCapture: AudioCapturing, @unchecked Sendable {
@@ -250,12 +305,15 @@ private final class FakeTranscriber: RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
   var didCancel = false
+  var didConnect = false
   private var sentFirstUpdate = false
   private let provisionalText: String
 
   init(provisionalText: String) { self.provisionalText = provisionalText }
 
-  func connect(apiKey: String, vocabulary: [String], sessionID: DictationSessionID) async throws {}
+  func connect(apiKey: String, vocabulary: [String], sessionID: DictationSessionID) async throws {
+    didConnect = true
+  }
 
   func send(_ audio: Data) async throws {
     guard !sentFirstUpdate else { return }
@@ -318,8 +376,25 @@ private final class FakeCleaner: CleaningText, @unchecked Sendable {
 }
 
 private final class FakeMuter: OutputMuting, @unchecked Sendable {
-  func mute() -> Bool { true }
+  private(set) var didMute = false
+
+  func mute() -> Bool {
+    didMute = true
+    return true
+  }
   func restore() {}
+}
+
+@MainActor
+private final class FakeCuePlayer: SoundCuePlaying {
+  let startCaptureDelay: Duration
+  private(set) var playedCues: [DictationCue] = []
+
+  init(startCaptureDelay: Duration) {
+    self.startCaptureDelay = startCaptureDelay
+  }
+
+  func play(_ cue: DictationCue) { playedCues.append(cue) }
 }
 
 @MainActor

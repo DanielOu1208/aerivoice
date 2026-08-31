@@ -19,7 +19,12 @@ protocol CredentialReading: Sendable {
   func value(for kind: CredentialKind) -> String?
 }
 
-final class KeychainStore: CredentialReading, @unchecked Sendable {
+protocol CredentialStoring: CredentialReading {
+  func save(_ value: String, for kind: CredentialKind) throws
+  func remove(_ kind: CredentialKind) throws
+}
+
+final class KeychainStore: CredentialStoring, @unchecked Sendable {
   private let service: String
 
   init(bundleIdentifier: String? = Bundle.main.bundleIdentifier) {

@@ -251,6 +251,7 @@ struct CredentialEditorView: View {
                 || status == .validating)
           if hasSavedKey {
             Button("Cancel") {
+              model.cancelCredentialValidation(kind)
               candidate = ""
               isReplacing = false
             }
@@ -291,6 +292,12 @@ struct CredentialEditorView: View {
     } message: {
       Text("AeriVoice will stop using this credential until another key is verified.")
     }
+    .onChange(of: status) { _, newStatus in
+      guard newStatus == .saved else { return }
+      candidate = ""
+      isReplacing = false
+      showsErrorDetails = false
+    }
   }
 
   @ViewBuilder private var credentialStatus: some View {
@@ -329,15 +336,7 @@ struct CredentialEditorView: View {
   }
 
   private func verifyAndSave() {
-    let value = candidate
-    Task {
-      await model.validateAndSave(value, kind: kind)
-      if model.credentialStatus(for: kind) == .saved {
-        candidate = ""
-        isReplacing = false
-        showsErrorDetails = false
-      }
-    }
+    model.validateAndSave(candidate, kind: kind)
   }
 }
 

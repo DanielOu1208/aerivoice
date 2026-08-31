@@ -111,11 +111,18 @@ final class DictationCoordinator: ObservableObject {
         cleanupConfiguration: cleanupConfiguration)
       let generation = UUID()
       lifecycleGeneration = generation
+      phase = .starting
       startTask = Task { @MainActor [weak self] in
         await self?.start(generation: generation)
         if self?.lifecycleGeneration == generation { self?.startTask = nil }
       }
-    case .starting, .recording:
+    case .starting:
+      if sessionID == nil {
+        cancel()
+      } else {
+        beginStopTask()
+      }
+    case .recording:
       beginStopTask()
     case .processing, .cleaning, .inserting: break
     }
@@ -158,7 +165,7 @@ final class DictationCoordinator: ObservableObject {
   }
 
   private func start(generation: UUID) async {
-    guard phase == .idle || phase.isTerminal else { return }
+    guard phase == .starting else { return }
     guard let sonioxKey = credentials.value(for: .soniox), !sonioxKey.isEmpty else {
       showReadinessError(AppError.missingSonioxKey, category: .missingCredential)
       return
@@ -173,11 +180,12 @@ final class DictationCoordinator: ObservableObject {
       showReadinessError(cleanupProvider.missingCredentialError, category: .missingCredential)
       return
     }
-    guard await readiness.requestMicrophone() else {
+    let microphoneReady = await readiness.requestMicrophone()
+    guard lifecycleGeneration == generation, !Task.isCancelled else { return }
+    guard microphoneReady else {
       showReadinessError(AppError.microphoneUnavailable, category: .microphonePermission)
       return
     }
-    guard lifecycleGeneration == generation, !Task.isCancelled else { return }
     guard readiness.accessibilityReady(prompt: true) else {
       showReadinessError(
         AppError.provider("Accessibility access is required to insert text."),
@@ -185,14 +193,14 @@ final class DictationCoordinator: ObservableObject {
       return
     }
 
-    let id = DictationSessionID()
-    sessionID = id
-    phase = .starting
     state = NotchState(phase: .starting)
     notch.present(state: state)
     play(.start)
     if preferences.soundCues { try? await Task.sleep(for: cuePlayer.startCaptureDelay) }
-    guard sessionID == id, lifecycleGeneration == generation, !Task.isCancelled else { return }
+    guard phase == .starting, lifecycleGeneration == generation, !Task.isCancelled else { return }
+
+    let id = DictationSessionID()
+    sessionID = id
     state.warning = preferences.muteOutput && !muter.mute() ? "Output could not be muted" : nil
     notch.present(state: state)
     audioStopped = false
@@ -507,14 +515,5 @@ final class DictationCoordinator: ObservableObject {
   private func play(_ cue: DictationCue) {
     guard preferences.soundCues else { return }
     cuePlayer.play(cue)
-  }
-}
-
-extension DictationPhase {
-  fileprivate var isTerminal: Bool {
-    switch self {
-    case .success, .error: true
-    default: false
-    }
   }
 }

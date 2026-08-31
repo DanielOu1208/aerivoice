@@ -42,12 +42,9 @@ enum MicrophonePermissionAction: Equatable {
 final class AppModel: ObservableObject {
   let preferences: AppPreferences
   let coordinator: DictationCoordinator
-  let credentials: KeychainStore
+  let credentialManager: CredentialManager
   let benchmarkRecorder: LatencyBenchmarkRecorder
 
-  @Published var sonioxStatus: CredentialStatus
-  @Published var openRouterStatus: CredentialStatus
-  @Published var groqStatus: CredentialStatus
   @Published var shortcutConfirmation: ShortcutDefinition?
   @Published var permissionRefresh = 0
   @Published var settingsDestinationRequest: SettingsDestination?
@@ -58,15 +55,16 @@ final class AppModel: ObservableObject {
   init() {
     let preferences = AppPreferences()
     let credentials = KeychainStore()
+    let credentialManager = CredentialManager(store: credentials)
     let benchmarkRecorder = LatencyBenchmarkRecorder()
     self.preferences = preferences
-    self.credentials = credentials
+    self.credentialManager = credentialManager
     self.benchmarkRecorder = benchmarkRecorder
     coordinator = DictationCoordinator(
       preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder)
-    sonioxStatus = credentials.value(for: .soniox) == nil ? .missing : .saved
-    openRouterStatus = credentials.value(for: .openRouter) == nil ? .missing : .saved
-    groqStatus = credentials.value(for: .groq) == nil ? .missing : .saved
+    credentialManager.objectWillChange.sink { [weak self] in
+      self?.objectWillChange.send()
+    }.store(in: &cancellables)
     shortcutMonitor.onToggle = { [weak coordinator] in coordinator?.toggle() }
     shortcutMonitor.onCancel = { [weak coordinator] in coordinator?.cancel() }
     shortcutMonitor.shouldCancel = { [weak coordinator] in coordinator?.canCancel == true }
@@ -96,15 +94,11 @@ final class AppModel: ObservableObject {
   var setupComplete: Bool { preferences.onboardingComplete && readinessComplete }
 
   func hasCredential(_ kind: CredentialKind) -> Bool {
-    credentials.value(for: kind).map { !$0.isEmpty } == true
+    credentialManager.hasCredential(kind)
   }
 
   func credentialStatus(for kind: CredentialKind) -> CredentialStatus {
-    switch kind {
-    case .soniox: sonioxStatus
-    case .openRouter: openRouterStatus
-    case .groq: groqStatus
-    }
+    credentialManager.status(for: kind)
   }
 
   var permissionsReady: Bool {
@@ -126,42 +120,21 @@ final class AppModel: ObservableObject {
     self.shortcutConfirmation = nil
   }
 
-  func validateAndSave(_ value: String, kind: CredentialKind) async {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-      setStatus(.error("Enter a key first."), kind: kind)
-      return
+  func validateAndSave(_ value: String, kind: CredentialKind) {
+    let configuration: CleanupConfiguration? = switch kind {
+    case .soniox: nil
+    case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
+    case .groq: preferences.cleanupConfiguration(for: .groq)
     }
-    setStatus(.validating, kind: kind)
-    do {
-      switch kind {
-      case .openRouter:
-        try await OpenRouterCleanupClient().validate(
-          apiKey: trimmed, configuration: preferences.cleanupConfiguration(for: .openRouter))
-      case .groq:
-        try await GroqCleanupClient().validate(
-          apiKey: trimmed, model: preferences.cleanupConfiguration(for: .groq).model)
-      case .soniox:
-        let client = SonioxRealtimeClient()
-        try await client.connect(apiKey: trimmed, vocabulary: [], sessionID: DictationSessionID())
-        try await client.send(Data(repeating: 0, count: 3_200))
-        do { _ = try await client.finish() } catch AppError.emptyTranscript {}
-        client.cancel()
-      }
-      try credentials.save(trimmed, for: kind)
-      setStatus(.saved, kind: kind)
-    } catch {
-      setStatus(.error(error.localizedDescription), kind: kind)
-    }
+    credentialManager.beginValidation(value, kind: kind, configuration: configuration)
+  }
+
+  func cancelCredentialValidation(_ kind: CredentialKind) {
+    credentialManager.cancelValidation(kind)
   }
 
   func remove(_ kind: CredentialKind) {
-    do {
-      try credentials.remove(kind)
-      setStatus(.missing, kind: kind)
-    } catch {
-      setStatus(.error(error.localizedDescription), kind: kind)
-    }
+    credentialManager.remove(kind)
   }
 
   func finishOnboarding(launchAtLogin: Bool) -> OnboardingFinishResult {
@@ -213,12 +186,4 @@ final class AppModel: ObservableObject {
     benchmarkRecorder.clearCompletedHistory()
   }
 
-  private func setStatus(_ status: CredentialStatus, kind: CredentialKind) {
-    switch kind {
-    case .soniox: sonioxStatus = status
-    case .openRouter: openRouterStatus = status
-    case .groq: groqStatus = status
-    }
-    objectWillChange.send()
-  }
 }
