@@ -7,11 +7,29 @@ enum PasteDispatchStrategy: Equatable {
   case copyOnly
 }
 
+enum SecureTextStatus: Equatable {
+  case secure
+  case nonSecure
+  case unknown
+
+  static func resolve(subrole: String?, result: AXError) -> SecureTextStatus {
+    switch result {
+    case .success:
+      guard let subrole else { return .unknown }
+      return subrole == kAXSecureTextFieldSubrole as String ? .secure : .nonSecure
+    case .attributeUnsupported, .noValue:
+      return .nonSecure
+    default:
+      return .unknown
+    }
+  }
+}
+
 struct TextTargetTraits: Equatable {
   var roles: Set<String> = []
-  var subroles: Set<String> = []
   var supportedAttributes: Set<String> = []
   var settableAttributes: Set<String> = []
+  var secureTextStatus: SecureTextStatus = .unknown
 }
 
 enum TextTargetPolicy {
@@ -21,8 +39,8 @@ enum TextTargetPolicy {
     kAXComboBoxRole as String,
   ]
 
-  static func isSecure(_ traits: TextTargetTraits) -> Bool {
-    traits.subroles.contains(kAXSecureTextFieldSubrole as String)
+  static func permitsInsertion(_ traits: TextTargetTraits) -> Bool {
+    traits.secureTextStatus == .nonSecure
   }
 
   static func isEditable(_ traits: TextTargetTraits) -> Bool {
@@ -36,7 +54,7 @@ enum TextTargetPolicy {
   static func dispatchStrategy(
     for traits: TextTargetTraits, hasEnabledPasteCommand: Bool
   ) -> PasteDispatchStrategy {
-    guard !isSecure(traits), isEditable(traits) else { return .copyOnly }
+    guard permitsInsertion(traits), isEditable(traits) else { return .copyOnly }
     return hasEnabledPasteCommand ? .menuCommand : .targetedShortcut
   }
 
@@ -216,7 +234,7 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     while let element = current, depth < 8 {
       guard !Task.isCancelled else { return nil }
       let traits = traits(of: element)
-      if TextTargetPolicy.isSecure(traits) { return nil }
+      guard TextTargetPolicy.permitsInsertion(traits) else { return nil }
       if candidate == nil, TextTargetPolicy.isEditable(traits) { candidate = element }
 
       let parent = elementAttribute(element, kAXParentAttribute as CFString)
@@ -232,9 +250,7 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     if let role = stringAttribute(element, kAXRoleAttribute as CFString) {
       traits.roles.insert(role)
     }
-    if let subrole = stringAttribute(element, kAXSubroleAttribute as CFString) {
-      traits.subroles.insert(subrole)
-    }
+    traits.secureTextStatus = secureTextStatus(of: element)
     if let names = attributeNames(element) {
       traits.supportedAttributes = names
     }
@@ -248,6 +264,19 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
       }
     }
     return traits
+  }
+
+  private func secureTextStatus(of element: AXUIElement) -> SecureTextStatus {
+    setTimeout(on: element)
+    for attempt in 0..<2 {
+      guard !Task.isCancelled else { return .unknown }
+      var value: CFTypeRef?
+      let result = AXUIElementCopyAttributeValue(
+        element, kAXSubroleAttribute as CFString, &value)
+      if result == .cannotComplete, attempt == 0 { continue }
+      return SecureTextStatus.resolve(subrole: value as? String, result: result)
+    }
+    return .unknown
   }
 
   private func enabledPasteMenuItem(in applicationElement: AXUIElement) -> AXUIElement? {

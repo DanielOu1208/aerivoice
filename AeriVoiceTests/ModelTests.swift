@@ -219,6 +219,32 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(VocabularyNormalizer.normalize("abc\ndef", limit: 5), ["abc"])
   }
 
+  func testVocabularyParsingPreservesTermsBeyondTransmissionLimit() {
+    let raw = "alpha\nbeta\ngamma"
+
+    XCTAssertEqual(VocabularyNormalizer.parse(raw), ["alpha", "beta", "gamma"])
+    XCTAssertEqual(VocabularyNormalizer.normalize(raw, limit: 10), ["alpha", "beta"])
+  }
+
+  func testRemovingFromOversizedLegacyVocabularyPreservesLaterTerms() {
+    let oversizedTerm = String(repeating: "a", count: 10_000)
+    XCTAssertEqual(
+      VocabularyNormalizer.removing(oversizedTerm, from: "\(oversizedTerm)\nbeta\ngamma"),
+      ["beta", "gamma"])
+  }
+
+  func testAddingToOversizedLegacyVocabularyDoesNotRewriteIt() {
+    XCTAssertEqual(
+      VocabularyNormalizer.adding("delta", to: "alpha\nbeta\ngamma", limit: 10),
+      .limitExceeded)
+  }
+
+  func testVocabularyLimitCountsUnicodeBytes() {
+    XCTAssertEqual(VocabularyNormalizer.normalize("é\nß\n東京", limit: 5), ["é", "ß"])
+    XCTAssertEqual(
+      VocabularyNormalizer.adding("ß", to: "é", limit: 5), .added(["é", "ß"]))
+  }
+
   func testVocabularyAddsAndRemovesTermsWithoutChangingStoredFormat() {
     XCTAssertEqual(
       VocabularyNormalizer.adding("  Daniel Ou  ", to: "Soniox\nAeriVoice"),

@@ -8,7 +8,8 @@ final class TextInsertionPolicyTests: XCTestCase {
     let traits = TextTargetTraits(
       roles: [kAXTextFieldRole as String],
       supportedAttributes: [kAXSelectedTextAttribute as String],
-      settableAttributes: [kAXValueAttribute as String])
+      settableAttributes: [kAXValueAttribute as String],
+      secureTextStatus: .nonSecure)
 
     XCTAssertTrue(TextTargetPolicy.isEditable(traits))
     XCTAssertEqual(
@@ -23,7 +24,8 @@ final class TextInsertionPolicyTests: XCTestCase {
         kAXSelectedTextAttribute as String,
         kAXSelectedTextRangeAttribute as String,
         kAXNumberOfCharactersAttribute as String,
-      ])
+      ],
+      secureTextStatus: .nonSecure)
 
     XCTAssertTrue(TextTargetPolicy.isEditable(traits))
     XCTAssertEqual(
@@ -34,17 +36,18 @@ final class TextInsertionPolicyTests: XCTestCase {
   func testSecureAncestorAlwaysCopies() {
     let traits = TextTargetTraits(
       roles: [kAXTextFieldRole as String],
-      subroles: [kAXSecureTextFieldSubrole as String],
-      settableAttributes: [kAXValueAttribute as String])
+      settableAttributes: [kAXValueAttribute as String],
+      secureTextStatus: .secure)
 
-    XCTAssertTrue(TextTargetPolicy.isSecure(traits))
+    XCTAssertFalse(TextTargetPolicy.permitsInsertion(traits))
     XCTAssertEqual(
       TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: true),
       .copyOnly)
   }
 
   func testUnverifiedGroupCopiesEvenWhenAppHasPasteCommand() {
-    let traits = TextTargetTraits(roles: [kAXGroupRole as String])
+    let traits = TextTargetTraits(
+      roles: [kAXGroupRole as String], secureTextStatus: .nonSecure)
 
     XCTAssertFalse(TextTargetPolicy.isEditable(traits))
     XCTAssertEqual(
@@ -55,7 +58,8 @@ final class TextInsertionPolicyTests: XCTestCase {
   func testStrongEditableTargetWithoutMenuUsesTargetedShortcut() {
     let traits = TextTargetTraits(
       roles: [kAXGroupRole as String],
-      settableAttributes: [kAXSelectedTextAttribute as String])
+      settableAttributes: [kAXSelectedTextAttribute as String],
+      secureTextStatus: .nonSecure)
 
     XCTAssertEqual(
       TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: false),
@@ -65,7 +69,8 @@ final class TextInsertionPolicyTests: XCTestCase {
   func testKnownTextAreaWithoutMenuUsesTargetedShortcut() {
     let traits = TextTargetTraits(
       roles: [kAXTextAreaRole as String],
-      supportedAttributes: [kAXSelectedTextRangeAttribute as String])
+      supportedAttributes: [kAXSelectedTextRangeAttribute as String],
+      secureTextStatus: .nonSecure)
 
     XCTAssertEqual(
       TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: false),
@@ -85,6 +90,36 @@ final class TextInsertionPolicyTests: XCTestCase {
     XCTAssertFalse(TextTargetPolicy.isEditable(roleOnly))
     XCTAssertFalse(TextTargetPolicy.isEditable(rangeOnly))
     XCTAssertFalse(TextTargetPolicy.isEditable(selectionOnly))
+  }
+
+  func testUnknownSecureStatusAlwaysCopies() {
+    let traits = TextTargetTraits(
+      roles: [kAXTextFieldRole as String],
+      settableAttributes: [kAXValueAttribute as String])
+
+    XCTAssertEqual(traits.secureTextStatus, .unknown)
+    XCTAssertFalse(TextTargetPolicy.permitsInsertion(traits))
+    XCTAssertEqual(
+      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: true),
+      .copyOnly)
+  }
+
+  func testSecureStatusMapsAccessibilityOutcomesConservatively() {
+    XCTAssertEqual(
+      SecureTextStatus.resolve(
+        subrole: kAXSecureTextFieldSubrole as String, result: .success),
+      .secure)
+    XCTAssertEqual(
+      SecureTextStatus.resolve(subrole: "AXStandardTextField", result: .success),
+      .nonSecure)
+    XCTAssertEqual(
+      SecureTextStatus.resolve(subrole: nil, result: .attributeUnsupported),
+      .nonSecure)
+    XCTAssertEqual(SecureTextStatus.resolve(subrole: nil, result: .noValue), .nonSecure)
+    XCTAssertEqual(SecureTextStatus.resolve(subrole: nil, result: .success), .unknown)
+    XCTAssertEqual(
+      SecureTextStatus.resolve(subrole: nil, result: .cannotComplete), .unknown)
+    XCTAssertEqual(SecureTextStatus.resolve(subrole: nil, result: .failure), .unknown)
   }
 
   func testStandardPasteMenuMatchesCommandV() {

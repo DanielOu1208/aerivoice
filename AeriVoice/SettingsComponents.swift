@@ -36,7 +36,7 @@ struct VocabularyTagEditor: View {
   @FocusState private var focusedTerm: String?
   @FocusState private var isInputFocused: Bool
 
-  private var terms: [String] { VocabularyNormalizer.normalize(vocabulary) }
+  private var terms: [String] { VocabularyNormalizer.parse(vocabulary) }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {

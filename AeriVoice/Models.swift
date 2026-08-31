@@ -292,17 +292,25 @@ enum VocabularyNormalizer {
     case limitExceeded
   }
 
-  static func normalize(_ raw: String, limit: Int = 10_000) -> [String] {
+  static func parse(_ raw: String) -> [String] {
     var seen = Set<String>()
-    var total = 0
     var result: [String] = []
     for line in raw.components(separatedBy: .newlines) {
       let term = line.trimmingCharacters(in: .whitespacesAndNewlines)
       let key = term.lowercased()
       guard !term.isEmpty, !seen.contains(key) else { continue }
+      seen.insert(key)
+      result.append(term)
+    }
+    return result
+  }
+
+  static func normalize(_ raw: String, limit: Int = 10_000) -> [String] {
+    var total = 0
+    var result: [String] = []
+    for term in parse(raw) {
       let added = term.utf8.count + (result.isEmpty ? 0 : 1)
       guard total + added <= limit else { break }
-      seen.insert(key)
       result.append(term)
       total += added
     }
@@ -314,7 +322,7 @@ enum VocabularyNormalizer {
     guard !term.isEmpty else { return .empty }
     guard term.rangeOfCharacter(from: .newlines) == nil else { return .multipleTerms }
 
-    let terms = normalize(raw, limit: limit)
+    let terms = parse(raw)
     guard !terms.contains(where: { $0.caseInsensitiveCompare(term) == .orderedSame }) else {
       return .duplicate
     }
@@ -324,8 +332,8 @@ enum VocabularyNormalizer {
     return .added(updated)
   }
 
-  static func removing(_ term: String, from raw: String, limit: Int = 10_000) -> [String] {
-    normalize(raw, limit: limit).filter {
+  static func removing(_ term: String, from raw: String) -> [String] {
+    parse(raw).filter {
       $0.caseInsensitiveCompare(term) != .orderedSame
     }
   }
