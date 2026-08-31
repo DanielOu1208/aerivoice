@@ -105,7 +105,7 @@ enum CleanupProvider: String, CaseIterable, Codable, Sendable {
 
   var defaultModel: CleanupModel {
     switch self {
-    case .openRouter: .gemini37Flash
+    case .openRouter: .gemini35FlashLite
     case .groq: .qwen38_27BGroq
     }
   }
@@ -134,7 +134,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
   case gpt56LunaFast = "openai/gpt-5.6-luna"
   case qwen38_27BGroq = "qwen/qwen3.8-27b"
 
-  static let defaultModel: CleanupModel = .gemini37Flash
+  static let defaultModel: CleanupModel = .gemini35FlashLite
 
   var displayName: String {
     switch self {
@@ -170,6 +170,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
 
   var defaultReasoningEffort: CleanupReasoningEffort {
     switch self {
+    case .gemini35FlashLite: .minimal
     case .qwen38_27BGroq: .none
     default: .low
     }

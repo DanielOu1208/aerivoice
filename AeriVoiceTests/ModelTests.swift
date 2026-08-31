@@ -24,8 +24,8 @@ final class ModelTests: XCTestCase {
         .gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast,
         .qwen38_27BGroq,
       ])
-    XCTAssertEqual(CleanupModel.defaultModel, .gemini37Flash)
-    XCTAssertEqual(CleanupProvider.openRouter.defaultModel, .gemini37Flash)
+    XCTAssertEqual(CleanupModel.defaultModel, .gemini35FlashLite)
+    XCTAssertEqual(CleanupProvider.openRouter.defaultModel, .gemini35FlashLite)
     XCTAssertEqual(CleanupProvider.groq.defaultModel, .qwen38_27BGroq)
     XCTAssertEqual(CleanupProvider.groq.models, [.qwen38_27BGroq])
     XCTAssertEqual(
@@ -35,6 +35,7 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(
       CleanupModel.gemini35FlashLite.supportedReasoningEfforts,
       [.minimal, .low, .medium, .high])
+    XCTAssertEqual(CleanupModel.gemini35FlashLite.defaultReasoningEffort, .minimal)
     XCTAssertEqual(
       CleanupModel.gpt56LunaFast.supportedReasoningEfforts,
       [.none, .low, .medium, .high, .xhigh, .max])
@@ -226,18 +227,42 @@ final class ModelTests: XCTestCase {
     defaults.removePersistentDomain(forName: suite)
     let preferences = AppPreferences(defaults: defaults)
 
-    XCTAssertEqual(preferences.cleanupModel, .gemini37Flash)
-    XCTAssertEqual(preferences.cleanupReasoningEffort, .low)
+    XCTAssertEqual(preferences.cleanupModel, .gemini35FlashLite)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .minimal)
     preferences.cleanupReasoningEffort = .high
-    preferences.cleanupModel = .gemini35FlashLite
-    preferences.cleanupReasoningEffort = .minimal
     preferences.cleanupModel = .gemini37Flash
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .low)
+    preferences.cleanupReasoningEffort = .medium
+    preferences.cleanupModel = .gemini35FlashLite
     XCTAssertEqual(preferences.cleanupReasoningEffort, .high)
+    preferences.cleanupModel = .gemini37Flash
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .medium)
 
     preferences.cleanupModel = .gemini35FlashLite
     let restored = AppPreferences(defaults: defaults)
     XCTAssertEqual(restored.cleanupModel, .gemini35FlashLite)
-    XCTAssertEqual(restored.cleanupReasoningEffort, .minimal)
+    XCTAssertEqual(restored.cleanupReasoningEffort, .high)
+  }
+
+  @MainActor
+  func testExistingCleanupSelectionIsPreservedWhenDefaultsChange() throws {
+    let suite = "AeriVoiceTests.ExistingCleanupSelection.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    defaults.set(CleanupProvider.openRouter.rawValue, forKey: "cleanupProvider")
+    defaults.set(CleanupModel.gemini37Flash.rawValue, forKey: "cleanupModel")
+    defaults.set(
+      try JSONEncoder().encode([
+        CleanupModel.gemini37Flash.rawValue: CleanupReasoningEffort.high.rawValue
+      ]),
+      forKey: "cleanupReasoningEfforts")
+
+    let preferences = AppPreferences(defaults: defaults)
+
+    XCTAssertEqual(preferences.cleanupProvider, .openRouter)
+    XCTAssertEqual(preferences.cleanupModel, .gemini37Flash)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .high)
   }
 
   @MainActor
@@ -253,8 +278,8 @@ final class ModelTests: XCTestCase {
 
     let preferences = AppPreferences(defaults: defaults)
 
-    XCTAssertEqual(preferences.cleanupModel, .gemini37Flash)
-    XCTAssertEqual(preferences.cleanupReasoningEffort, .low)
+    XCTAssertEqual(preferences.cleanupModel, .gemini35FlashLite)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .minimal)
     XCTAssertEqual(
       CleanupConfiguration(model: .gptOSS120BCerebras, reasoningEffort: .max).reasoningEffort,
       .low)

@@ -343,7 +343,8 @@ final class LatencyBenchmarkingTests: XCTestCase {
   }
 
   private var defaultCleanupConfiguration: CleanupConfiguration {
-    CleanupConfiguration(model: .defaultModel, reasoningEffort: .low)
+    CleanupConfiguration(
+      model: .defaultModel, reasoningEffort: CleanupModel.defaultModel.defaultReasoningEffort)
   }
 }
 

@@ -269,7 +269,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
     XCTAssertEqual(
       fixture.cleaner.lastConfiguration,
-      CleanupConfiguration(model: .gemini37Flash, reasoningEffort: .low))
+      CleanupConfiguration(model: .gemini35FlashLite, reasoningEffort: .minimal))
     XCTAssertEqual(fixture.cleaner.lastMode, .faithful)
 
     fixture.coordinator.toggle()
