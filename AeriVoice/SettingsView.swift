@@ -72,14 +72,16 @@ struct SettingsView: View {
 
   var body: some View {
     HStack(spacing: 0) {
-      VStack(spacing: 0) {
+      ZStack(alignment: .bottom) {
         List(SettingsDestination.allCases, selection: $selection) { destination in
           Label(destination.title, systemImage: destination.systemImage)
             .tag(destination)
         }
         .listStyle(.sidebar)
-        Divider()
-        readinessFooter
+        VStack(spacing: 0) {
+          Divider()
+          readinessFooter
+        }
       }
       .frame(width: 180)
       .background(.bar)
