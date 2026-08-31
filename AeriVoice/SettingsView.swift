@@ -71,20 +71,23 @@ struct SettingsView: View {
   }
 
   var body: some View {
-    NavigationSplitView {
-      List(SettingsDestination.allCases, selection: $selection) { destination in
-        Label(destination.title, systemImage: destination.systemImage)
-          .tag(destination)
-      }
-      .navigationSplitViewColumnWidth(min: 155, ideal: 180, max: 210)
-      .safeAreaInset(edge: .bottom) {
+    HStack(spacing: 0) {
+      VStack(spacing: 0) {
+        List(SettingsDestination.allCases, selection: $selection) { destination in
+          Label(destination.title, systemImage: destination.systemImage)
+            .tag(destination)
+        }
+        .listStyle(.sidebar)
+        Divider()
         readinessFooter
       }
-    } detail: {
+      .frame(width: 180)
+      .background(.bar)
+      Divider()
       detail
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(minWidth: 700, minHeight: 560)
-    .toolbar(removing: .sidebarToggle)
     .onReceive(model.$settingsDestinationRequest.compactMap { $0 }) { selection = $0 }
   }
 

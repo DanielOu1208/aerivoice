@@ -5,11 +5,6 @@ import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-  private static let hiddenSettingsToolbarItemIdentifiers: Set<NSToolbarItem.Identifier> = [
-    NSToolbarItem.Identifier("com.apple.SwiftUI.navigationSplitView.toggleSidebar"),
-    NSToolbarItem.Identifier("com.apple.SwiftUI.splitViewSeparator-0"),
-  ]
-
   let model = AppModel()
   private var statusItem: NSStatusItem?
   private var settingsWindow: NSWindow?
@@ -17,7 +12,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
-    observeToolbarItems()
     configureMenu()
     configureNotifications()
     observeLifecycle()
@@ -92,24 +86,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   @objc private func cancel() { model.coordinator.cancel() }
   @objc private func quit() { NSApp.terminate(nil) }
 
-  private func observeToolbarItems() {
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(toolbarWillAddItem(_:)),
-      name: NSToolbar.willAddItemNotification, object: nil)
-  }
-
-  @objc private func toolbarWillAddItem(_ notification: Notification) {
-    guard let toolbar = notification.object as? NSToolbar,
-      toolbar === settingsWindow?.toolbar,
-      let item = notification.userInfo?[NSToolbarUserInfoKey.itemKey] as? NSToolbarItem,
-      Self.hiddenSettingsToolbarItemIdentifiers.contains(item.itemIdentifier)
-    else { return }
-
-    DispatchQueue.main.async {
-      toolbar.removeItem(identifier: item.itemIdentifier)
-    }
-  }
-
   @objc private func openSettings() {
     if model.preferences.onboardingComplete, !model.readinessComplete {
       model.settingsDestinationRequest = SettingsDestination.recommended(for: model)
@@ -124,7 +100,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         defer: false)
       window.title = "AeriVoice Settings"
       window.contentMinSize = NSSize(width: 700, height: 560)
-      window.toolbarStyle = .unifiedCompact
       window.isReleasedWhenClosed = false
       settingsWindow = window
       window.contentView = NSHostingView(
@@ -135,16 +110,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
     NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
-    removeHiddenSettingsToolbarItems(from: window)
-  }
-
-  private func removeHiddenSettingsToolbarItems(from window: NSWindow) {
-    DispatchQueue.main.async { [weak window] in
-      guard let toolbar = window?.toolbar else { return }
-      for identifier in Self.hiddenSettingsToolbarItemIdentifiers {
-        toolbar.removeItem(identifier: identifier)
-      }
-    }
   }
 
   nonisolated func userNotificationCenter(

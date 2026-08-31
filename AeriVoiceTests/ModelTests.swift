@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 @preconcurrency import CoreAudio
 import XCTest
 
@@ -162,6 +163,33 @@ final class ModelTests: XCTestCase {
     restored.cleanupProvider = .groq
     XCTAssertEqual(restored.cleanupModel, .qwen38_27BGroq)
     XCTAssertEqual(restored.cleanupReasoningEffort, .low)
+  }
+
+  @MainActor
+  func testCleanupSelectionsPublishOneCanonicalChangeAndPersistLegacyKeys() {
+    let suite = "AeriVoiceTests.CanonicalCleanupPreferences.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    let preferences = AppPreferences(defaults: defaults)
+    var changeCount = 0
+    let observation = preferences.objectWillChange.sink { changeCount += 1 }
+
+    preferences.cleanupProvider = .groq
+    XCTAssertEqual(changeCount, 1)
+    XCTAssertEqual(preferences.cleanupModel, .qwen38_27BGroq)
+
+    changeCount = 0
+    preferences.cleanupModel = .gemini35FlashLite
+    XCTAssertEqual(changeCount, 1)
+    XCTAssertEqual(preferences.cleanupProvider, .openRouter)
+    XCTAssertEqual(defaults.string(forKey: "cleanupProvider"), CleanupProvider.openRouter.rawValue)
+    XCTAssertEqual(defaults.string(forKey: "cleanupModel"), CleanupModel.gemini35FlashLite.rawValue)
+
+    let restored = AppPreferences(defaults: defaults)
+    XCTAssertEqual(restored.cleanupProvider, .openRouter)
+    XCTAssertEqual(restored.cleanupModel, .gemini35FlashLite)
+    withExtendedLifetime(observation) {}
   }
 
   @MainActor

@@ -58,17 +58,9 @@ final class AppPreferences: ObservableObject {
   @Published var cleanupProvider: CleanupProvider {
     didSet {
       defaults.set(cleanupProvider.rawValue, forKey: Key.cleanupProvider)
-      guard cleanupModel.provider != cleanupProvider else { return }
-      cleanupModel = selectedModel(for: cleanupProvider)
-    }
-  }
-  @Published var cleanupModel: CleanupModel {
-    didSet {
-      if cleanupProvider != cleanupModel.provider {
-        cleanupProvider = cleanupModel.provider
-      }
-      savedModels[cleanupModel.provider.rawValue] = cleanupModel.rawValue
-      defaults.set(cleanupModel.rawValue, forKey: Key.cleanupModel)
+      let model = selectedModel(for: cleanupProvider)
+      savedModels[cleanupProvider.rawValue] = model.rawValue
+      defaults.set(model.rawValue, forKey: Key.cleanupModel)
       persistModels()
     }
   }
@@ -88,6 +80,19 @@ final class AppPreferences: ObservableObject {
   private let loginItemManager: LoginItemManaging
   private var savedModels: [String: String] = [:]
   private var savedReasoningEfforts: [String: String] = [:]
+
+  var cleanupModel: CleanupModel {
+    get { selectedModel(for: cleanupProvider) }
+    set {
+      guard newValue != cleanupModel else { return }
+      let providerChanged = newValue.provider != cleanupProvider
+      if !providerChanged { objectWillChange.send() }
+      savedModels[newValue.provider.rawValue] = newValue.rawValue
+      defaults.set(newValue.rawValue, forKey: Key.cleanupModel)
+      persistModels()
+      if providerChanged { cleanupProvider = newValue.provider }
+    }
+  }
 
   var cleanupReasoningEffort: CleanupReasoningEffort {
     get {
@@ -134,11 +139,12 @@ final class AppPreferences: ObservableObject {
     let initialProvider =
       CleanupProvider(rawValue: defaults.string(forKey: Key.cleanupProvider) ?? "")
       ?? legacyModel.provider
-    cleanupProvider = initialProvider
-    cleanupModel =
+    let initialModel =
       savedModels[initialProvider.rawValue].flatMap(CleanupModel.init)
       .flatMap { $0.provider == initialProvider ? $0 : nil }
       ?? initialProvider.defaultModel
+    savedModels[initialProvider.rawValue] = initialModel.rawValue
+    cleanupProvider = initialProvider
     if let data = defaults.data(forKey: Key.cleanupReasoningEfforts),
       let saved = try? JSONDecoder().decode([String: String].self, from: data)
     {
@@ -153,6 +159,9 @@ final class AppPreferences: ObservableObject {
     if let data = defaults.data(forKey: Key.shortcut) {
       shortcut = try? JSONDecoder().decode(ShortcutDefinition.self, from: data)
     }
+    defaults.set(initialProvider.rawValue, forKey: Key.cleanupProvider)
+    defaults.set(initialModel.rawValue, forKey: Key.cleanupModel)
+    persistModels()
   }
 
   @discardableResult

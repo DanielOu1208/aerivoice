@@ -180,7 +180,12 @@ struct CleanupSettingsPage: View {
 
         Section {
           DisclosureGroup(isExpanded: $showsAdvanced) {
-            Picker("Model", selection: $preferences.cleanupModel) {
+            Picker(
+              "Model",
+              selection: Binding(
+                get: { preferences.cleanupModel },
+                set: { preferences.cleanupModel = $0 })
+            ) {
               ForEach(preferences.cleanupProvider.models, id: \.self) { cleanupModel in
                 Text(cleanupModel.displayName).tag(cleanupModel)
               }
