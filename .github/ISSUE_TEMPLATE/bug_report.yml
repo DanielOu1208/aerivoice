@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible AeriVoice problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include API keys, private transcript text, clipboard contents, or unredacted provider responses.
+  - type: input
+    id: version
+    attributes:
+      label: AeriVoice version
+      placeholder: 0.1.0 (1)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS and Mac
+      placeholder: macOS 26.0, M-series model
+    validations:
+      required: true
+  - type: input
+    id: audio-route
+    attributes:
+      label: Microphone or audio route
+      description: Include sample rate changes when relevant; do not include personal audio.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, transcript text, clipboard data, and personal information.
+          required: true
