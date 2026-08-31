@@ -284,6 +284,14 @@ struct NotchGeometry: Equatable, Sendable {
 }
 
 enum VocabularyNormalizer {
+  enum Addition: Equatable {
+    case added([String])
+    case empty
+    case duplicate
+    case multipleTerms
+    case limitExceeded
+  }
+
   static func normalize(_ raw: String, limit: Int = 10_000) -> [String] {
     var seen = Set<String>()
     var total = 0
@@ -299,6 +307,27 @@ enum VocabularyNormalizer {
       total += added
     }
     return result
+  }
+
+  static func adding(_ candidate: String, to raw: String, limit: Int = 10_000) -> Addition {
+    let term = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !term.isEmpty else { return .empty }
+    guard term.rangeOfCharacter(from: .newlines) == nil else { return .multipleTerms }
+
+    let terms = normalize(raw, limit: limit)
+    guard !terms.contains(where: { $0.caseInsensitiveCompare(term) == .orderedSame }) else {
+      return .duplicate
+    }
+
+    let updated = terms + [term]
+    guard updated.joined(separator: "\n").utf8.count <= limit else { return .limitExceeded }
+    return .added(updated)
+  }
+
+  static func removing(_ term: String, from raw: String, limit: Int = 10_000) -> [String] {
+    normalize(raw, limit: limit).filter {
+      $0.caseInsensitiveCompare(term) != .orderedSame
+    }
   }
 }
 

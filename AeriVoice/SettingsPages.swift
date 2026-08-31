@@ -83,15 +83,8 @@ struct DictationSettingsPage: View {
           }
         }
 
-        Section("Custom vocabulary") {
-          TextEditor(text: $preferences.vocabulary)
-            .font(.system(.body, design: .monospaced))
-            .frame(minHeight: 150)
-          Text(
-            "Enter one name or term per line. Duplicates are removed automatically; the total is capped at 10,000 characters."
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        Section("Dictionary") {
+          VocabularyTagEditor(vocabulary: $preferences.vocabulary)
         }
 
         Section("Microphone") {

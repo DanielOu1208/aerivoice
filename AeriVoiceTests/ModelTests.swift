@@ -219,6 +219,23 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(VocabularyNormalizer.normalize("abc\ndef", limit: 5), ["abc"])
   }
 
+  func testVocabularyAddsAndRemovesTermsWithoutChangingStoredFormat() {
+    XCTAssertEqual(
+      VocabularyNormalizer.adding("  Daniel Ou  ", to: "Soniox\nAeriVoice"),
+      .added(["Soniox", "AeriVoice", "Daniel Ou"]))
+    XCTAssertEqual(
+      VocabularyNormalizer.removing("aerivoice", from: "Soniox\nAeriVoice\nDaniel Ou"),
+      ["Soniox", "Daniel Ou"])
+  }
+
+  func testVocabularyRejectsDuplicateAndOversizedTerms() {
+    XCTAssertEqual(VocabularyNormalizer.adding("soniox", to: "Soniox"), .duplicate)
+    XCTAssertEqual(VocabularyNormalizer.adding("Daniel\nOu", to: ""), .multipleTerms)
+    XCTAssertEqual(VocabularyNormalizer.adding("def", to: "abc", limit: 5), .limitExceeded)
+    XCTAssertEqual(VocabularyNormalizer.adding("é", to: "", limit: 2), .added(["é"]))
+    XCTAssertEqual(VocabularyNormalizer.adding("a", to: "é", limit: 3), .limitExceeded)
+  }
+
   func testTranscriptAssemblerReplacesProvisionalTail() {
     var assembler = TranscriptAssembler()
     XCTAssertEqual(

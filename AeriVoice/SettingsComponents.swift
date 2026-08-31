@@ -28,6 +28,179 @@ struct ExperimentalBadge: View {
   }
 }
 
+struct VocabularyTagEditor: View {
+  @Binding var vocabulary: String
+
+  @State private var draft = ""
+  @State private var validationMessage: String?
+  @FocusState private var focusedTerm: String?
+
+  private var terms: [String] { VocabularyNormalizer.normalize(vocabulary) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 8) {
+        TextField("Add a name or phrase", text: $draft)
+          .onSubmit(addTerm)
+          .onChange(of: draft) { validationMessage = nil }
+        Button("Add", action: addTerm)
+          .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
+
+      Group {
+        if terms.isEmpty {
+          ContentUnavailableView(
+            "No dictionary terms",
+            systemImage: "text.badge.plus",
+            description: Text("Add names and terms AeriVoice should recognize.")
+          )
+          .frame(maxWidth: .infinity, minHeight: 84)
+        } else {
+          ScrollView {
+            VocabularyTagFlowLayout(spacing: 7) {
+              ForEach(terms, id: \.self) { term in
+                vocabularyTag(term)
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+          }
+          .frame(minHeight: 70, maxHeight: 170)
+        }
+      }
+      .background(.background, in: RoundedRectangle(cornerRadius: 9))
+      .overlay {
+        RoundedRectangle(cornerRadius: 9)
+          .stroke(.separator.opacity(0.7), lineWidth: 1)
+      }
+
+      HStack(alignment: .firstTextBaseline) {
+        if let validationMessage {
+          Label(validationMessage, systemImage: "exclamationmark.circle.fill")
+            .foregroundStyle(.orange)
+        } else {
+          Text("Names and phrases are sent to Soniox as recognition hints.")
+            .foregroundStyle(.secondary)
+        }
+        Spacer()
+        Text("\(terms.count) \(terms.count == 1 ? "term" : "terms")")
+          .foregroundStyle(.secondary)
+      }
+      .font(.caption)
+    }
+  }
+
+  private func vocabularyTag(_ term: String) -> some View {
+    HStack(spacing: 5) {
+      Text(term)
+        .lineLimit(1)
+        .truncationMode(.middle)
+      Button {
+        removeTerm(term)
+      } label: {
+        Image(systemName: "xmark")
+          .font(.caption2.weight(.bold))
+          .frame(width: 15, height: 15)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Remove \(term)")
+    }
+    .padding(.leading, 10)
+    .padding(.trailing, 6)
+    .padding(.vertical, 5)
+    .foregroundStyle(.primary)
+    .background(.tint.opacity(focusedTerm == term ? 0.2 : 0.11), in: Capsule())
+    .overlay {
+      Capsule().stroke(.tint.opacity(focusedTerm == term ? 0.7 : 0), lineWidth: 1)
+    }
+    .frame(maxWidth: 280)
+    .focusable()
+    .focused($focusedTerm, equals: term)
+    .onTapGesture { focusedTerm = term }
+    .onKeyPress(.delete) {
+      removeTerm(term)
+      return .handled
+    }
+    .accessibilityElement(children: .contain)
+  }
+
+  private func addTerm() {
+    switch VocabularyNormalizer.adding(draft, to: vocabulary) {
+    case .added(let updated):
+      vocabulary = updated.joined(separator: "\n")
+      draft = ""
+      validationMessage = nil
+    case .empty:
+      break
+    case .duplicate:
+      validationMessage = "That term is already in the dictionary."
+    case .multipleTerms:
+      validationMessage = "Add one name or phrase at a time."
+    case .limitExceeded:
+      validationMessage = "The dictionary has reached its size limit."
+    }
+  }
+
+  private func removeTerm(_ term: String) {
+    vocabulary = VocabularyNormalizer.removing(term, from: vocabulary).joined(separator: "\n")
+    if focusedTerm == term { focusedTerm = nil }
+    validationMessage = nil
+  }
+}
+
+private struct VocabularyTagFlowLayout: Layout {
+  let spacing: CGFloat
+
+  func sizeThatFits(
+    proposal: ProposedViewSize, subviews: Subviews, cache: inout Void
+  ) -> CGSize {
+    layout(subviews: subviews, availableWidth: proposal.width).size
+  }
+
+  func placeSubviews(
+    in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void
+  ) {
+    let result = layout(subviews: subviews, availableWidth: bounds.width)
+    for (index, origin) in result.origins.enumerated() {
+      subviews[index].place(
+        at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+        proposal: .unspecified)
+    }
+  }
+
+  private func layout(subviews: Subviews, availableWidth: CGFloat?) -> LayoutResult {
+    let maximumWidth = availableWidth ?? .greatestFiniteMagnitude
+    var origins: [CGPoint] = []
+    var x: CGFloat = 0
+    var y: CGFloat = 0
+    var rowHeight: CGFloat = 0
+    var contentWidth: CGFloat = 0
+
+    for subview in subviews {
+      let size = subview.sizeThatFits(.unspecified)
+      if x > 0, x + size.width > maximumWidth {
+        x = 0
+        y += rowHeight + spacing
+        rowHeight = 0
+      }
+      origins.append(CGPoint(x: x, y: y))
+      contentWidth = max(contentWidth, x + size.width)
+      x += size.width + spacing
+      rowHeight = max(rowHeight, size.height)
+    }
+
+    let width = availableWidth ?? contentWidth
+    let height = subviews.isEmpty ? 0 : y + rowHeight
+    return LayoutResult(origins: origins, size: CGSize(width: width, height: height))
+  }
+
+  private struct LayoutResult {
+    let origins: [CGPoint]
+    let size: CGSize
+  }
+}
+
 struct CredentialEditorView: View {
   @ObservedObject var model: AppModel
   let kind: CredentialKind
