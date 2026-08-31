@@ -3,21 +3,38 @@ import XCTest
 
 @MainActor
 final class CredentialManagerTests: XCTestCase {
-  func testCancelPreventsLateSaveWhenValidatorIgnoresCancellation() async {
+  func testCancelPreventsLateSaveWhenValidatorIgnoresCancellation() async throws {
     let store = FakeCredentialStore(values: [.openRouter: "existing"])
     let validator = SuspendedCredentialValidator()
     let manager = CredentialManager(store: store, validator: validator)
 
     manager.beginValidation(
       "replacement", kind: .openRouter, configuration: .openRouterTestConfiguration)
-    await validator.waitUntilCalled()
+    try await validator.waitUntilCalled()
     manager.cancelValidation(.openRouter)
     validator.finish()
-    await validator.waitUntilReturned()
+    try await validator.waitUntilReturned()
     await Task.yield()
 
     XCTAssertEqual(store.value(for: .openRouter), "existing")
     XCTAssertEqual(manager.status(for: .openRouter), .saved)
+  }
+
+  func testInitialValidationCanBeCancelledWithoutSaving() async throws {
+    let store = FakeCredentialStore()
+    let validator = SuspendedCredentialValidator()
+    let manager = CredentialManager(store: store, validator: validator)
+
+    manager.beginValidation(
+      "new-key", kind: .openRouter, configuration: .openRouterTestConfiguration)
+    try await validator.waitUntilCalled()
+    manager.cancelValidation(.openRouter)
+    validator.finish()
+    try await validator.waitUntilReturned()
+    await Task.yield()
+
+    XCTAssertNil(store.value(for: .openRouter))
+    XCTAssertEqual(manager.status(for: .openRouter), .missing)
   }
 
   func testRemovePreventsValidationFromRecreatingCredential() async throws {
@@ -27,23 +44,23 @@ final class CredentialManagerTests: XCTestCase {
 
     manager.beginValidation(
       "replacement", kind: .openRouter, configuration: .openRouterTestConfiguration)
-    await validator.waitUntilCalled()
+    try await validator.waitUntilCalled()
     manager.remove(.openRouter)
     validator.finish()
-    await validator.waitUntilReturned()
+    try await validator.waitUntilReturned()
     await Task.yield()
 
     XCTAssertNil(store.value(for: .openRouter))
     XCTAssertEqual(manager.status(for: .openRouter), .missing)
   }
 
-  func testFailedReplacementPreservesExistingCredential() async {
+  func testFailedReplacementPreservesExistingCredential() async throws {
     let store = FakeCredentialStore(values: [.groq: "existing"])
     let validator = FailingCredentialValidator()
     let manager = CredentialManager(store: store, validator: validator)
 
     manager.beginValidation("replacement", kind: .groq, configuration: .groqTestConfiguration)
-    await validator.waitUntilCalled()
+    try await validator.waitUntilCalled()
 
     XCTAssertEqual(store.value(for: .groq), "existing")
     guard case .error(let message) = manager.status(for: .groq) else {
@@ -52,13 +69,13 @@ final class CredentialManagerTests: XCTestCase {
     XCTAssertEqual(message, FailingCredentialValidator.failure.localizedDescription)
   }
 
-  func testSuccessfulReplacementSavesNewCredential() async {
+  func testSuccessfulReplacementSavesNewCredential() async throws {
     let store = FakeCredentialStore(values: [.soniox: "existing"])
     let validator = SuccessfulCredentialValidator()
     let manager = CredentialManager(store: store, validator: validator)
 
     manager.beginValidation(" replacement ", kind: .soniox, configuration: nil)
-    await validator.waitUntilCalled()
+    try await validator.waitUntilCalled()
 
     XCTAssertEqual(store.value(for: .soniox), "replacement")
     XCTAssertEqual(manager.status(for: .soniox), .saved)
@@ -97,14 +114,17 @@ private final class SuspendedCredentialValidator: CredentialValidating, @uncheck
     hasReturned = true
   }
 
-  func waitUntilCalled() async {
-    while !wasCalled { await Task.yield() }
+  func waitUntilCalled() async throws {
+    try await waitUntil { wasCalled }
   }
 
-  func finish() { continuation?.resume() }
+  func finish() {
+    continuation?.resume()
+    continuation = nil
+  }
 
-  func waitUntilReturned() async {
-    while !hasReturned { await Task.yield() }
+  func waitUntilReturned() async throws {
+    try await waitUntil { hasReturned }
   }
 }
 
@@ -121,9 +141,8 @@ private final class FailingCredentialValidator: CredentialValidating, @unchecked
     throw Self.failure
   }
 
-  func waitUntilCalled() async {
-    while !wasCalled { await Task.yield() }
-    await Task.yield()
+  func waitUntilCalled() async throws {
+    try await waitUntil { wasCalled }
   }
 }
 
@@ -136,8 +155,21 @@ private final class SuccessfulCredentialValidator: CredentialValidating, @unchec
     wasCalled = true
   }
 
-  func waitUntilCalled() async {
-    while !wasCalled { await Task.yield() }
+  func waitUntilCalled() async throws {
+    try await waitUntil { wasCalled }
+  }
+}
+
+private enum TestWaitError: Error {
+  case timedOut
+}
+
+@MainActor
+private func waitUntil(_ condition: () -> Bool) async throws {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+  while !condition() {
+    guard ContinuousClock.now < deadline else { throw TestWaitError.timedOut }
     await Task.yield()
   }
+  await Task.yield()
 }

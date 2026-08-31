@@ -249,7 +249,7 @@ struct CredentialEditorView: View {
             .disabled(
               candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || status == .validating)
-          if hasSavedKey {
+          if hasSavedKey || status == .validating {
             Button("Cancel") {
               model.cancelCredentialValidation(kind)
               candidate = ""
