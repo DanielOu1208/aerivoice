@@ -3,23 +3,61 @@ import AppKit
 enum ModifierShortcutDecision: Equatable {
   case passThrough
   case consume
-  case trigger
+  case press
+  case release
 }
 
 struct ModifierShortcutLatch {
   private(set) var isActive = false
+  private var deliveredRelease = false
 
   mutating func flagsChanged(current: UInt64, required: UInt64) -> ModifierShortcutDecision {
     if isActive {
-      if current & required == 0 { isActive = false }
+      if !deliveredRelease, current & required != required {
+        deliveredRelease = true
+        if current & required == 0 { reset() }
+        return .release
+      }
+      if current & required == 0 { reset() }
       return .consume
     }
     guard current == required else { return .passThrough }
     isActive = true
-    return .trigger
+    return .press
   }
 
-  mutating func reset() { isActive = false }
+  mutating func reset() {
+    isActive = false
+    deliveredRelease = false
+  }
+}
+
+struct ShortcutPressTracker {
+  static let holdThreshold: CGEventTimestamp = 350_000_000
+
+  private(set) var isPressed = false
+  private var pressedAt: CGEventTimestamp = 0
+  private var finishesOnRelease = false
+
+  mutating func press(at timestamp: CGEventTimestamp, finishesOnRelease: Bool) {
+    guard !isPressed else { return }
+    isPressed = true
+    pressedAt = timestamp
+    self.finishesOnRelease = finishesOnRelease
+  }
+
+  mutating func release(at timestamp: CGEventTimestamp) -> Bool {
+    guard isPressed else { return false }
+    defer { reset() }
+    guard finishesOnRelease, timestamp >= pressedAt else { return false }
+    return timestamp - pressedAt >= Self.holdThreshold
+  }
+
+  mutating func reset() {
+    isPressed = false
+    pressedAt = 0
+    finishesOnRelease = false
+  }
 }
 
 enum TargetedPasteEvent {
@@ -47,19 +85,23 @@ enum TargetedPasteEvent {
 
 @MainActor
 final class GlobalShortcutMonitor {
-  var onToggle: (() -> Void)?
+  var onPress: (() -> UUID?)?
+  var onHoldRelease: ((UUID) -> Void)?
   var onCancel: (() -> Void)?
   var shouldCancel: (() -> Bool)?
 
   private var tap: CFMachPort?
   private var source: CFRunLoopSource?
   private var definition: ShortcutDefinition?
+  private var activationMode = ShortcutActivationMode.hybrid
   private var modifierLatch = ModifierShortcutLatch()
-  private var shortcutPressed = false
+  private var pressTracker = ShortcutPressTracker()
+  private var heldLifecycleGeneration: UUID?
 
-  func start(definition: ShortcutDefinition) {
+  func start(definition: ShortcutDefinition, activationMode: ShortcutActivationMode) {
     stop()
     self.definition = definition
+    self.activationMode = activationMode
     let mask =
       (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
       | (1 << CGEventType.flagsChanged.rawValue)
@@ -95,8 +137,23 @@ final class GlobalShortcutMonitor {
   }
 
   private func resetPressedState() {
-    shortcutPressed = false
+    pressTracker.reset()
     modifierLatch.reset()
+    heldLifecycleGeneration = nil
+  }
+
+  private func press(at timestamp: CGEventTimestamp) {
+    let lifecycleGeneration = onPress?()
+    heldLifecycleGeneration = activationMode == .hybrid ? lifecycleGeneration : nil
+    pressTracker.press(
+      at: timestamp, finishesOnRelease: heldLifecycleGeneration != nil)
+  }
+
+  private func release(at timestamp: CGEventTimestamp) {
+    let shouldFinish = pressTracker.release(at: timestamp)
+    let lifecycleGeneration = heldLifecycleGeneration
+    heldLifecycleGeneration = nil
+    if shouldFinish, let lifecycleGeneration { onHoldRelease?(lifecycleGeneration) }
   }
 
   private func handle(type: CGEventType, event: CGEvent) -> Bool {
@@ -109,8 +166,11 @@ final class GlobalShortcutMonitor {
       switch modifierLatch.flagsChanged(
         current: flags.rawValue, required: UInt64(definition.modifiers))
       {
-      case .trigger:
-        onToggle?()
+      case .press:
+        press(at: event.timestamp)
+        return true
+      case .release:
+        release(at: event.timestamp)
         return true
       case .consume:
         return true
@@ -127,15 +187,14 @@ final class GlobalShortcutMonitor {
     if type == .keyDown, keyCode == definition.keyCode,
       flags.rawValue == UInt64(definition.modifiers)
     {
-      if event.getIntegerValueField(.keyboardEventAutorepeat) == 0, !shortcutPressed {
-        shortcutPressed = true
-        onToggle?()
+      if event.getIntegerValueField(.keyboardEventAutorepeat) == 0, !pressTracker.isPressed {
+        press(at: event.timestamp)
       }
       return true
     }
     if type == .keyUp, keyCode == definition.keyCode {
-      let consumed = shortcutPressed
-      shortcutPressed = false
+      let consumed = pressTracker.isPressed
+      release(at: event.timestamp)
       return consumed
     }
     return false

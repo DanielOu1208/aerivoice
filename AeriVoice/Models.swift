@@ -216,6 +216,29 @@ struct CleanupConfiguration: Equatable, Sendable {
   }
 }
 
+enum ShortcutActivationMode: String, CaseIterable, Identifiable, Sendable {
+  case toggle
+  case hybrid
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .toggle: "Toggle"
+    case .hybrid: "Hybrid"
+    }
+  }
+
+  var instructions: String {
+    switch self {
+    case .toggle:
+      "Press the shortcut once to start dictation and again to finish."
+    case .hybrid:
+      "Tap once to start and again to finish, or hold the shortcut and release to finish."
+    }
+  }
+}
+
 struct ShortcutDefinition: Codable, Equatable, Sendable {
   let keyCode: UInt16
   let modifiers: UInt

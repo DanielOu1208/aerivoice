@@ -93,6 +93,32 @@ final class ModelTests: XCTestCase {
   }
 
   @MainActor
+  func testShortcutActivationModeDefaultsToHybridAndPersistsToggle() {
+    let suite = "AeriVoiceTests.ShortcutActivationMode.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+
+    let preferences = AppPreferences(defaults: defaults)
+    XCTAssertEqual(preferences.shortcutActivationMode, .hybrid)
+
+    preferences.shortcutActivationMode = .toggle
+    XCTAssertEqual(defaults.string(forKey: "shortcutActivationMode"), "toggle")
+    XCTAssertEqual(AppPreferences(defaults: defaults).shortcutActivationMode, .toggle)
+  }
+
+  @MainActor
+  func testUnknownShortcutActivationModeFallsBackToHybrid() {
+    let suite = "AeriVoiceTests.UnknownShortcutActivationMode.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    defaults.set("removed-mode", forKey: "shortcutActivationMode")
+
+    XCTAssertEqual(AppPreferences(defaults: defaults).shortcutActivationMode, .hybrid)
+  }
+
+  @MainActor
   func testLaunchAtLoginPersistsAcceptedServiceState() {
     let suite = "AeriVoiceTests.LaunchAtLogin.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -344,15 +370,15 @@ final class ModelTests: XCTestCase {
         ShortcutDefinition.self, from: JSONEncoder().encode(modifierOnly)), modifierOnly)
   }
 
-  func testModifierOnlyShortcutTriggersOnPressAndNotRelease() {
+  func testModifierOnlyShortcutReportsPressAndFirstRelease() {
     var latch = ModifierShortcutLatch()
     let option = UInt64(NSEvent.ModifierFlags.option.rawValue)
     let command = UInt64(NSEvent.ModifierFlags.command.rawValue)
     let required = option | command
 
     XCTAssertEqual(latch.flagsChanged(current: option, required: required), .passThrough)
-    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .trigger)
-    XCTAssertEqual(latch.flagsChanged(current: option, required: required), .consume)
+    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .press)
+    XCTAssertEqual(latch.flagsChanged(current: option, required: required), .release)
     XCTAssertEqual(latch.flagsChanged(current: 0, required: required), .consume)
     XCTAssertFalse(latch.isActive)
   }
@@ -362,9 +388,50 @@ final class ModelTests: XCTestCase {
     let required = UInt64(
       NSEvent.ModifierFlags.option.union(.command).rawValue)
 
-    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .trigger)
+    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .press)
+    XCTAssertEqual(latch.flagsChanged(current: 0, required: required), .release)
+    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .press)
+  }
+
+  func testModifierOnlyShortcutDoesNotRetriggerBeforeFullRelease() {
+    var latch = ModifierShortcutLatch()
+    let option = UInt64(NSEvent.ModifierFlags.option.rawValue)
+    let required = UInt64(NSEvent.ModifierFlags.option.union(.command).rawValue)
+
+    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .press)
+    XCTAssertEqual(latch.flagsChanged(current: option, required: required), .release)
+    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .consume)
     XCTAssertEqual(latch.flagsChanged(current: 0, required: required), .consume)
-    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .trigger)
+    XCTAssertEqual(latch.flagsChanged(current: required, required: required), .press)
+  }
+
+  func testShortcutPressTrackerUsesInclusiveHybridHoldThreshold() {
+    let start: CGEventTimestamp = 1_000_000_000
+    var tracker = ShortcutPressTracker()
+
+    tracker.press(at: start, finishesOnRelease: true)
+    XCTAssertFalse(
+      tracker.release(at: start + ShortcutPressTracker.holdThreshold - 1))
+
+    tracker.press(at: start, finishesOnRelease: true)
+    XCTAssertTrue(tracker.release(at: start + ShortcutPressTracker.holdThreshold))
+  }
+
+  func testShortcutPressTrackerIgnoresReleaseWhenNotArmed() {
+    var tracker = ShortcutPressTracker()
+    tracker.press(at: 0, finishesOnRelease: false)
+
+    XCTAssertFalse(tracker.release(at: ShortcutPressTracker.holdThreshold * 2))
+    XCTAssertFalse(tracker.isPressed)
+    XCTAssertFalse(tracker.release(at: ShortcutPressTracker.holdThreshold * 3))
+  }
+
+  func testShortcutPressTrackerResetDisarmsPendingRelease() {
+    var tracker = ShortcutPressTracker()
+    tracker.press(at: 0, finishesOnRelease: true)
+    tracker.reset()
+
+    XCTAssertFalse(tracker.release(at: ShortcutPressTracker.holdThreshold))
   }
 
   func testBuiltInNotchGeometry() {

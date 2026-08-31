@@ -120,6 +120,82 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertFalse(fixture.transcriber.didConnect)
   }
 
+  func testHeldShortcutReleaseStopsSessionStartedByPress() async throws {
+    let fixture = makeFixture()
+
+    let lifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
+    try await waitUntil { fixture.coordinator.phase == .success }
+
+    XCTAssertEqual(fixture.benchmark.terminalResult, .inserted)
+    XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
+  }
+
+  func testPressWhileRecordingStopsAndReleaseCannotRestart() async throws {
+    let fixture = makeFixture()
+
+    let lifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    XCTAssertNil(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.coordinator.phase == .success }
+
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
+    await Task.yield()
+
+    XCTAssertEqual(fixture.coordinator.phase, .success)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .inserted)
+  }
+
+  func testOldHeldReleaseCannotStopNewerMenuStartedSession() async throws {
+    let fixture = makeFixture()
+    let oldLifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: oldLifecycleGeneration)
+    await Task.yield()
+
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    fixture.coordinator.cancel()
+  }
+
+  func testHeldReleaseDuringCueDelayCancelsBeforeCaptureStarts() async throws {
+    let fixture = makeFixture(soundCues: true, cueDelay: .milliseconds(80))
+    let lifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.cuePlayer.playedCues == [.start] }
+
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
+    try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
+    try await Task.sleep(for: .milliseconds(120))
+
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertFalse(fixture.muter.didMute)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+  }
+
+  func testHeldReleaseAfterStartupFailureCannotRestart() async throws {
+    let fixture = makeFixture(hasSonioxKey: false)
+    let lifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil {
+      if case .error = fixture.coordinator.phase { return true }
+      return false
+    }
+
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
+    await Task.yield()
+
+    guard case .error = fixture.coordinator.phase else {
+      XCTFail("Held release changed a failed startup phase")
+      return
+    }
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
+  }
+
   func testCancellationWhileMicrophoneReadinessIsSuspendedNeverStartsCapture() async throws {
     let readiness = SuspendedReadiness()
     let fixture = makeFixture(readiness: readiness)
@@ -127,6 +203,22 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     try await waitUntil { readiness.didRequestMicrophone }
 
     fixture.coordinator.cancel()
+    readiness.resolveMicrophoneRequest(true)
+    try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
+    try await Task.sleep(for: .milliseconds(20))
+
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertFalse(fixture.muter.didMute)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+  }
+
+  func testHeldReleaseWhileMicrophoneReadinessIsSuspendedNeverStartsCapture() async throws {
+    let readiness = SuspendedReadiness()
+    let fixture = makeFixture(readiness: readiness)
+    let lifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { readiness.didRequestMicrophone }
+
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
     readiness.resolveMicrophoneRequest(true)
     try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
     try await Task.sleep(for: .milliseconds(20))

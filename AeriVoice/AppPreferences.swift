@@ -47,6 +47,7 @@ final class AppPreferences: ObservableObject {
     static let muteOutput = "muteOutput"
     static let soundCues = "soundCues"
     static let shortcut = "shortcut"
+    static let shortcutActivationMode = "shortcutActivationMode"
     static let onboardingComplete = "onboardingComplete"
     static let launchAtLogin = "launchAtLogin"
     static let latencyLogging = "latencyLogging"
@@ -68,6 +69,9 @@ final class AppPreferences: ObservableObject {
   @Published var muteOutput: Bool { didSet { defaults.set(muteOutput, forKey: Key.muteOutput) } }
   @Published var soundCues: Bool { didSet { defaults.set(soundCues, forKey: Key.soundCues) } }
   @Published var shortcut: ShortcutDefinition? { didSet { persistShortcut() } }
+  @Published var shortcutActivationMode: ShortcutActivationMode {
+    didSet { defaults.set(shortcutActivationMode.rawValue, forKey: Key.shortcutActivationMode) }
+  }
   @Published var onboardingComplete: Bool {
     didSet { defaults.set(onboardingComplete, forKey: Key.onboardingComplete) }
   }
@@ -153,6 +157,9 @@ final class AppPreferences: ObservableObject {
     vocabulary = defaults.string(forKey: Key.vocabulary) ?? ""
     muteOutput = defaults.object(forKey: Key.muteOutput) as? Bool ?? true
     soundCues = defaults.object(forKey: Key.soundCues) as? Bool ?? true
+    shortcutActivationMode =
+      ShortcutActivationMode(rawValue: defaults.string(forKey: Key.shortcutActivationMode) ?? "")
+      ?? .hybrid
     onboardingComplete = defaults.bool(forKey: Key.onboardingComplete)
     launchAtLogin = defaults.object(forKey: Key.launchAtLogin) as? Bool ?? true
     latencyLogging = defaults.object(forKey: Key.latencyLogging) as? Bool ?? true

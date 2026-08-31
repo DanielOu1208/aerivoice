@@ -21,7 +21,13 @@ struct GeneralSettingsPage: View {
         Section("Activation shortcut") {
           ShortcutRecorder(current: preferences.shortcut, onCapture: model.acceptShortcut)
             .frame(maxWidth: .infinity)
-          Text("Press the shortcut once to start dictation and again to finish.")
+          Picker("Shortcut behavior", selection: $preferences.shortcutActivationMode) {
+            ForEach(ShortcutActivationMode.allCases) { mode in
+              Text(mode.title).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          Text(preferences.shortcutActivationMode.instructions)
             .font(.caption)
             .foregroundStyle(.secondary)
         }

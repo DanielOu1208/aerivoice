@@ -185,11 +185,15 @@ struct OnboardingView: View {
       Section("Activation shortcut") {
         ShortcutRecorder(current: preferences.shortcut, onCapture: model.acceptShortcut)
           .frame(maxWidth: .infinity)
-        Text(
-          "Use a memorable combination that does not conflict with shortcuts in your everyday apps."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        Picker("Shortcut behavior", selection: $preferences.shortcutActivationMode) {
+          ForEach(ShortcutActivationMode.allCases) { mode in
+            Text(mode.title).tag(mode)
+          }
+        }
+        .pickerStyle(.segmented)
+        Text(preferences.shortcutActivationMode.instructions)
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
       Section("Startup") {
         Toggle("Launch AeriVoice at login", isOn: $launchAtLogin)
@@ -227,7 +231,9 @@ struct OnboardingView: View {
     case .permissions:
       "You stay in control of when AeriVoice can listen and insert text."
     case .shortcut:
-      "One shortcut starts and stops dictation from any app."
+      preferences.shortcutActivationMode == .hybrid
+        ? "Tap or hold one shortcut to dictate from any app."
+        : "One shortcut starts and stops dictation from any app."
     }
   }
 

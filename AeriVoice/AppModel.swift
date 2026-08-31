@@ -65,23 +65,30 @@ final class AppModel: ObservableObject {
     credentialManager.objectWillChange.sink { [weak self] in
       self?.objectWillChange.send()
     }.store(in: &cancellables)
-    shortcutMonitor.onToggle = { [weak coordinator] in coordinator?.toggle() }
+    shortcutMonitor.onPress = { [weak coordinator] in coordinator?.shortcutPressed() }
+    shortcutMonitor.onHoldRelease = { [weak coordinator] lifecycleGeneration in
+      coordinator?.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
+    }
     shortcutMonitor.onCancel = { [weak coordinator] in coordinator?.cancel() }
     shortcutMonitor.shouldCancel = { [weak coordinator] in coordinator?.canCancel == true }
-    preferences.$shortcut.sink { [weak self] definition in
-      guard let self else { return }
-      if let definition {
-        self.shortcutMonitor.start(definition: definition)
-      } else {
-        self.shortcutMonitor.stop()
+    preferences.$shortcut.combineLatest(preferences.$shortcutActivationMode)
+      .sink { [weak self] definition, activationMode in
+        guard let self else { return }
+        if let definition {
+          self.shortcutMonitor.start(
+            definition: definition, activationMode: activationMode)
+        } else {
+          self.shortcutMonitor.stop()
+        }
       }
-    }.store(in: &cancellables)
+      .store(in: &cancellables)
     NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
       .sink { [weak self] _ in
         guard let self else { return }
         self.permissionRefresh += 1
         guard AXIsProcessTrusted(), let shortcut = self.preferences.shortcut else { return }
-        self.shortcutMonitor.start(definition: shortcut)
+        self.shortcutMonitor.start(
+          definition: shortcut, activationMode: self.preferences.shortcutActivationMode)
       }
       .store(in: &cancellables)
   }
@@ -157,7 +164,10 @@ final class AppModel: ObservableObject {
       _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
     permissionRefresh += 1
-    if let shortcut = preferences.shortcut { shortcutMonitor.start(definition: shortcut) }
+    if let shortcut = preferences.shortcut {
+      shortcutMonitor.start(
+        definition: shortcut, activationMode: preferences.shortcutActivationMode)
+    }
   }
 
   func requestMicrophonePermissionIfNeeded() async {

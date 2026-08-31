@@ -128,6 +128,34 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
+  func shortcutPressed() -> UUID? {
+    let wasStartable: Bool
+    switch phase {
+    case .idle, .success, .error:
+      wasStartable = startTask == nil
+    case .starting, .recording, .processing, .cleaning, .inserting:
+      wasStartable = false
+    }
+    toggle()
+    return wasStartable && phase == .starting ? lifecycleGeneration : nil
+  }
+
+  func finishHeldDictation(lifecycleGeneration: UUID) {
+    guard self.lifecycleGeneration == lifecycleGeneration else { return }
+    switch phase {
+    case .starting:
+      if sessionID == nil {
+        cancel()
+      } else {
+        beginStopTask()
+      }
+    case .recording:
+      beginStopTask()
+    case .idle, .processing, .cleaning, .inserting, .success, .error:
+      break
+    }
+  }
+
   func cancel() {
     guard phase != .idle else {
       muter.restore()
