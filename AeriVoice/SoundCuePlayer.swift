@@ -14,16 +14,14 @@ protocol SoundCuePlaying: AnyObject {
 
 @MainActor
 final class SoundCuePlayer: SoundCuePlaying {
-  let startCaptureDelay: Duration = .milliseconds(140)
+  let startCaptureDelay: Duration = .milliseconds(300)
 
   private let sounds: [DictationCue: NSSound]
 
-  init(bundle: Bundle = .main) {
+  init() {
     sounds = Dictionary(
       uniqueKeysWithValues: DictationCue.allCases.compactMap { cue in
-        guard let url = Self.resourceURL(for: cue, in: bundle),
-          let sound = NSSound(contentsOf: url, byReference: false)
-        else { return nil }
+        guard let sound = NSSound(named: Self.nativeSoundName(for: cue)) else { return nil }
         return (cue, sound)
       })
   }
@@ -34,8 +32,11 @@ final class SoundCuePlayer: SoundCuePlaying {
     sound.play()
   }
 
-  static func resourceURL(for cue: DictationCue, in bundle: Bundle) -> URL? {
-    bundle.url(forResource: cue.rawValue, withExtension: "wav", subdirectory: "Sounds")
-      ?? bundle.url(forResource: cue.rawValue, withExtension: "wav")
+  static func nativeSoundName(for cue: DictationCue) -> NSSound.Name {
+    switch cue {
+    case .start: NSSound.Name("Blow")
+    case .stop: NSSound.Name("Bottle")
+    case .error: NSSound.Name("Submarine")
+    }
   }
 }
