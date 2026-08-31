@@ -8,6 +8,16 @@ struct GroqCleanupClient: CleaningText {
   func clean(
     _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult {
+    let maxCompletionTokens = try GroqTokenBudget.maxCompletionTokens(for: text)
+    return try await clean(
+      text, mode: mode, configuration: configuration, apiKey: apiKey,
+      maxCompletionTokens: maxCompletionTokens)
+  }
+
+  private func clean(
+    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String,
+    maxCompletionTokens: Int
+  ) async throws -> CleanupTextResult {
     guard configuration.provider == .groq else {
       throw AppError.provider("The selected cleanup model is not available through Groq.")
     }
@@ -33,7 +43,7 @@ struct GroqCleanupClient: CleaningText {
             schema: .init(
               type: "object", properties: ["text": .init(type: "string")], required: ["text"],
               additionalProperties: false))),
-        maxCompletionTokens: 8192
+        maxCompletionTokens: maxCompletionTokens
       ))
 
     let preparedRequest = request
@@ -55,7 +65,8 @@ struct GroqCleanupClient: CleaningText {
       let envelope = try? JSONDecoder().decode(GroqErrorEnvelope.self, from: data)
       throw ProviderHTTPError(
         statusCode: http.statusCode,
-        message: envelope?.error.message ?? "Groq request failed.",
+        message: Self.errorMessage(
+          statusCode: http.statusCode, providerMessage: envelope?.error.message),
         cleanupMetrics: metrics(
           configuration: configuration, response: nil, httpStatus: http.statusCode))
     }
@@ -104,7 +115,19 @@ struct GroqCleanupClient: CleaningText {
     }
     _ = try await clean(
       "Test.", mode: .faithful,
-      configuration: CleanupConfiguration(model: model, reasoningEffort: .none), apiKey: apiKey)
+      configuration: CleanupConfiguration(model: model, reasoningEffort: .none), apiKey: apiKey,
+      maxCompletionTokens: GroqTokenBudget.verificationTokens)
+  }
+
+  private static func errorMessage(statusCode: Int, providerMessage: String?) -> String {
+    switch statusCode {
+    case 413:
+      "This request is larger than your Groq plan allows. Try a shorter dictation or raise your Groq limits."
+    case 429:
+      "Groq is temporarily rate limited. Wait a moment and try again."
+    default:
+      providerMessage ?? "Groq request failed."
+    }
   }
 
   private func metrics(
@@ -118,6 +141,42 @@ struct GroqCleanupClient: CleaningText {
       promptTokens: response?.usage?.promptTokens,
       completionTokens: response?.usage?.completionTokens,
       totalTokens: response?.usage?.totalTokens, httpStatus: httpStatus)
+  }
+}
+
+enum GroqTokenBudget {
+  static let verificationTokens = 256
+  static let minimumCompletionTokens = 256
+  static let maximumCompletionTokens = 4_096
+  static let totalTokenLimit = 8_000
+  static let requestOverheadTokens = 512
+
+  static func maxCompletionTokens(for text: String) throws -> Int {
+    let estimatedTokens = estimatedTokens(for: text)
+    let safetyMargin = max(128, (estimatedTokens + 3) / 4)
+    let completionTokens = min(
+      maximumCompletionTokens,
+      max(minimumCompletionTokens, estimatedTokens + safetyMargin))
+    guard estimatedTokens + requestOverheadTokens + completionTokens <= totalTokenLimit else {
+      throw AppError.provider(
+        "This dictation is too long for Groq’s current experimental limit. Use OpenRouter or try a shorter dictation."
+      )
+    }
+    return completionTokens
+  }
+
+  static func estimatedTokens(for text: String) -> Int {
+    var asciiBytes = 0
+    var nonASCIIBytes = 0
+    for byte in text.utf8 {
+      if byte < 0x80 {
+        asciiBytes += 1
+      } else {
+        nonASCIIBytes += 1
+      }
+    }
+
+    return max(1, (asciiBytes + 3) / 4 + (nonASCIIBytes + 1) / 2)
   }
 }
 

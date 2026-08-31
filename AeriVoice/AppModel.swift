@@ -1,13 +1,41 @@
 import AVFoundation
 import AppKit
 import Combine
-import ServiceManagement
 
 enum CredentialStatus: Equatable {
   case missing
   case saved
   case validating
   case error(String)
+}
+
+enum OnboardingFinishResult: Equatable {
+  case completed
+  case incomplete
+  case loginItemFailed
+}
+
+enum MicrophonePermissionAction: Equatable {
+  case request
+  case openSettings
+  case none
+
+  init(status: AVAuthorizationStatus) {
+    switch status {
+    case .notDetermined: self = .request
+    case .authorized: self = .none
+    case .denied, .restricted: self = .openSettings
+    @unknown default: self = .openSettings
+    }
+  }
+
+  var title: String {
+    switch self {
+    case .request: "Allow Microphone"
+    case .openSettings: "Open Settings"
+    case .none: "Allowed"
+    }
+  }
 }
 
 @MainActor
@@ -22,6 +50,7 @@ final class AppModel: ObservableObject {
   @Published var groqStatus: CredentialStatus
   @Published var shortcutConfirmation: ShortcutDefinition?
   @Published var permissionRefresh = 0
+  @Published var settingsDestinationRequest: SettingsDestination?
 
   private let shortcutMonitor = GlobalShortcutMonitor()
   private var cancellables = Set<AnyCancellable>()
@@ -51,19 +80,20 @@ final class AppModel: ObservableObject {
     }.store(in: &cancellables)
     NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
       .sink { [weak self] _ in
-        guard let self, AXIsProcessTrusted(), let shortcut = self.preferences.shortcut else {
-          return
-        }
+        guard let self else { return }
         self.permissionRefresh += 1
+        guard AXIsProcessTrusted(), let shortcut = self.preferences.shortcut else { return }
         self.shortcutMonitor.start(definition: shortcut)
       }
       .store(in: &cancellables)
   }
 
-  var setupComplete: Bool {
-    preferences.onboardingComplete && preferences.shortcut != nil && hasCredential(.soniox)
+  var readinessComplete: Bool {
+    preferences.shortcut != nil && hasCredential(.soniox)
       && hasCredential(preferences.cleanupProvider.credentialKind) && permissionsReady
   }
+
+  var setupComplete: Bool { preferences.onboardingComplete && readinessComplete }
 
   func hasCredential(_ kind: CredentialKind) -> Bool {
     credentials.value(for: kind).map { !$0.isEmpty } == true
@@ -134,22 +164,26 @@ final class AppModel: ObservableObject {
     }
   }
 
-  func finishSetup() {
-    guard preferences.shortcut != nil, hasCredential(.soniox),
-      hasCredential(preferences.cleanupProvider.credentialKind),
+  func finishOnboarding(launchAtLogin: Bool) -> OnboardingFinishResult {
+    guard preferences.shortcut != nil, hasCredential(.soniox), hasCredential(.openRouter),
       permissionsReady
-    else { return }
+    else { return .incomplete }
+    guard preferences.setLaunchAtLogin(launchAtLogin) else { return .loginItemFailed }
+    preferences.cleanupProvider = .openRouter
     preferences.onboardingComplete = true
-    if preferences.launchAtLogin, SMAppService.mainApp.status == .notRegistered {
-      preferences.setLaunchAtLogin(true)
-    }
+    return .completed
   }
 
   func requestOrRefreshPermissions() async {
     await requestMicrophonePermissionIfNeeded()
+    requestAccessibilityPermission()
+  }
+
+  func requestAccessibilityPermission() {
     if !AXIsProcessTrusted() {
       _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
+    permissionRefresh += 1
     if let shortcut = preferences.shortcut { shortcutMonitor.start(definition: shortcut) }
   }
 
@@ -158,6 +192,14 @@ final class AppModel: ObservableObject {
       _ = await AVCaptureDevice.requestAccess(for: .audio)
     }
     permissionRefresh += 1
+  }
+
+  func openMicrophonePrivacySettings() {
+    guard
+      let url = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+    else { return }
+    NSWorkspace.shared.open(url)
   }
 
   func revealBenchmarkFolder() {

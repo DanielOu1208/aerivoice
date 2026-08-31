@@ -1,257 +1,120 @@
-import AVFoundation
-import AppKit
 import SwiftUI
 
-struct SettingsView: View {
+enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
+  case general
+  case dictation
+  case cleanup
+  case providers
+  case privacy
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .general: "General"
+    case .dictation: "Dictation"
+    case .cleanup: "AI Cleanup"
+    case .providers: "Providers"
+    case .privacy: "Privacy & Data"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .general: "gearshape"
+    case .dictation: "waveform"
+    case .cleanup: "wand.and.stars"
+    case .providers: "key"
+    case .privacy: "hand.raised"
+    }
+  }
+
+  @MainActor static func recommended(for model: AppModel) -> Self {
+    if model.preferences.shortcut == nil { return .general }
+    if !model.hasCredential(.soniox)
+      || !model.hasCredential(model.preferences.cleanupProvider.credentialKind)
+    {
+      return .providers
+    }
+    if !model.permissionsReady { return .privacy }
+    return .general
+  }
+}
+
+struct SettingsRootView: View {
   @ObservedObject var model: AppModel
   @ObservedObject private var preferences: AppPreferences
-  @State private var sonioxKey = ""
-  @State private var openRouterKey = ""
-  @State private var groqKey = ""
-  @State private var removeKind: CredentialKind?
-  @State private var confirmsBenchmarkClear = false
+  let onOnboardingFinished: () -> Void
 
-  init(model: AppModel) {
+  init(model: AppModel, onOnboardingFinished: @escaping () -> Void) {
     self.model = model
     self.preferences = model.preferences
+    self.onOnboardingFinished = onOnboardingFinished
   }
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
-        header
-        if !model.setupComplete { setupBanner }
-        credentialSection
-        shortcutSection
-        behaviorSection
-        latencySection
-        vocabularySection
-        permissionSection
-        if !model.setupComplete {
-          Button("Finish setup") { model.finishSetup() }
-            .buttonStyle(.borderedProminent)
-            .disabled(
-              model.preferences.shortcut == nil || !model.hasCredential(.soniox)
-                || !model.hasCredential(preferences.cleanupProvider.credentialKind)
-                || !model.permissionsReady)
-        }
-      }
-      .padding(24)
+    if preferences.onboardingComplete {
+      SettingsView(model: model)
+    } else {
+      OnboardingView(model: model, onFinished: onOnboardingFinished)
     }
-    .frame(width: 540, height: 650)
-    .alert(
-      "Use this shortcut systemwide?",
-      isPresented: Binding(
-        get: { model.shortcutConfirmation != nil },
-        set: { if !$0 { model.shortcutConfirmation = nil } })
-    ) {
-      Button("Cancel", role: .cancel) { model.shortcutConfirmation = nil }
-      Button("Use Shortcut") { model.confirmRiskyShortcut() }
-    } message: {
-      Text(
-        "A shortcut without modifier keys will be consumed everywhere while AeriVoice is running.")
-    }
-    .alert(
-      "Remove credential?",
-      isPresented: Binding(get: { removeKind != nil }, set: { if !$0 { removeKind = nil } })
-    ) {
-      Button("Cancel", role: .cancel) { removeKind = nil }
-      Button("Remove", role: .destructive) {
-        if let kind = removeKind { model.remove(kind) }
-        removeKind = nil
+  }
+}
+
+struct SettingsView: View {
+  @ObservedObject var model: AppModel
+  @State private var selection: SettingsDestination
+
+  init(model: AppModel) {
+    self.model = model
+    _selection = State(initialValue: SettingsDestination.recommended(for: model))
+  }
+
+  var body: some View {
+    NavigationSplitView {
+      List(SettingsDestination.allCases, selection: $selection) { destination in
+        Label(destination.title, systemImage: destination.systemImage)
+          .tag(destination)
       }
-    }
-    .alert("Clear completed latency history?", isPresented: $confirmsBenchmarkClear) {
-      Button("Cancel", role: .cancel) {}
-      Button("Clear History", role: .destructive) {
-        model.clearCompletedBenchmarkHistory()
+      .navigationSplitViewColumnWidth(min: 155, ideal: 180, max: 210)
+      .safeAreaInset(edge: .bottom) {
+        readinessFooter
       }
-    } message: {
-      Text("This removes completed benchmark records. A dictation currently in progress is kept.")
+    } detail: {
+      detail
+    }
+    .frame(minWidth: 700, minHeight: 560)
+    .onReceive(model.$settingsDestinationRequest.compactMap { $0 }) { selection = $0 }
+  }
+
+  @ViewBuilder private var detail: some View {
+    switch selection {
+    case .general:
+      GeneralSettingsPage(model: model)
+    case .dictation:
+      DictationSettingsPage(model: model, selection: $selection)
+    case .cleanup:
+      CleanupSettingsPage(model: model, selection: $selection)
+    case .providers:
+      ProviderSettingsPage(model: model)
+    case .privacy:
+      PrivacySettingsPage(model: model)
     }
   }
 
-  private var header: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      Text("AeriVoice").font(.system(size: 26, weight: .bold))
-      Text(
-        "Fast, private-by-default dictation with live Soniox transcription and configurable AI cleanup."
+  private var readinessFooter: some View {
+    HStack(spacing: 7) {
+      Image(
+        systemName: model.readinessComplete
+          ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
       )
-      .foregroundStyle(.secondary)
-    }
-  }
-
-  private var setupBanner: some View {
-    Label("Complete each item below before your first dictation.", systemImage: "checklist")
-      .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-      .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-  }
-
-  private var credentialSection: some View {
-    GroupBox("API credentials") {
-      VStack(spacing: 14) {
-        credentialRow(kind: .soniox, value: $sonioxKey, status: model.sonioxStatus)
-        Divider()
-        credentialRow(kind: .openRouter, value: $openRouterKey, status: model.openRouterStatus)
-        Divider()
-        credentialRow(kind: .groq, value: $groqKey, status: model.groqStatus)
-      }.padding(8)
-    }
-  }
-
-  private func credentialRow(kind: CredentialKind, value: Binding<String>, status: CredentialStatus)
-    -> some View
-  {
-    let hasSavedKey = model.hasCredential(kind)
-    return VStack(alignment: .leading, spacing: 7) {
-      HStack {
-        Text(kind.label).fontWeight(.semibold)
-        Spacer()
-        statusView(status, hasSavedKey: hasSavedKey)
-      }
-      HStack {
-        SecureField(hasSavedKey ? "Enter a replacement key" : "API key", text: value)
-        Button(hasSavedKey ? "Replace" : "Verify & Save") {
-          let candidate = value.wrappedValue
-          Task {
-            await model.validateAndSave(candidate, kind: kind)
-            if model.credentialStatus(for: kind) == .saved {
-              value.wrappedValue = ""
-            }
-          }
-        }.disabled(value.wrappedValue.isEmpty || status == .validating)
-        if hasSavedKey { Button("Remove", role: .destructive) { removeKind = kind } }
-      }
-      if case .error(let message) = status {
-        Text(hasSavedKey ? "\(message) Existing verified key kept." : message)
-          .font(.caption).foregroundStyle(.red)
-      }
-    }
-  }
-
-  @ViewBuilder private func statusView(_ status: CredentialStatus, hasSavedKey: Bool) -> some View {
-    switch status {
-    case .missing: Label("Missing", systemImage: "circle").foregroundStyle(.secondary)
-    case .saved: Label("Verified", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-    case .validating:
-      ProgressView().controlSize(.small)
-      Text("Checking…").foregroundStyle(.secondary)
-    case .error:
-      Label(hasSavedKey ? "Replacement failed" : "Not saved", systemImage: "xmark.circle.fill")
-        .foregroundStyle(.red)
-    }
-  }
-
-  private var shortcutSection: some View {
-    GroupBox("Activation shortcut") {
-      ShortcutRecorder(current: preferences.shortcut, onCapture: model.acceptShortcut)
-        .frame(maxWidth: .infinity).padding(8)
-    }
-  }
-
-  private var behaviorSection: some View {
-    GroupBox("Behavior") {
-      VStack(alignment: .leading, spacing: 10) {
-        Picker("Provider", selection: $preferences.cleanupProvider) {
-          ForEach(CleanupProvider.allCases, id: \.self) { provider in
-            Text(provider.displayName).tag(provider)
-          }
-        }.pickerStyle(.segmented)
-        Picker("Model", selection: $preferences.cleanupModel) {
-          ForEach(preferences.cleanupProvider.models, id: \.self) { cleanupModel in
-            Text(cleanupModel.displayName).tag(cleanupModel)
-          }
-        }.pickerStyle(.menu)
-        Picker(
-          "Reasoning",
-          selection: Binding(
-            get: { preferences.cleanupReasoningEffort },
-            set: { preferences.cleanupReasoningEffort = $0 })
-        ) {
-          ForEach(preferences.cleanupModel.supportedReasoningEfforts, id: \.self) { effort in
-            Text(effort.displayName).tag(effort)
-          }
-        }.pickerStyle(.menu)
-        if preferences.cleanupModel == .gpt56LunaFast {
-          Label(
-            "Luna Fast may retain prompts at the provider; use another model for zero data retention.",
-            systemImage: "exclamationmark.triangle.fill"
-          )
-          .font(.caption)
-          .foregroundStyle(.orange)
-        }
-        if preferences.cleanupProvider == .groq {
-          Label(
-            "Groq may temporarily log inputs and outputs for reliability or abuse monitoring. Enable Zero Data Retention in Groq Data Controls to opt out.",
-            systemImage: "exclamationmark.triangle.fill"
-          )
-          .font(.caption)
-          .foregroundStyle(.orange)
-        }
-        Picker("Cleanup", selection: $preferences.cleanupMode) {
-          ForEach(CleanupMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-        }.pickerStyle(.segmented)
-        Toggle("Mute audio output while recording", isOn: $preferences.muteOutput)
-        Toggle("Play start, stop, and error cues", isOn: $preferences.soundCues)
-        Toggle(
-          "Launch at login",
-          isOn: Binding(
-            get: { preferences.launchAtLogin }, set: { preferences.setLaunchAtLogin($0) }))
-      }.padding(8)
-    }
-  }
-
-  private var latencySection: some View {
-    GroupBox("Latency diagnostics") {
-      VStack(alignment: .leading, spacing: 10) {
-        Toggle("Log privacy-safe latency measurements", isOn: $preferences.latencyLogging)
-        Text(
-          "Stores timings, workload sizes, provider routing, and outcomes for 90 days. Transcript text, vocabulary, credentials, clipboard contents, and raw errors are never written."
-        )
+      .foregroundStyle(model.readinessComplete ? .green : .orange)
+      Text(model.readinessComplete ? "Ready for dictation" : "Setup needs attention")
         .font(.caption)
-        .foregroundStyle(.secondary)
-        HStack {
-          Button("Reveal Benchmark Folder") { model.revealBenchmarkFolder() }
-          Button("Clear Completed History", role: .destructive) {
-            confirmsBenchmarkClear = true
-          }
-          Spacer()
-        }
-      }.padding(8)
+      Spacer(minLength: 0)
     }
-  }
-
-  private var vocabularySection: some View {
-    GroupBox("Soniox vocabulary") {
-      VStack(alignment: .leading, spacing: 6) {
-        TextEditor(text: $preferences.vocabulary).font(.system(.body, design: .monospaced)).frame(
-          height: 90)
-        Text(
-          "One name or term per line. Duplicates are removed; the total is capped at 10,000 characters."
-        ).font(.caption).foregroundStyle(.secondary)
-      }.padding(8)
-    }
-  }
-
-  private var permissionSection: some View {
-    GroupBox("Permissions") {
-      HStack {
-        let _ = model.permissionRefresh
-        permissionBadge(
-          "Microphone", granted: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
-        permissionBadge("Accessibility", granted: AXIsProcessTrusted())
-        Spacer()
-        Button("Request / Refresh") { Task { await model.requestOrRefreshPermissions() } }
-        Button("Open System Settings") {
-          NSWorkspace.shared.open(
-            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
-        }
-      }.padding(8)
-    }
-  }
-
-  private func permissionBadge(_ name: String, granted: Bool) -> some View {
-    Label(name, systemImage: granted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-      .foregroundStyle(granted ? .green : .orange)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+    .background(.bar)
   }
 }

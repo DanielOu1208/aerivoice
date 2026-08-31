@@ -17,7 +17,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     observeLifecycle()
     if !model.setupComplete {
       openSettings()
-      Task { await model.requestMicrophonePermissionIfNeeded() }
     }
   }
 
@@ -88,18 +87,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   @objc private func quit() { NSApp.terminate(nil) }
 
   @objc private func openSettings() {
+    if model.preferences.onboardingComplete, !model.readinessComplete {
+      model.settingsDestinationRequest = SettingsDestination.recommended(for: model)
+    }
     let window: NSWindow
     if let settingsWindow {
       window = settingsWindow
     } else {
       window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 540, height: 650),
+        contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
         styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered,
         defer: false)
       window.title = "AeriVoice Settings"
-      window.contentMinSize = NSSize(width: 500, height: 560)
+      window.contentMinSize = NSSize(width: 700, height: 560)
       window.isReleasedWhenClosed = false
-      window.contentView = NSHostingView(rootView: SettingsView(model: model))
+      window.contentView = NSHostingView(
+        rootView: SettingsRootView(model: model) { [weak window] in
+          window?.close()
+        })
       window.center()
       settingsWindow = window
     }

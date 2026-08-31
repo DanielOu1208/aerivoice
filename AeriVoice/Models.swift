@@ -90,6 +90,8 @@ enum CleanupProvider: String, CaseIterable, Codable, Sendable {
     }
   }
 
+  var isExperimental: Bool { self == .groq }
+
   var credentialKind: CredentialKind {
     switch self {
     case .openRouter: .openRouter

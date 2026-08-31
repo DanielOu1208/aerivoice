@@ -20,7 +20,7 @@ final class GroqCleanupClientTests: XCTestCase {
       XCTAssertEqual(json["model"] as? String, "qwen/qwen3.8-27b")
       XCTAssertEqual(json["reasoning_effort"] as? String, "none")
       XCTAssertEqual(json["reasoning_format"] as? String, "hidden")
-      XCTAssertEqual(json["max_completion_tokens"] as? Int, 8_192)
+      XCTAssertEqual(json["max_completion_tokens"] as? Int, 256)
       let responseFormat = try XCTUnwrap(json["response_format"] as? [String: Any])
       XCTAssertEqual(responseFormat["type"] as? String, "json_schema")
       let jsonSchema = try XCTUnwrap(responseFormat["json_schema"] as? [String: Any])
@@ -30,7 +30,8 @@ final class GroqCleanupClientTests: XCTestCase {
         .data(using: .utf8)!
       return (
         HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-        response)
+        response
+      )
     }
 
     let result = try await GroqCleanupClient(session: makeSession()).clean(
@@ -58,7 +59,8 @@ final class GroqCleanupClientTests: XCTestCase {
         .data(using: .utf8)!
       return (
         HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-        response)
+        response
+      )
     }
 
     _ = try await GroqCleanupClient(session: makeSession()).clean(
@@ -81,12 +83,14 @@ final class GroqCleanupClientTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["model"] as? String, "qwen/qwen3.8-27b")
         XCTAssertEqual(json["reasoning_effort"] as? String, "none")
+        XCTAssertEqual(json["max_completion_tokens"] as? Int, 256)
         response = #"{"choices":[{"message":{"content":"{\"text\":\"Test.\"}"}}]}"#
           .data(using: .utf8)!
       }
       return (
         HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-        response)
+        response
+      )
     }
 
     try await GroqCleanupClient(session: makeSession()).validate(apiKey: "key")
@@ -100,11 +104,13 @@ final class GroqCleanupClientTests: XCTestCase {
         return (
           HTTPURLResponse(
             url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-          #"{"data":[{"id":"qwen/qwen3.8-27b"}]}"#.data(using: .utf8)!)
+          #"{"data":[{"id":"qwen/qwen3.8-27b"}]}"#.data(using: .utf8)!
+        )
       }
       return (
         HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!,
-        #"{"error":{"message":"Model blocked by project permissions"}}"#.data(using: .utf8)!)
+        #"{"error":{"message":"Model blocked by project permissions"}}"#.data(using: .utf8)!
+      )
     }
 
     do {
@@ -121,7 +127,8 @@ final class GroqCleanupClientTests: XCTestCase {
       let response = #"{"error":{"message":"Rate limited"}}"#.data(using: .utf8)!
       return (
         HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: nil)!,
-        response)
+        response
+      )
     }
 
     do {
@@ -131,7 +138,9 @@ final class GroqCleanupClientTests: XCTestCase {
         apiKey: "key")
       XCTFail("Expected 429 to fail")
     } catch {
-      XCTAssertTrue(error.localizedDescription.contains("Rate limited"))
+      XCTAssertEqual(
+        error.localizedDescription, "Groq is temporarily rate limited. Wait a moment and try again."
+      )
       XCTAssertEqual((error as? ProviderHTTPError)?.statusCode, 429)
       XCTAssertEqual((error as? ProviderHTTPError)?.cleanupMetrics?.selectedProvider, "Groq")
       XCTAssertEqual(
@@ -140,12 +149,63 @@ final class GroqCleanupClientTests: XCTestCase {
     }
   }
 
+  func testTokenBudgetGrowsWithInputAndStaysWithinTotalLimit() throws {
+    XCTAssertEqual(try GroqTokenBudget.maxCompletionTokens(for: "Test."), 256)
+    XCTAssertEqual(
+      try GroqTokenBudget.maxCompletionTokens(for: String(repeating: "a", count: 8_000)), 2_500)
+    XCTAssertEqual(
+      try GroqTokenBudget.maxCompletionTokens(for: String(repeating: "é", count: 1_000)), 1_250)
+
+    let text = String(repeating: "a", count: 12_000)
+    let completionTokens = try GroqTokenBudget.maxCompletionTokens(for: text)
+    XCTAssertLessThanOrEqual(
+      GroqTokenBudget.estimatedTokens(for: text) + GroqTokenBudget.requestOverheadTokens
+        + completionTokens,
+      GroqTokenBudget.totalTokenLimit)
+  }
+
+  func testTokenBudgetRejectsDictationThatCannotFitInputAndOutput() {
+    XCTAssertThrowsError(
+      try GroqTokenBudget.maxCompletionTokens(for: String(repeating: "a", count: 20_000))
+    ) { error in
+      XCTAssertEqual(
+        error.localizedDescription,
+        "This dictation is too long for Groq’s current experimental limit. Use OpenRouter or try a shorter dictation."
+      )
+    }
+  }
+
+  func testOversizedRequestUsesConciseActionableError() async {
+    GroqURLProtocolStub.handler = { request in
+      let response = #"{"error":{"message":"Request too large for this organization and model"}}"#
+        .data(using: .utf8)!
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 413, httpVersion: nil, headerFields: nil)!,
+        response
+      )
+    }
+
+    do {
+      _ = try await GroqCleanupClient(session: makeSession()).clean(
+        "raw", mode: .faithful,
+        configuration: CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none),
+        apiKey: "key")
+      XCTFail("Expected 413 to fail")
+    } catch {
+      XCTAssertEqual(
+        error.localizedDescription,
+        "This request is larger than your Groq plan allows. Try a shorter dictation or raise your Groq limits."
+      )
+    }
+  }
+
   func testMalformedSuccessIncludesKnownGroqAttemptMetrics() async {
     GroqURLProtocolStub.handler = { request in
       let response = #"{"model":"qwen/qwen3.8-27b","choices":[]}"#.data(using: .utf8)!
       return (
         HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-        response)
+        response
+      )
     }
 
     do {
@@ -168,10 +228,12 @@ final class GroqCleanupClientTests: XCTestCase {
     let expectations: [(CleanupConfiguration, String)] = [
       (
         CleanupConfiguration(model: .gemini37Flash, reasoningEffort: .low),
-        "openrouter.ai"),
+        "openrouter.ai"
+      ),
       (
         CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none),
-        "api.groq.com"),
+        "api.groq.com"
+      ),
     ]
 
     for (configuration, expectedHost) in expectations {
@@ -183,7 +245,8 @@ final class GroqCleanupClientTests: XCTestCase {
         return (
           HTTPURLResponse(
             url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-          response)
+          response
+        )
       }
       let router = CleanupClientRouter(
         openRouter: OpenRouterCleanupClient(session: session),

@@ -2,6 +2,40 @@ import Foundation
 import ServiceManagement
 
 @MainActor
+protocol LoginItemManaging {
+  var status: LoginItemStatus { get }
+  func setEnabled(_ enabled: Bool) throws
+}
+
+enum LoginItemStatus: Equatable {
+  case disabled
+  case enabled
+  case requiresApproval
+
+  var isRegistered: Bool { self != .disabled }
+}
+
+struct MainAppLoginItemManager: LoginItemManaging {
+  var status: LoginItemStatus {
+    switch SMAppService.mainApp.status {
+    case .enabled: .enabled
+    case .requiresApproval: .requiresApproval
+    default: .disabled
+    }
+  }
+
+  func setEnabled(_ enabled: Bool) throws {
+    if enabled {
+      guard status == .disabled else { return }
+      try SMAppService.mainApp.register()
+    } else {
+      guard status.isRegistered else { return }
+      try SMAppService.mainApp.unregister()
+    }
+  }
+}
+
+@MainActor
 final class AppPreferences: ObservableObject {
   private enum Key {
     static let cleanupMode = "cleanupMode"
@@ -51,6 +85,7 @@ final class AppPreferences: ObservableObject {
   }
 
   private let defaults: UserDefaults
+  private let loginItemManager: LoginItemManaging
   private var savedModels: [String: String] = [:]
   private var savedReasoningEfforts: [String: String] = [:]
 
@@ -81,8 +116,12 @@ final class AppPreferences: ObservableObject {
       model: model, reasoningEffort: model.normalizedReasoningEffort(effort))
   }
 
-  init(defaults: UserDefaults = .standard) {
+  init(
+    defaults: UserDefaults = .standard,
+    loginItemManager: LoginItemManaging = MainAppLoginItemManager()
+  ) {
     self.defaults = defaults
+    self.loginItemManager = loginItemManager
     cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .faithful
     let legacyModel =
       CleanupModel(rawValue: defaults.string(forKey: Key.cleanupModel) ?? "") ?? .defaultModel
@@ -96,7 +135,8 @@ final class AppPreferences: ObservableObject {
       CleanupProvider(rawValue: defaults.string(forKey: Key.cleanupProvider) ?? "")
       ?? legacyModel.provider
     cleanupProvider = initialProvider
-    cleanupModel = savedModels[initialProvider.rawValue].flatMap(CleanupModel.init)
+    cleanupModel =
+      savedModels[initialProvider.rawValue].flatMap(CleanupModel.init)
       .flatMap { $0.provider == initialProvider ? $0 : nil }
       ?? initialProvider.defaultModel
     if let data = defaults.data(forKey: Key.cleanupReasoningEfforts),
@@ -115,18 +155,18 @@ final class AppPreferences: ObservableObject {
     }
   }
 
-  func setLaunchAtLogin(_ enabled: Bool) {
-    defaults.set(enabled, forKey: Key.launchAtLogin)
+  @discardableResult
+  func setLaunchAtLogin(_ enabled: Bool) -> Bool {
     do {
-      if enabled {
-        try SMAppService.mainApp.register()
-      } else {
-        try SMAppService.mainApp.unregister()
-      }
-      launchAtLogin = enabled
+      try loginItemManager.setEnabled(enabled)
     } catch {
-      launchAtLogin = SMAppService.mainApp.status == .enabled
+      launchAtLogin = loginItemManager.status.isRegistered
+      defaults.set(launchAtLogin, forKey: Key.launchAtLogin)
+      return false
     }
+    launchAtLogin = loginItemManager.status.isRegistered
+    defaults.set(launchAtLogin, forKey: Key.launchAtLogin)
+    return launchAtLogin == enabled
   }
 
   private func persistShortcut() {

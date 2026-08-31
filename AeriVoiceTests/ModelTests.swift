@@ -43,6 +43,98 @@ final class ModelTests: XCTestCase {
     XCTAssertTrue(CleanupModel.gptOSS120BCerebras.providerRoute.requiresZeroDataRetention)
     XCTAssertEqual(CleanupModel.gpt56LunaFast.providerRoute.only, ["openai/fast"])
     XCTAssertFalse(CleanupModel.gpt56LunaFast.providerRoute.requiresZeroDataRetention)
+    XCTAssertFalse(CleanupProvider.openRouter.isExperimental)
+    XCTAssertTrue(CleanupProvider.groq.isExperimental)
+  }
+
+  func testOnboardingReadinessRoutesToFirstIncompleteStep() {
+    XCTAssertEqual(
+      OnboardingReadiness(
+        hasSonioxCredential: false, hasOpenRouterCredential: false,
+        hasPermissions: false, hasShortcut: false
+      ).recommendedStep,
+      .providers)
+    XCTAssertEqual(
+      OnboardingReadiness(
+        hasSonioxCredential: true, hasOpenRouterCredential: true,
+        hasPermissions: false, hasShortcut: false
+      ).recommendedStep,
+      .permissions)
+    XCTAssertEqual(
+      OnboardingReadiness(
+        hasSonioxCredential: true, hasOpenRouterCredential: true,
+        hasPermissions: true, hasShortcut: false
+      ).recommendedStep,
+      .shortcut)
+  }
+
+  func testOnboardingReadinessGatesEachStepIndependently() {
+    let ready = OnboardingReadiness(
+      hasSonioxCredential: true, hasOpenRouterCredential: true,
+      hasPermissions: true, hasShortcut: true)
+    for step in OnboardingStep.allCases {
+      XCTAssertTrue(ready.canAdvance(from: step))
+    }
+
+    let missingShortcut = OnboardingReadiness(
+      hasSonioxCredential: true, hasOpenRouterCredential: true,
+      hasPermissions: true, hasShortcut: false)
+    XCTAssertTrue(missingShortcut.canAdvance(from: .providers))
+    XCTAssertTrue(missingShortcut.canAdvance(from: .permissions))
+    XCTAssertFalse(missingShortcut.canAdvance(from: .shortcut))
+  }
+
+  func testDeniedMicrophonePermissionRoutesToSystemSettings() {
+    XCTAssertEqual(MicrophonePermissionAction(status: .notDetermined), .request)
+    XCTAssertEqual(MicrophonePermissionAction(status: .denied), .openSettings)
+    XCTAssertEqual(MicrophonePermissionAction(status: .restricted), .openSettings)
+    XCTAssertEqual(MicrophonePermissionAction(status: .authorized), .none)
+  }
+
+  @MainActor
+  func testLaunchAtLoginPersistsAcceptedServiceState() {
+    let suite = "AeriVoiceTests.LaunchAtLogin.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    let loginItems = LoginItemManagerStub()
+    let preferences = AppPreferences(defaults: defaults, loginItemManager: loginItems)
+
+    XCTAssertTrue(preferences.setLaunchAtLogin(true))
+    XCTAssertTrue(preferences.launchAtLogin)
+
+    let restored = AppPreferences(defaults: defaults, loginItemManager: loginItems)
+    XCTAssertTrue(restored.launchAtLogin)
+  }
+
+  @MainActor
+  func testLaunchAtLoginFailureRestoresActualServiceState() {
+    let suite = "AeriVoiceTests.LaunchAtLoginFailure.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    let loginItems = LoginItemManagerStub()
+    loginItems.shouldFail = true
+    let preferences = AppPreferences(defaults: defaults, loginItemManager: loginItems)
+
+    XCTAssertFalse(preferences.setLaunchAtLogin(true))
+    XCTAssertFalse(preferences.launchAtLogin)
+    XCTAssertFalse(defaults.bool(forKey: "launchAtLogin"))
+  }
+
+  @MainActor
+  func testDisablingLaunchAtLoginUnregistersPendingApproval() {
+    let suite = "AeriVoiceTests.LaunchAtLoginApproval.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    let loginItems = LoginItemManagerStub(status: .requiresApproval)
+    let preferences = AppPreferences(defaults: defaults, loginItemManager: loginItems)
+
+    XCTAssertTrue(preferences.setLaunchAtLogin(false))
+    XCTAssertEqual(loginItems.status, .disabled)
+    XCTAssertEqual(loginItems.updateRequests, [false])
+    XCTAssertFalse(preferences.launchAtLogin)
   }
 
   @MainActor
@@ -470,6 +562,27 @@ final class ModelTests: XCTestCase {
     let controller = OutputMuteController(defaults: defaults, backend: backend)
     body(controller, backend, defaults)
   }
+}
+
+@MainActor
+private final class LoginItemManagerStub: LoginItemManaging {
+  var status: LoginItemStatus
+  var shouldFail = false
+  var updateRequests: [Bool] = []
+
+  init(status: LoginItemStatus = .disabled) {
+    self.status = status
+  }
+
+  func setEnabled(_ enabled: Bool) throws {
+    updateRequests.append(enabled)
+    if shouldFail { throw LoginItemManagerError.rejected }
+    status = enabled ? .enabled : .disabled
+  }
+}
+
+private enum LoginItemManagerError: Error {
+  case rejected
 }
 
 private final class FakeOutputAudioBackend: OutputAudioBackend, @unchecked Sendable {
