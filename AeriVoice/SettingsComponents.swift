@@ -34,13 +34,17 @@ struct VocabularyTagEditor: View {
   @State private var draft = ""
   @State private var validationMessage: String?
   @FocusState private var focusedTerm: String?
+  @FocusState private var isInputFocused: Bool
 
   private var terms: [String] { VocabularyNormalizer.normalize(vocabulary) }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 8) {
-        TextField("Add a name or phrase", text: $draft)
+        TextField("", text: $draft, prompt: Text("Add a name or phrase"))
+          .textFieldStyle(.roundedBorder)
+          .accessibilityLabel("Add a name or phrase")
+          .focused($isInputFocused)
           .onSubmit(addTerm)
           .onChange(of: draft) { validationMessage = nil }
         Button("Add", action: addTerm)
@@ -131,14 +135,18 @@ struct VocabularyTagEditor: View {
       vocabulary = updated.joined(separator: "\n")
       draft = ""
       validationMessage = nil
+      isInputFocused = true
     case .empty:
       break
     case .duplicate:
       validationMessage = "That term is already in the dictionary."
+      isInputFocused = true
     case .multipleTerms:
       validationMessage = "Add one name or phrase at a time."
+      isInputFocused = true
     case .limitExceeded:
       validationMessage = "The dictionary has reached its size limit."
+      isInputFocused = true
     }
   }
 
