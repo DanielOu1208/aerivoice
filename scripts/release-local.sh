@@ -132,11 +132,11 @@ fi
 
 entitlements_path="$release_tmp/AeriVoice.entitlements.plist"
 codesign -d --entitlements "$entitlements_path" --xml "$app_path" 2>/dev/null
-if [[ "$(plutil -extract com.apple.security.device.audio-input raw "$entitlements_path" 2>/dev/null || true)" != "true" ]]; then
+if [[ "$(plutil -extract 'com\.apple\.security\.device\.audio-input' raw "$entitlements_path" 2>/dev/null || true)" != "true" ]]; then
   echo "The archived app is missing its audio-input entitlement." >&2
   exit 1
 fi
-if [[ "$(plutil -extract com.apple.security.get-task-allow raw "$entitlements_path" 2>/dev/null || true)" == "true" ]]; then
+if [[ "$(plutil -extract 'com\.apple\.security\.get-task-allow' raw "$entitlements_path" 2>/dev/null || true)" == "true" ]]; then
   echo "The archived app unexpectedly allows debugger attachment." >&2
   exit 1
 fi
