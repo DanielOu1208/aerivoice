@@ -40,12 +40,12 @@ during onboarding or later in Settings.
 
 ## Install the beta
 
-1. Download `AeriVoice-v0.1.0-beta.2-arm64.dmg` and its `.sha256` file from the
+1. Download `AeriVoice-v0.1.0-beta.3-arm64.dmg` and its `.sha256` file from the
    [latest GitHub release](https://github.com/DanielOu1208/aerivoice/releases).
 2. From the download directory, verify the artifact:
 
    ```sh
-   shasum -a 256 -c AeriVoice-v0.1.0-beta.2-arm64.dmg.sha256
+   shasum -a 256 -c AeriVoice-v0.1.0-beta.3-arm64.dmg.sha256
    ```
 
 3. Open the DMG and drag AeriVoice to Applications.
