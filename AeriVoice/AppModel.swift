@@ -55,7 +55,14 @@ final class AppModel: ObservableObject {
   init() {
     let preferences = AppPreferences()
     let credentials = KeychainStore()
-    let credentialManager = CredentialManager(store: credentials)
+    #if AERIVOICE_DISTRIBUTION
+      let legacyCredentials: KeychainStore? = KeychainStore(
+        namespace: .legacyRelease, authenticationPolicy: .allow)
+    #else
+      let legacyCredentials: KeychainStore? = nil
+    #endif
+    let credentialManager = CredentialManager(
+      store: credentials, legacyStore: legacyCredentials)
     let benchmarkRecorder = LatencyBenchmarkRecorder()
     self.preferences = preferences
     self.credentialManager = credentialManager
@@ -109,6 +116,10 @@ final class AppModel: ObservableObject {
     credentialManager.status(for: kind)
   }
 
+  func canImportLegacyCredential(_ kind: CredentialKind) -> Bool {
+    credentialManager.canImportLegacyCredential(kind)
+  }
+
   var permissionsReady: Bool {
     AVCaptureDevice.authorizationStatus(for: .audio) == .authorized && AXIsProcessTrusted()
   }
@@ -129,12 +140,13 @@ final class AppModel: ObservableObject {
   }
 
   func validateAndSave(_ value: String, kind: CredentialKind) {
-    let configuration: CleanupConfiguration? = switch kind {
-    case .soniox: nil
-    case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
-    case .groq: preferences.cleanupConfiguration(for: .groq)
-    }
-    credentialManager.beginValidation(value, kind: kind, configuration: configuration)
+    credentialManager.beginValidation(
+      value, kind: kind, configuration: credentialValidationConfiguration(for: kind))
+  }
+
+  func importLegacyCredential(_ kind: CredentialKind) {
+    credentialManager.beginLegacyImport(
+      kind: kind, configuration: credentialValidationConfiguration(for: kind))
   }
 
   func cancelCredentialValidation(_ kind: CredentialKind) {
@@ -193,4 +205,13 @@ final class AppModel: ObservableObject {
     benchmarkRecorder.clearCompletedHistory()
   }
 
+  private func credentialValidationConfiguration(
+    for kind: CredentialKind
+  ) -> CleanupConfiguration? {
+    switch kind {
+    case .soniox: nil
+    case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
+    case .groq: preferences.cleanupConfiguration(for: .groq)
+    }
+  }
 }

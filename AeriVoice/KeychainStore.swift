@@ -16,6 +16,7 @@ enum CredentialKind: String, CaseIterable, Sendable {
 }
 
 enum CredentialNamespace: String, Sendable {
+  case legacyRelease = "credentials"
   case development = "credentials.development"
   case releaseV2 = "credentials.v2"
 
@@ -28,24 +29,36 @@ enum CredentialNamespace: String, Sendable {
   }
 }
 
+enum KeychainAuthenticationPolicy: Sendable {
+  case skip
+  case allow
+}
+
 protocol CredentialReading: Sendable {
   func value(for kind: CredentialKind) -> String?
 }
 
-protocol CredentialStoring: CredentialReading {
+protocol CredentialPresenceReading: CredentialReading {
   func containsCredential(_ kind: CredentialKind) -> Bool
+}
+
+protocol CredentialStoring: CredentialPresenceReading {
+  func addIfMissing(_ value: String, for kind: CredentialKind) throws -> Bool
   func save(_ value: String, for kind: CredentialKind) throws
   func remove(_ kind: CredentialKind) throws
 }
 
 final class KeychainStore: CredentialStoring, @unchecked Sendable {
   private let service: String
+  private let authenticationPolicy: KeychainAuthenticationPolicy
 
   init(
     bundleIdentifier: String? = Bundle.main.bundleIdentifier,
-    namespace: CredentialNamespace = .current
+    namespace: CredentialNamespace = .current,
+    authenticationPolicy: KeychainAuthenticationPolicy = .skip
   ) {
     service = Self.serviceName(bundleIdentifier: bundleIdentifier, namespace: namespace)
+    self.authenticationPolicy = authenticationPolicy
   }
 
   static func serviceName(
@@ -55,7 +68,8 @@ final class KeychainStore: CredentialStoring, @unchecked Sendable {
   }
 
   func value(for kind: CredentialKind) -> String? {
-    let query = Self.valueQuery(service: service, kind: kind)
+    let query = Self.valueQuery(
+      service: service, kind: kind, authenticationPolicy: authenticationPolicy)
     var item: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &item)
     if status == errSecSuccess, let data = item as? Data {
@@ -90,6 +104,19 @@ final class KeychainStore: CredentialStoring, @unchecked Sendable {
     guard result == errSecSuccess else { throw KeychainError.status(result) }
   }
 
+  func addIfMissing(_ value: String, for kind: CredentialKind) throws -> Bool {
+    var item = Self.baseQuery(service: service, kind: kind)
+    item[kSecValueData as String] = Data(value.utf8)
+    switch SecItemAdd(item as CFDictionary, nil) {
+    case errSecSuccess:
+      return true
+    case errSecDuplicateItem:
+      return false
+    case let status:
+      throw KeychainError.status(status)
+    }
+  }
+
   func remove(_ kind: CredentialKind) throws {
     var existingItem: CFTypeRef?
     let lookupStatus = SecItemCopyMatching(
@@ -119,11 +146,19 @@ final class KeychainStore: CredentialStoring, @unchecked Sendable {
     return query
   }
 
-  static func valueQuery(service: String, kind: CredentialKind) -> [String: Any] {
+  static func valueQuery(
+    service: String, kind: CredentialKind,
+    authenticationPolicy: KeychainAuthenticationPolicy = .skip
+  ) -> [String: Any] {
     var query = baseQuery(service: service, kind: kind)
     query[kSecReturnData as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitOne
-    query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+    switch authenticationPolicy {
+    case .skip:
+      query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+    case .allow:
+      break
+    }
     return query
   }
 }

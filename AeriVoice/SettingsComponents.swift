@@ -229,6 +229,7 @@ struct CredentialEditorView: View {
 
   private var status: CredentialStatus { model.credentialStatus(for: kind) }
   private var hasSavedKey: Bool { model.hasCredential(kind) }
+  private var canImportLegacyKey: Bool { model.canImportLegacyCredential(kind) }
   private var apiKeyLabel: String { "\(kind.label) API key" }
 
   var body: some View {
@@ -241,6 +242,28 @@ struct CredentialEditorView: View {
       }
 
       Text(description).font(.callout).foregroundStyle(.secondary)
+
+      if canImportLegacyKey {
+        HStack(alignment: .center, spacing: 12) {
+          Label {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Beta.1 key found").font(.callout.weight(.medium))
+              Text("Import it without pasting it again. macOS may request access once.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          } icon: {
+            Image(systemName: "key.fill")
+          }
+          Spacer()
+          Button("Import from beta.1") {
+            model.importLegacyCredential(kind)
+          }
+          .disabled(status == .validating)
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+      }
 
       if hasSavedKey && !isReplacing {
         HStack {

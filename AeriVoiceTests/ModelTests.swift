@@ -9,6 +9,10 @@ final class ModelTests: XCTestCase {
   func testKeychainServiceSeparatesReleaseAndDebugCredentials() {
     XCTAssertEqual(
       KeychainStore.serviceName(
+        bundleIdentifier: "com.danielou.AeriVoice", namespace: .legacyRelease),
+      "com.danielou.AeriVoice.credentials")
+    XCTAssertEqual(
+      KeychainStore.serviceName(
         bundleIdentifier: "com.danielou.AeriVoice", namespace: .releaseV2),
       "com.danielou.AeriVoice.credentials.v2")
     XCTAssertEqual(

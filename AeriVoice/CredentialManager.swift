@@ -34,25 +34,40 @@ struct LiveCredentialValidator: CredentialValidating {
   }
 }
 
+enum LegacyCredentialImportError: LocalizedError {
+  case unavailable
+
+  var errorDescription: String? {
+    "macOS couldn’t read this beta.1 key. Paste it again below to reconnect."
+  }
+}
+
 @MainActor
 final class CredentialManager: ObservableObject {
   @Published private var statuses: [CredentialKind: CredentialStatus]
 
   private let store: CredentialStoring
+  private let legacyStore: CredentialPresenceReading?
   private let validator: CredentialValidating
   private var storedCredentialKinds: Set<CredentialKind>
+  private var legacyCredentialKinds: Set<CredentialKind>
   private var validationTasks: [CredentialKind: Task<Void, Never>] = [:]
   private var validationGenerations: [CredentialKind: UUID] = [:]
 
   init(
     store: CredentialStoring,
+    legacyStore: CredentialPresenceReading? = nil,
     validator: CredentialValidating = LiveCredentialValidator()
   ) {
     self.store = store
+    self.legacyStore = legacyStore
     self.validator = validator
     let loadedCredentialKinds = Set(
       CredentialKind.allCases.filter(store.containsCredential))
+    let loadedLegacyCredentialKinds = Set(
+      CredentialKind.allCases.filter { legacyStore?.containsCredential($0) == true })
     storedCredentialKinds = loadedCredentialKinds
+    legacyCredentialKinds = loadedLegacyCredentialKinds
     statuses = Dictionary(
       uniqueKeysWithValues: CredentialKind.allCases.map {
         ($0, loadedCredentialKinds.contains($0) ? .saved : .missing)
@@ -61,7 +76,10 @@ final class CredentialManager: ObservableObject {
 
   func refreshStoredCredentials() {
     let refreshedKinds = Set(CredentialKind.allCases.filter(store.containsCredential))
+    let refreshedLegacyKinds = Set(
+      CredentialKind.allCases.filter { legacyStore?.containsCredential($0) == true })
     storedCredentialKinds = refreshedKinds
+    legacyCredentialKinds = refreshedLegacyKinds
     statuses = Dictionary(
       uniqueKeysWithValues: CredentialKind.allCases.map { kind in
         let currentStatus = statuses[kind] ?? .missing
@@ -76,6 +94,10 @@ final class CredentialManager: ObservableObject {
 
   func hasCredential(_ kind: CredentialKind) -> Bool {
     storedCredentialKinds.contains(kind)
+  }
+
+  func canImportLegacyCredential(_ kind: CredentialKind) -> Bool {
+    !storedCredentialKinds.contains(kind) && legacyCredentialKinds.contains(kind)
   }
 
   func status(for kind: CredentialKind) -> CredentialStatus {
@@ -101,6 +123,45 @@ final class CredentialManager: ObservableObject {
         try Task.checkCancellation()
         guard let self, self.validationGenerations[kind] == generation else { return }
         try store.save(trimmed, for: kind)
+        self.storedCredentialKinds.insert(kind)
+        self.finishValidation(.saved, kind: kind, generation: generation)
+      } catch is CancellationError {
+        self?.restoreStoredStatusIfCurrent(kind: kind, generation: generation)
+      } catch {
+        self?.finishValidation(
+          .error(error.localizedDescription), kind: kind, generation: generation)
+      }
+    }
+  }
+
+  func beginLegacyImport(
+    kind: CredentialKind, configuration: CleanupConfiguration?
+  ) {
+    guard !hasCredential(kind) else {
+      statuses[kind] = .saved
+      return
+    }
+    guard canImportLegacyCredential(kind), let legacyStore else {
+      statuses[kind] = .error(LegacyCredentialImportError.unavailable.localizedDescription)
+      return
+    }
+
+    invalidateValidation(kind)
+    let generation = UUID()
+    validationGenerations[kind] = generation
+    statuses[kind] = .validating
+    validationTasks[kind] = Task { [weak self, validator, store, legacyStore] in
+      do {
+        try Task.checkCancellation()
+        guard
+          let value = legacyStore.value(for: kind)?.trimmingCharacters(
+            in: .whitespacesAndNewlines),
+          !value.isEmpty
+        else { throw LegacyCredentialImportError.unavailable }
+        try await validator.validate(value, kind: kind, configuration: configuration)
+        try Task.checkCancellation()
+        guard let self, self.validationGenerations[kind] == generation else { return }
+        _ = try store.addIfMissing(value, for: kind)
         self.storedCredentialKinds.insert(kind)
         self.finishValidation(.saved, kind: kind, generation: generation)
       } catch is CancellationError {

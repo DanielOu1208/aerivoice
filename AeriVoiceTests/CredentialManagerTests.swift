@@ -30,6 +30,130 @@ final class CredentialManagerTests: XCTestCase {
     XCTAssertEqual(store.presenceReadCount(for: .groq), 2)
   }
 
+  func testLegacyCredentialDetectionDoesNotReadSecret() {
+    let store = FakeCredentialStore()
+    let legacyStore = FakeCredentialStore(values: [.soniox: "legacy-key"])
+    let manager = CredentialManager(store: store, legacyStore: legacyStore)
+
+    XCTAssertTrue(manager.canImportLegacyCredential(.soniox))
+    XCTAssertFalse(manager.canImportLegacyCredential(.openRouter))
+    XCTAssertEqual(legacyStore.presenceReadCount(for: .soniox), 1)
+    XCTAssertEqual(legacyStore.valueReadCount(for: .soniox), 0)
+  }
+
+  func testLegacyImportValidatesAndCopiesWithoutDeletingLegacyCredential() async throws {
+    let store = FakeCredentialStore()
+    let legacyStore = FakeCredentialStore(values: [.openRouter: " legacy-key "])
+    let validator = SuccessfulCredentialValidator()
+    let manager = CredentialManager(
+      store: store, legacyStore: legacyStore, validator: validator)
+
+    manager.beginLegacyImport(
+      kind: .openRouter, configuration: .openRouterTestConfiguration)
+    try await validator.waitUntilCalled()
+    try await waitUntil { manager.status(for: .openRouter) == .saved }
+
+    XCTAssertEqual(store.value(for: .openRouter), "legacy-key")
+    XCTAssertEqual(store.addIfMissingCount(for: .openRouter), 1)
+    XCTAssertEqual(legacyStore.value(for: .openRouter), " legacy-key ")
+    XCTAssertEqual(legacyStore.removeCount(for: .openRouter), 0)
+    XCTAssertTrue(manager.hasCredential(.openRouter))
+    XCTAssertFalse(manager.canImportLegacyCredential(.openRouter))
+  }
+
+  func testLegacyImportNeverOverwritesCurrentCredential() {
+    let store = FakeCredentialStore(values: [.groq: "current-key"])
+    let legacyStore = FakeCredentialStore(values: [.groq: "legacy-key"])
+    let manager = CredentialManager(store: store, legacyStore: legacyStore)
+
+    manager.beginLegacyImport(kind: .groq, configuration: .groqTestConfiguration)
+
+    XCTAssertEqual(store.value(for: .groq), "current-key")
+    XCTAssertEqual(manager.status(for: .groq), .saved)
+    XCTAssertFalse(manager.canImportLegacyCredential(.groq))
+    XCTAssertEqual(legacyStore.valueReadCount(for: .groq), 0)
+    XCTAssertEqual(store.addIfMissingCount(for: .groq), 0)
+  }
+
+  func testLegacyImportDoesNotOverwriteCredentialAddedDuringValidation() async throws {
+    let store = FakeCredentialStore()
+    let legacyStore = FakeCredentialStore(values: [.openRouter: "legacy-key"])
+    let validator = SuspendedCredentialValidator()
+    let manager = CredentialManager(
+      store: store, legacyStore: legacyStore, validator: validator)
+
+    manager.beginLegacyImport(
+      kind: .openRouter, configuration: .openRouterTestConfiguration)
+    try await validator.waitUntilCalled()
+    try store.save("new-current-key", for: .openRouter)
+    validator.finish()
+    try await validator.waitUntilReturned()
+    try await waitUntil { manager.status(for: .openRouter) == .saved }
+
+    XCTAssertEqual(store.value(for: .openRouter), "new-current-key")
+    XCTAssertEqual(store.addIfMissingCount(for: .openRouter), 1)
+    XCTAssertEqual(legacyStore.value(for: .openRouter), "legacy-key")
+  }
+
+  func testCancellingLegacyImportPreventsLateSave() async throws {
+    let store = FakeCredentialStore()
+    let legacyStore = FakeCredentialStore(values: [.openRouter: "legacy-key"])
+    let validator = SuspendedCredentialValidator()
+    let manager = CredentialManager(
+      store: store, legacyStore: legacyStore, validator: validator)
+
+    manager.beginLegacyImport(
+      kind: .openRouter, configuration: .openRouterTestConfiguration)
+    try await validator.waitUntilCalled()
+    manager.cancelValidation(.openRouter)
+    validator.finish()
+    try await validator.waitUntilReturned()
+    await Task.yield()
+
+    XCTAssertNil(store.value(for: .openRouter))
+    XCTAssertEqual(manager.status(for: .openRouter), .missing)
+    XCTAssertTrue(manager.canImportLegacyCredential(.openRouter))
+  }
+
+  func testUnreadableLegacyCredentialFallsBackToManualEntry() async throws {
+    let store = FakeCredentialStore()
+    let legacyStore = FakeCredentialStore(
+      values: [.soniox: "legacy-key"], unreadableKinds: [.soniox])
+    let manager = CredentialManager(store: store, legacyStore: legacyStore)
+
+    manager.beginLegacyImport(kind: .soniox, configuration: nil)
+    try await waitUntil {
+      if case .error = manager.status(for: .soniox) { return true }
+      return false
+    }
+
+    XCTAssertFalse(manager.hasCredential(.soniox))
+    XCTAssertNil(store.value(for: .soniox))
+    XCTAssertEqual(legacyStore.valueReadCount(for: .soniox), 1)
+    XCTAssertEqual(
+      manager.status(for: .soniox),
+      .error("macOS couldn’t read this beta.1 key. Paste it again below to reconnect."))
+  }
+
+  func testFailedLegacyValidationDoesNotSaveCredential() async throws {
+    let store = FakeCredentialStore()
+    let legacyStore = FakeCredentialStore(values: [.groq: "legacy-key"])
+    let validator = FailingCredentialValidator()
+    let manager = CredentialManager(
+      store: store, legacyStore: legacyStore, validator: validator)
+
+    manager.beginLegacyImport(kind: .groq, configuration: .groqTestConfiguration)
+    try await validator.waitUntilCalled()
+    try await waitUntil {
+      if case .error = manager.status(for: .groq) { return true }
+      return false
+    }
+
+    XCTAssertNil(store.value(for: .groq))
+    XCTAssertEqual(store.addIfMissingCount(for: .groq), 0)
+    XCTAssertEqual(legacyStore.value(for: .groq), "legacy-key")
+  }
+
   func testCancelPreventsLateSaveWhenValidatorIgnoresCancellation() async throws {
     let store = FakeCredentialStore(values: [.openRouter: "existing"])
     let validator = SuspendedCredentialValidator()
@@ -122,22 +246,53 @@ private extension CleanupConfiguration {
 
 private final class FakeCredentialStore: CredentialStoring, @unchecked Sendable {
   private var values: [CredentialKind: String]
+  private let unreadableKinds: Set<CredentialKind>
   private var presenceReadCounts: [CredentialKind: Int] = [:]
+  private var valueReadCounts: [CredentialKind: Int] = [:]
+  private var addIfMissingCounts: [CredentialKind: Int] = [:]
+  private var removeCounts: [CredentialKind: Int] = [:]
 
-  init(values: [CredentialKind: String] = [:]) {
+  init(
+    values: [CredentialKind: String] = [:], unreadableKinds: Set<CredentialKind> = []
+  ) {
     self.values = values
+    self.unreadableKinds = unreadableKinds
   }
 
-  func value(for kind: CredentialKind) -> String? { values[kind] }
+  func value(for kind: CredentialKind) -> String? {
+    valueReadCounts[kind, default: 0] += 1
+    return unreadableKinds.contains(kind) ? nil : values[kind]
+  }
   func containsCredential(_ kind: CredentialKind) -> Bool {
     presenceReadCounts[kind, default: 0] += 1
     return values[kind].map { !$0.isEmpty } == true
   }
+  func addIfMissing(_ value: String, for kind: CredentialKind) throws -> Bool {
+    addIfMissingCounts[kind, default: 0] += 1
+    guard values[kind] == nil else { return false }
+    values[kind] = value
+    return true
+  }
   func save(_ value: String, for kind: CredentialKind) throws { values[kind] = value }
-  func remove(_ kind: CredentialKind) throws { values[kind] = nil }
+  func remove(_ kind: CredentialKind) throws {
+    removeCounts[kind, default: 0] += 1
+    values[kind] = nil
+  }
 
   func presenceReadCount(for kind: CredentialKind) -> Int {
     presenceReadCounts[kind, default: 0]
+  }
+
+  func valueReadCount(for kind: CredentialKind) -> Int {
+    valueReadCounts[kind, default: 0]
+  }
+
+  func addIfMissingCount(for kind: CredentialKind) -> Int {
+    addIfMissingCounts[kind, default: 0]
+  }
+
+  func removeCount(for kind: CredentialKind) -> Int {
+    removeCounts[kind, default: 0]
   }
 }
 

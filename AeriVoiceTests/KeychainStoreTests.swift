@@ -26,6 +26,18 @@ final class KeychainStoreTests: XCTestCase {
 
     XCTAssertEqual(query[kSecReturnData as String] as? Bool, true)
     XCTAssertNil(query[kSecReturnAttributes as String])
+    XCTAssertEqual(
+      query[kSecUseAuthenticationUI as String] as? String,
+      kSecUseAuthenticationUISkip as String)
+  }
+
+  func testExplicitLegacyImportAllowsAuthenticationUI() {
+    let query = KeychainStore.valueQuery(
+      service: "com.danielou.AeriVoice.credentials", kind: .soniox,
+      authenticationPolicy: .allow)
+
+    XCTAssertEqual(query[kSecReturnData as String] as? Bool, true)
+    XCTAssertNil(query[kSecUseAuthenticationUI as String])
   }
 
   func testBlockedCredentialErrorProvidesRecovery() {
