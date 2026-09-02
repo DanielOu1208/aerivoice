@@ -14,13 +14,19 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
   private var finished = false
   private var generation = UUID()
 
-  func connect(apiKey: String, vocabulary: [String], sessionID: DictationSessionID) async throws {
+  func connect(
+    configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String],
+    sessionID: DictationSessionID
+  ) async throws {
     cancel()
+    guard configuration.provider == .soniox else {
+      throw AppError.provider("The selected transcription model is not available through Soniox.")
+    }
     let connectionGeneration = UUID()
     generation = connectionGeneration
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.timeoutIntervalForRequest = 3
-    let session = URLSession(configuration: configuration)
+    let urlSessionConfiguration = URLSessionConfiguration.ephemeral
+    urlSessionConfiguration.timeoutIntervalForRequest = 3
+    let session = URLSession(configuration: urlSessionConfiguration)
     let task = session.webSocketTask(
       with: URL(string: "wss://stt-rt.soniox.com/transcribe-websocket")!)
     self.session = session
@@ -30,7 +36,7 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
     let context: [String: Any]? = vocabulary.isEmpty ? nil : ["terms": vocabulary]
     var payload: [String: Any] = [
       "api_key": apiKey,
-      "model": "stt-rt-v5",
+      "model": configuration.modelID,
       "audio_format": "pcm_s16le",
       "sample_rate": 16_000,
       "num_channels": 1,
@@ -53,9 +59,9 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
     receiveTask = Task { [weak self] in await self?.receiveLoop(generation: connectionGeneration) }
   }
 
-  func send(_ audio: Data) async throws {
+  func send(_ frame: RealtimeAudioFrame) async throws {
     guard let task else { throw AppError.provider("Soniox is not connected.") }
-    try await task.send(.data(audio))
+    try await task.send(.data(frame.audio))
   }
 
   func finish() async throws -> String {

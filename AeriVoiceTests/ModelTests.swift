@@ -6,6 +6,46 @@ import XCTest
 @testable import AeriVoice
 
 final class ModelTests: XCTestCase {
+  func testTranscriptionProviderCatalogAndCapabilities() {
+    XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta])
+    XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v5")
+    XCTAssertEqual(TranscriptionProvider.meta.modelID, "muse-voice-transcribe-1.0")
+    XCTAssertEqual(TranscriptionProvider.soniox.credentialKind, .soniox)
+    XCTAssertEqual(TranscriptionProvider.meta.credentialKind, .metaModelAPI)
+    XCTAssertEqual(TranscriptionProvider.soniox.connectedBufferLimitBytes, 512_000)
+    XCTAssertEqual(TranscriptionProvider.meta.connectedBufferLimitBytes, 160_000)
+    XCTAssertNil(
+      TranscriptionConfiguration(provider: .soniox).zeroDataRetentionRequired)
+    XCTAssertEqual(
+      TranscriptionConfiguration(provider: .meta).zeroDataRetentionRequired, true)
+  }
+
+  @MainActor
+  func testTranscriptionProviderDefaultsToSonioxAndPersistsMeta() {
+    let suite = "AeriVoiceTests.TranscriptionProvider.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+
+    let preferences = AppPreferences(defaults: defaults)
+    XCTAssertEqual(preferences.transcriptionProvider, .soniox)
+
+    preferences.transcriptionProvider = .meta
+    XCTAssertEqual(defaults.string(forKey: "transcriptionProvider"), "meta")
+    XCTAssertEqual(AppPreferences(defaults: defaults).transcriptionProvider, .meta)
+  }
+
+  @MainActor
+  func testUnknownTranscriptionProviderFallsBackToSoniox() {
+    let suite = "AeriVoiceTests.UnknownTranscriptionProvider.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.removePersistentDomain(forName: suite)
+    defaults.set("removed-provider", forKey: "transcriptionProvider")
+
+    XCTAssertEqual(AppPreferences(defaults: defaults).transcriptionProvider, .soniox)
+  }
+
   func testKeychainServiceSeparatesReleaseAndDebugCredentials() {
     XCTAssertEqual(
       KeychainStore.serviceName(
@@ -67,19 +107,19 @@ final class ModelTests: XCTestCase {
   func testOnboardingReadinessRoutesToFirstIncompleteStep() {
     XCTAssertEqual(
       OnboardingReadiness(
-        hasSonioxCredential: false, hasOpenRouterCredential: false,
+        hasTranscriptionCredential: false, hasOpenRouterCredential: false,
         hasPermissions: false, hasShortcut: false
       ).recommendedStep,
       .providers)
     XCTAssertEqual(
       OnboardingReadiness(
-        hasSonioxCredential: true, hasOpenRouterCredential: true,
+        hasTranscriptionCredential: true, hasOpenRouterCredential: true,
         hasPermissions: false, hasShortcut: false
       ).recommendedStep,
       .permissions)
     XCTAssertEqual(
       OnboardingReadiness(
-        hasSonioxCredential: true, hasOpenRouterCredential: true,
+        hasTranscriptionCredential: true, hasOpenRouterCredential: true,
         hasPermissions: true, hasShortcut: false
       ).recommendedStep,
       .shortcut)
@@ -87,14 +127,14 @@ final class ModelTests: XCTestCase {
 
   func testOnboardingReadinessGatesEachStepIndependently() {
     let ready = OnboardingReadiness(
-      hasSonioxCredential: true, hasOpenRouterCredential: true,
+      hasTranscriptionCredential: true, hasOpenRouterCredential: true,
       hasPermissions: true, hasShortcut: true)
     for step in OnboardingStep.allCases {
       XCTAssertTrue(ready.canAdvance(from: step))
     }
 
     let missingShortcut = OnboardingReadiness(
-      hasSonioxCredential: true, hasOpenRouterCredential: true,
+      hasTranscriptionCredential: true, hasOpenRouterCredential: true,
       hasPermissions: true, hasShortcut: false)
     XCTAssertTrue(missingShortcut.canAdvance(from: .providers))
     XCTAssertTrue(missingShortcut.canAdvance(from: .permissions))

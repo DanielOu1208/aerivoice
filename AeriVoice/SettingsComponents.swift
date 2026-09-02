@@ -90,7 +90,7 @@ struct VocabularyTagEditor: View {
           Label(validationMessage, systemImage: "exclamationmark.circle.fill")
             .foregroundStyle(.orange)
         } else {
-          Text("Names and phrases are sent to Soniox as recognition hints.")
+          Text("Names and phrases are sent to your selected transcription provider as hints.")
             .foregroundStyle(.secondary)
         }
         Spacer()
@@ -230,7 +230,7 @@ struct CredentialEditorView: View {
   private var status: CredentialStatus { model.credentialStatus(for: kind) }
   private var hasSavedKey: Bool { model.hasCredential(kind) }
   private var canImportLegacyKey: Bool { model.canImportLegacyCredential(kind) }
-  private var apiKeyLabel: String { "\(kind.label) API key" }
+  private var apiKeyLabel: String { kind.apiKeyLabel }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -376,7 +376,9 @@ struct CredentialEditorView: View {
   private var description: String {
     switch kind {
     case .soniox:
-      "Required for realtime speech transcription. The key is stored only in your Mac’s Keychain."
+      "Realtime speech transcription through Soniox. Select Soniox under Dictation to use this key."
+    case .metaModelAPI:
+      "Muse Voice Transcribe through Meta Model API. AeriVoice requests Zero Data Retention for every stream."
     case .openRouter:
       "Recommended stable connection for configurable AI transcript cleanup."
     case .groq:

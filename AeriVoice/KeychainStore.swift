@@ -3,14 +3,23 @@ import Security
 
 enum CredentialKind: String, CaseIterable, Sendable {
   case soniox
+  case metaModelAPI
   case openRouter
   case groq
 
   var label: String {
     switch self {
     case .soniox: "Soniox"
+    case .metaModelAPI: "Meta Model API"
     case .openRouter: "OpenRouter"
     case .groq: "Groq"
+    }
+  }
+
+  var apiKeyLabel: String {
+    switch self {
+    case .metaModelAPI: "Meta Model API key"
+    default: "\(label) API key"
     }
   }
 }

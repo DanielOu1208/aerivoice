@@ -81,11 +81,25 @@ struct DictationSettingsPage: View {
       Divider()
       Form {
         Section("Transcription") {
+          Picker("Provider", selection: $preferences.transcriptionProvider) {
+            ForEach(TranscriptionProvider.allCases) { provider in
+              Text(provider.displayName).tag(provider)
+            }
+          }
           HStack {
-            Label("Soniox realtime transcription", systemImage: "waveform")
+            Label(
+              preferences.transcriptionProvider.modelDisplayName,
+              systemImage: "waveform")
             Spacer()
-            connectionStatus(for: .soniox)
+            connectionStatus(for: preferences.transcriptionProvider.credentialKind)
             Button("Manage…") { selection = .providers }
+          }
+          if preferences.transcriptionProvider == .meta {
+            Text(
+              "Meta streams use Muse Voice Transcribe and request Zero Data Retention for every session."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
           }
         }
 
@@ -261,6 +275,9 @@ struct ProviderSettingsPage: View {
       Form {
         Section {
           CredentialEditorView(model: model, kind: .soniox)
+        }
+        Section {
+          CredentialEditorView(model: model, kind: .metaModelAPI)
         }
         Section {
           CredentialEditorView(model: model, kind: .openRouter)

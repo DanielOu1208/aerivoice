@@ -154,6 +154,31 @@ final class LatencyBenchmarkingTests: XCTestCase {
     XCTAssertEqual(record.cleanup.zeroDataRetentionRequired, false)
   }
 
+  func testMetaConfigurationRecordsProviderModelAndZDRWithoutContent() async throws {
+    let directory = makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = makeRecorder(
+      directory: directory, clock: TestClock(milliseconds: 0),
+      wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
+    await recorder.flushForTesting()
+
+    recorder.begin(
+      enabled: true, transcriptionConfiguration: TranscriptionConfiguration(provider: .meta),
+      cleanupMode: .faithful, cleanupConfiguration: defaultCleanupConfiguration)
+    recorder.finish(.cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    await recorder.flushForTesting()
+
+    let logURL = directory.appending(path: LatencyBenchmarkStore.logFilename)
+    let serialized = String(decoding: try Data(contentsOf: logURL), as: UTF8.self)
+    let record = try XCTUnwrap(try decodeRecords(at: logURL).first)
+    XCTAssertEqual(record.stt.provider, "meta")
+    XCTAssertEqual(record.stt.model, "muse-voice-transcribe-1.0")
+    XCTAssertEqual(record.stt.audioEncoding, "pcm_s16le_16000")
+    XCTAssertEqual(record.stt.zeroDataRetentionRequired, true)
+    XCTAssertFalse(serialized.contains("apiKey"))
+    XCTAssertFalse(serialized.contains("authorization"))
+  }
+
   func testLegacyRecordWithoutRoutingMetadataStillDecodes() throws {
     let legacyJSON = #"""
       {
@@ -191,6 +216,9 @@ final class LatencyBenchmarkingTests: XCTestCase {
     XCTAssertNil(record.cleanup.requestedReasoningEffort)
     XCTAssertNil(record.cleanup.requestedProviderTag)
     XCTAssertNil(record.cleanup.zeroDataRetentionRequired)
+    XCTAssertNil(record.stt.provider)
+    XCTAssertNil(record.stt.audioEncoding)
+    XCTAssertNil(record.stt.zeroDataRetentionRequired)
   }
 
   func testActiveCheckpointRecoversAsInterruptedOnNextLaunch() async throws {

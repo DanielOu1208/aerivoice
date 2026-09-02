@@ -92,9 +92,25 @@ struct BenchmarkWorkload: Codable, Equatable, Sendable {
 }
 
 struct BenchmarkSTTMetadata: Codable, Equatable, Sendable {
+  let provider: String?
   let model: String
+  let audioEncoding: String?
+  let zeroDataRetentionRequired: Bool?
   var finalAudioProcessedMS: Double?
   var totalAudioProcessedMS: Double?
+
+  init(
+    model: String, provider: String? = nil, audioEncoding: String? = nil,
+    zeroDataRetentionRequired: Bool? = nil, finalAudioProcessedMS: Double? = nil,
+    totalAudioProcessedMS: Double? = nil
+  ) {
+    self.provider = provider
+    self.model = model
+    self.audioEncoding = audioEncoding
+    self.zeroDataRetentionRequired = zeroDataRetentionRequired
+    self.finalAudioProcessedMS = finalAudioProcessedMS
+    self.totalAudioProcessedMS = totalAudioProcessedMS
+  }
 }
 
 struct BenchmarkCleanupMetadata: Codable, Equatable, Sendable {
@@ -166,7 +182,8 @@ protocol LatencyBenchmarkRecording: AnyObject {
   var isRecording: Bool { get }
 
   func begin(
-    enabled: Bool, cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration)
+    enabled: Bool, transcriptionConfiguration: TranscriptionConfiguration,
+    cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration)
   func mark(_ milestone: BenchmarkMilestone)
   func recordAudioCaptured(bytes: Int, bufferedBytes: Int)
   func recordAudioSent(bytes: Int)
@@ -216,7 +233,10 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
   }
 
   func begin(
-    enabled: Bool, cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration
+    enabled: Bool,
+    transcriptionConfiguration: TranscriptionConfiguration = TranscriptionConfiguration(
+      provider: .soniox),
+    cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration
   ) {
     guard enabled, active == nil else { return }
     let wallTime = wallNow()
@@ -232,7 +252,11 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
       milestonesMS: [:],
       durationsMS: BenchmarkDurations(),
       workload: BenchmarkWorkload(),
-      stt: BenchmarkSTTMetadata(model: "stt-rt-v5"),
+      stt: BenchmarkSTTMetadata(
+        model: transcriptionConfiguration.modelID,
+        provider: transcriptionConfiguration.provider.rawValue,
+        audioEncoding: transcriptionConfiguration.audioEncoding,
+        zeroDataRetentionRequired: transcriptionConfiguration.zeroDataRetentionRequired),
       cleanup: BenchmarkCleanupMetadata(
         mode: cleanupMode, requestedModel: cleanupConfiguration.model.rawValue,
         requestedReasoningEffort: cleanupConfiguration.reasoningEffort,

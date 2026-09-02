@@ -102,7 +102,8 @@ final class AppModel: ObservableObject {
   }
 
   var readinessComplete: Bool {
-    preferences.shortcut != nil && hasCredential(.soniox)
+    preferences.shortcut != nil
+      && hasCredential(preferences.transcriptionProvider.credentialKind)
       && hasCredential(preferences.cleanupProvider.credentialKind) && permissionsReady
   }
 
@@ -158,7 +159,8 @@ final class AppModel: ObservableObject {
   }
 
   func finishOnboarding(launchAtLogin: Bool) -> OnboardingFinishResult {
-    guard preferences.shortcut != nil, hasCredential(.soniox), hasCredential(.openRouter),
+    guard preferences.shortcut != nil,
+      hasCredential(preferences.transcriptionProvider.credentialKind), hasCredential(.openRouter),
       permissionsReady
     else { return .incomplete }
     guard preferences.setLaunchAtLogin(launchAtLogin) else { return .loginItemFailed }
@@ -210,6 +212,7 @@ final class AppModel: ObservableObject {
   ) -> CleanupConfiguration? {
     switch kind {
     case .soniox: nil
+    case .metaModelAPI: nil
     case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
     case .groq: preferences.cleanupConfiguration(for: .groq)
     }

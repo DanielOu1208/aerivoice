@@ -38,6 +38,7 @@ struct MainAppLoginItemManager: LoginItemManaging {
 @MainActor
 final class AppPreferences: ObservableObject {
   private enum Key {
+    static let transcriptionProvider = "transcriptionProvider"
     static let cleanupMode = "cleanupMode"
     static let cleanupProvider = "cleanupProvider"
     static let cleanupModel = "cleanupModel"
@@ -53,6 +54,12 @@ final class AppPreferences: ObservableObject {
     static let latencyLogging = "latencyLogging"
   }
 
+  @Published var transcriptionProvider: TranscriptionProvider {
+    didSet {
+      defaults.set(transcriptionProvider.rawValue, forKey: Key.transcriptionProvider)
+      RealtimeTranscriptionPrewarmer.prewarm(provider: transcriptionProvider)
+    }
+  }
   @Published var cleanupMode: CleanupMode {
     didSet { defaults.set(cleanupMode.rawValue, forKey: Key.cleanupMode) }
   }
@@ -131,6 +138,9 @@ final class AppPreferences: ObservableObject {
   ) {
     self.defaults = defaults
     self.loginItemManager = loginItemManager
+    transcriptionProvider =
+      TranscriptionProvider(
+        rawValue: defaults.string(forKey: Key.transcriptionProvider) ?? "") ?? .soniox
     cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .faithful
     let legacyModel =
       CleanupModel(rawValue: defaults.string(forKey: Key.cleanupModel) ?? "") ?? .defaultModel
@@ -168,6 +178,7 @@ final class AppPreferences: ObservableObject {
     }
     defaults.set(initialProvider.rawValue, forKey: Key.cleanupProvider)
     defaults.set(initialModel.rawValue, forKey: Key.cleanupModel)
+    defaults.set(transcriptionProvider.rawValue, forKey: Key.transcriptionProvider)
     persistModels()
   }
 

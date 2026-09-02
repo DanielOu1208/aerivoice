@@ -46,11 +46,14 @@ final class DictationCoordinator: ObservableObject {
   private let cuePlayer: SoundCuePlaying
 
   private var sessionID: DictationSessionID?
+  private var activeTranscriptionConfiguration: TranscriptionConfiguration?
   private var activeCleanupSettings: ActiveCleanupSettings?
   private var state = NotchState(phase: .idle)
   private var bufferedAudio: [Data] = []
   private var bufferedBytes = 0
   private var connected = false
+  private var connectionTask: Task<Void, Never>?
+  private var connectionTaskID: UUID?
   private var drainTask: Task<Void, Never>?
   private var limitTask: Task<Void, Never>?
   private var audioStopped = true
@@ -70,7 +73,7 @@ final class DictationCoordinator: ObservableObject {
   init(
     preferences: AppPreferences, credentials: CredentialReading,
     audio: AudioCapturing = AudioCaptureService(),
-    transcriber: RealtimeTranscribing = SonioxRealtimeClient(),
+    transcriber: RealtimeTranscribing = RealtimeTranscriptionRouter(),
     cleaner: CleaningText = CleanupClientRouter(), muter: OutputMuting = OutputMuteController(),
     inserter: TextInserting = TextInsertionService(), notch: NotchPresenting = NotchPresenter(),
     benchmark: LatencyBenchmarkRecording = LatencyBenchmarkRecorder(),
@@ -94,7 +97,9 @@ final class DictationCoordinator: ObservableObject {
     transcriber.onTranscript = { [weak self] update in self?.updateTranscript(update) }
     transcriber.onError = { [weak self] error in
       guard let self, let id = self.sessionID else { return }
-      self.fail(error, id: id, stage: .sttStream)
+      let stage: BenchmarkFailureStage =
+        self.phase == .starting && self.audioStopped ? .sttSetup : .sttStream
+      self.fail(error, id: id, stage: stage)
     }
   }
 
@@ -102,12 +107,16 @@ final class DictationCoordinator: ObservableObject {
     switch phase {
     case .idle, .success, .error:
       guard startTask == nil else { return }
+      let transcriptionConfiguration = TranscriptionConfiguration(
+        provider: preferences.transcriptionProvider)
       let cleanupConfiguration = preferences.cleanupConfiguration
       let cleanupMode = preferences.cleanupMode
+      activeTranscriptionConfiguration = transcriptionConfiguration
       activeCleanupSettings = ActiveCleanupSettings(
         mode: cleanupMode, configuration: cleanupConfiguration)
       benchmark.begin(
-        enabled: preferences.latencyLogging, cleanupMode: cleanupMode,
+        enabled: preferences.latencyLogging,
+        transcriptionConfiguration: transcriptionConfiguration, cleanupMode: cleanupMode,
         cleanupConfiguration: cleanupConfiguration)
       let generation = UUID()
       lifecycleGeneration = generation
@@ -117,7 +126,7 @@ final class DictationCoordinator: ObservableObject {
         if self?.lifecycleGeneration == generation { self?.startTask = nil }
       }
     case .starting:
-      if sessionID == nil {
+      if audioStopped {
         cancel()
       } else {
         beginStopTask()
@@ -144,7 +153,7 @@ final class DictationCoordinator: ObservableObject {
     guard self.lifecycleGeneration == lifecycleGeneration else { return }
     switch phase {
     case .starting:
-      if sessionID == nil {
+      if audioStopped {
         cancel()
       } else {
         beginStopTask()
@@ -165,6 +174,7 @@ final class DictationCoordinator: ObservableObject {
     lifecycleGeneration = cancellationGeneration
     startTask?.cancel()
     startTask = nil
+    cancelConnection()
     stopTask?.cancel()
     stopTask = nil
     stopTaskID = nil
@@ -177,6 +187,7 @@ final class DictationCoordinator: ObservableObject {
     stopAudioIfNeeded(playCue: false)
     benchmark.finish(
       .cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
     phase = .error("Cancelled")
     state.phase = phase
@@ -194,8 +205,18 @@ final class DictationCoordinator: ObservableObject {
 
   private func start(generation: UUID) async {
     guard phase == .starting else { return }
-    guard let sonioxKey = credentials.value(for: .soniox), !sonioxKey.isEmpty else {
-      showReadinessError(AppError.missingSonioxKey, category: .missingCredential)
+    guard let transcriptionConfiguration = activeTranscriptionConfiguration else {
+      showReadinessError(
+        AppError.provider("Transcription settings were unavailable."), category: .unknown)
+      return
+    }
+    let transcriptionProvider = transcriptionConfiguration.provider
+    guard
+      let transcriptionKey = credentials.value(for: transcriptionProvider.credentialKind),
+      !transcriptionKey.isEmpty
+    else {
+      showReadinessError(
+        transcriptionProvider.missingCredentialError, category: .missingCredential)
       return
     }
     guard let cleanupSettings = activeCleanupSettings else {
@@ -223,18 +244,24 @@ final class DictationCoordinator: ObservableObject {
 
     state = NotchState(phase: .starting)
     notch.present(state: state)
+    let id = DictationSessionID()
+    sessionID = id
+    bufferedAudio.removeAll(keepingCapacity: true)
+    bufferedBytes = 0
+    connected = false
+
+    if transcriptionProvider == .meta {
+      beginTranscriberConnection(
+        configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
+    }
+
     play(.start)
     if preferences.soundCues { try? await Task.sleep(for: cuePlayer.startCaptureDelay) }
     guard phase == .starting, lifecycleGeneration == generation, !Task.isCancelled else { return }
 
-    let id = DictationSessionID()
-    sessionID = id
     state.warning = preferences.muteOutput && !muter.mute() ? "Output could not be muted" : nil
     notch.present(state: state)
     audioStopped = false
-    bufferedAudio.removeAll(keepingCapacity: true)
-    bufferedBytes = 0
-    connected = false
     do {
       try audio.start()
       benchmark.mark(.captureStarted)
@@ -244,21 +271,54 @@ final class DictationCoordinator: ObservableObject {
     }
     beginLimitTimer(id: id)
 
+    if transcriptionProvider != .meta {
+      guard
+        await connectTranscriber(
+          configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
+      else { return }
+    }
+
+    guard sessionID == id, phase == .starting || phase == .processing else { return }
+    if phase == .starting {
+      phase = .recording
+      state.phase = .recording
+      notch.present(state: state)
+    }
+    drain()
+  }
+
+  private func beginTranscriberConnection(
+    configuration: TranscriptionConfiguration, apiKey: String, id: DictationSessionID
+  ) {
+    guard connectionTask == nil else { return }
+    let taskID = UUID()
+    connectionTaskID = taskID
+    connectionTask = Task { @MainActor [weak self] in
+      guard let self, !Task.isCancelled, self.sessionID == id else { return }
+      _ = await self.connectTranscriber(configuration: configuration, apiKey: apiKey, id: id)
+      guard self.connectionTaskID == taskID else { return }
+      self.connectionTask = nil
+      self.connectionTaskID = nil
+    }
+  }
+
+  private func connectTranscriber(
+    configuration: TranscriptionConfiguration, apiKey: String, id: DictationSessionID
+  ) async -> Bool {
     do {
       try await transcriber.connect(
-        apiKey: sonioxKey, vocabulary: VocabularyNormalizer.normalize(preferences.vocabulary),
-        sessionID: id)
+        configuration: configuration, apiKey: apiKey,
+        vocabulary: VocabularyNormalizer.normalize(preferences.vocabulary), sessionID: id)
+      guard sessionID == id,
+        phase == .starting || phase == .recording || phase == .processing
+      else { return false }
       benchmark.mark(.sttConfigured)
-      guard sessionID == id, phase == .starting || phase == .processing else { return }
       connected = true
-      if phase == .starting {
-        phase = .recording
-        state.phase = .recording
-        notch.present(state: state)
-      }
       drain()
+      return true
     } catch {
-      fail(error, id: id, stage: .sttSetup)
+      fail(error, id: id, stage: audioStopped ? .sttSetup : .sttStream)
+      return false
     }
   }
 
@@ -356,7 +416,13 @@ final class DictationCoordinator: ObservableObject {
 
   private func enqueue(_ data: Data) {
     guard phase == .starting || phase == .recording else { return }
-    let maximumBytes = connected ? 512_000 : 96_000
+    let maximumBytes: Int
+    if connected {
+      maximumBytes =
+        activeTranscriptionConfiguration?.provider.connectedBufferLimitBytes ?? 512_000
+    } else {
+      maximumBytes = 96_000
+    }
     guard bufferedBytes + data.count <= maximumBytes else {
       if let id = sessionID {
         fail(
@@ -383,7 +449,9 @@ final class DictationCoordinator: ObservableObject {
         let data = self.bufferedAudio.removeFirst()
         self.bufferedBytes -= data.count
         do {
-          try await self.transcriber.send(data)
+          try await self.transcriber.send(
+            RealtimeAudioFrame(
+              audio: data, queuedBytesAfterFrame: self.bufferedBytes))
           self.benchmark.recordAudioSent(bytes: data.count)
         } catch {
           guard self.sessionID == id else { break }
@@ -455,6 +523,12 @@ final class DictationCoordinator: ObservableObject {
     drainTaskID = nil
   }
 
+  private func cancelConnection() {
+    connectionTask?.cancel()
+    connectionTask = nil
+    connectionTaskID = nil
+  }
+
   private func fail(
     _ error: Error, id: DictationSessionID, stage: BenchmarkFailureStage,
     category explicitCategory: BenchmarkFailureCategory? = nil
@@ -482,12 +556,14 @@ final class DictationCoordinator: ObservableObject {
 
   private func finishSession(id: DictationSessionID) {
     guard sessionID == id else { return }
+    cancelConnection()
     cancelDrain()
     stopAudioIfNeeded(playCue: false)
     connected = false
     bufferedAudio.removeAll()
     bufferedBytes = 0
     sessionID = nil
+    activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
     let generation = lifecycleGeneration
     Task { @MainActor [weak self] in
@@ -499,6 +575,7 @@ final class DictationCoordinator: ObservableObject {
 
   private func showReadinessError(_ error: Error, category: BenchmarkFailureCategory) {
     benchmark.finish(.failed, stage: .readiness, category: category, httpStatus: nil)
+    activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
     let generation = lifecycleGeneration
     phase = .error(error.localizedDescription)
@@ -528,7 +605,7 @@ final class DictationCoordinator: ObservableObject {
     if error is URLError { return (.network, nil) }
     if let error = error as? AppError {
       switch error {
-      case .missingSonioxKey, .missingOpenRouterKey, .missingGroqKey:
+      case .missingSonioxKey, .missingMetaModelAPIKey, .missingOpenRouterKey, .missingGroqKey:
         return (.missingCredential, nil)
       case .microphoneUnavailable: return (.microphonePermission, nil)
       case .connectionTimeout: return (.connectionTimeout, nil)

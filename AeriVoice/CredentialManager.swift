@@ -27,8 +27,22 @@ struct LiveCredentialValidator: CredentialValidating {
     case .soniox:
       let client = SonioxRealtimeClient()
       defer { client.cancel() }
-      try await client.connect(apiKey: value, vocabulary: [], sessionID: DictationSessionID())
-      try await client.send(Data(repeating: 0, count: 3_200))
+      try await client.connect(
+        configuration: TranscriptionConfiguration(provider: .soniox), apiKey: value,
+        vocabulary: [], sessionID: DictationSessionID())
+      try await client.send(
+        RealtimeAudioFrame(
+          audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
+      do { _ = try await client.finish() } catch AppError.emptyTranscript {}
+    case .metaModelAPI:
+      let client = MetaRealtimeClient()
+      defer { client.cancel() }
+      try await client.connect(
+        configuration: TranscriptionConfiguration(provider: .meta), apiKey: value,
+        vocabulary: [], sessionID: DictationSessionID())
+      try await client.send(
+        RealtimeAudioFrame(
+          audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
       do { _ = try await client.finish() } catch AppError.emptyTranscript {}
     }
   }

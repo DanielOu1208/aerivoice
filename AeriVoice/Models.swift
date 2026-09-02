@@ -31,6 +31,68 @@ struct RealtimeTranscriptUpdate: Equatable, Sendable {
   let totalAudioProcessedMS: Double?
 }
 
+struct RealtimeAudioFrame: Equatable, Sendable {
+  let audio: Data
+  let queuedBytesAfterFrame: Int
+}
+
+enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendable {
+  case soniox
+  case meta
+
+  var id: Self { self }
+
+  var displayName: String {
+    switch self {
+    case .soniox: "Soniox"
+    case .meta: "Meta"
+    }
+  }
+
+  var modelDisplayName: String {
+    switch self {
+    case .soniox: "Soniox Realtime"
+    case .meta: "Muse Voice Transcribe 1.0"
+    }
+  }
+
+  var modelID: String {
+    switch self {
+    case .soniox: "stt-rt-v5"
+    case .meta: "muse-voice-transcribe-1.0"
+    }
+  }
+
+  var credentialKind: CredentialKind {
+    switch self {
+    case .soniox: .soniox
+    case .meta: .metaModelAPI
+    }
+  }
+
+  var missingCredentialError: AppError {
+    switch self {
+    case .soniox: .missingSonioxKey
+    case .meta: .missingMetaModelAPIKey
+    }
+  }
+
+  var connectedBufferLimitBytes: Int {
+    switch self {
+    case .soniox: 512_000
+    case .meta: 160_000
+    }
+  }
+}
+
+struct TranscriptionConfiguration: Equatable, Sendable {
+  let provider: TranscriptionProvider
+
+  var modelID: String { provider.modelID }
+  var audioEncoding: String { "pcm_s16le_16000" }
+  var zeroDataRetentionRequired: Bool? { provider == .meta ? true : nil }
+}
+
 struct TranscriptAssembler: Sendable {
   private(set) var confirmed = ""
 
@@ -373,8 +435,11 @@ protocol AudioCapturing: AnyObject {
 protocol RealtimeTranscribing: AnyObject {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)? { get set }
   var onError: ((Error) -> Void)? { get set }
-  func connect(apiKey: String, vocabulary: [String], sessionID: DictationSessionID) async throws
-  func send(_ audio: Data) async throws
+  func connect(
+    configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String],
+    sessionID: DictationSessionID
+  ) async throws
+  func send(_ frame: RealtimeAudioFrame) async throws
   func finish() async throws -> String
   func cancel()
 }
@@ -446,6 +511,7 @@ struct NotchState: Equatable, Sendable {
 
 enum AppError: LocalizedError {
   case missingSonioxKey
+  case missingMetaModelAPIKey
   case missingOpenRouterKey
   case missingGroqKey
   case microphoneUnavailable
@@ -457,11 +523,12 @@ enum AppError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .missingSonioxKey: "Add and verify a Soniox API key in Settings."
+    case .missingMetaModelAPIKey: "Add and verify a Meta Model API key in Settings."
     case .missingOpenRouterKey: "Add and verify an OpenRouter API key in Settings."
     case .missingGroqKey: "Add and verify a Groq API key in Settings."
     case .microphoneUnavailable: "Microphone access is required."
-    case .connectionTimeout: "Soniox did not connect in time."
-    case .finalizeTimeout: "Soniox did not finish in time."
+    case .connectionTimeout: "The transcription provider did not connect in time."
+    case .finalizeTimeout: "The transcription provider did not finish in time."
     case .emptyTranscript: "No speech detected."
     case .provider(let message): message
     }

@@ -31,7 +31,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
 
   @MainActor static func recommended(for model: AppModel) -> Self {
     if model.preferences.shortcut == nil { return .general }
-    if !model.hasCredential(.soniox)
+    if !model.hasCredential(model.preferences.transcriptionProvider.credentialKind)
       || !model.hasCredential(model.preferences.cleanupProvider.credentialKind)
     {
       return .providers

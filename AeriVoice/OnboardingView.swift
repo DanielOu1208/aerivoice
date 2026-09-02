@@ -17,20 +17,20 @@ enum OnboardingStep: Int, CaseIterable {
 }
 
 struct OnboardingReadiness: Equatable, Sendable {
-  let hasSonioxCredential: Bool
+  let hasTranscriptionCredential: Bool
   let hasOpenRouterCredential: Bool
   let hasPermissions: Bool
   let hasShortcut: Bool
 
   var recommendedStep: OnboardingStep {
-    if !hasSonioxCredential || !hasOpenRouterCredential { return .providers }
+    if !hasTranscriptionCredential || !hasOpenRouterCredential { return .providers }
     if !hasPermissions { return .permissions }
     return .shortcut
   }
 
   func canAdvance(from step: OnboardingStep) -> Bool {
     switch step {
-    case .providers: hasSonioxCredential && hasOpenRouterCredential
+    case .providers: hasTranscriptionCredential && hasOpenRouterCredential
     case .permissions: hasPermissions
     case .shortcut: hasShortcut
     }
@@ -120,10 +120,18 @@ struct OnboardingView: View {
     switch step {
     case .providers:
       Form {
-        Section {
-          CredentialEditorView(model: model, kind: .soniox, allowsRemoval: false)
+        Section("Transcription provider") {
+          Picker("Provider", selection: $preferences.transcriptionProvider) {
+            ForEach(TranscriptionProvider.allCases) { provider in
+              Text(provider.displayName).tag(provider)
+            }
+          }
+          CredentialEditorView(
+            model: model, kind: preferences.transcriptionProvider.credentialKind,
+            allowsRemoval: false)
+            .id(preferences.transcriptionProvider)
         }
-        Section {
+        Section("AI cleanup") {
           CredentialEditorView(model: model, kind: .openRouter, allowsRemoval: false)
         }
         Section {
@@ -227,7 +235,7 @@ struct OnboardingView: View {
   private var stepSubtitle: String {
     switch step {
     case .providers:
-      "AeriVoice uses Soniox for transcription and OpenRouter for stable AI cleanup."
+      "Choose Soniox or Meta for transcription. OpenRouter provides stable AI cleanup."
     case .permissions:
       "You stay in control of when AeriVoice can listen and insert text."
     case .shortcut:
@@ -264,7 +272,8 @@ struct OnboardingView: View {
 
   @MainActor private static func readiness(for model: AppModel) -> OnboardingReadiness {
     OnboardingReadiness(
-      hasSonioxCredential: model.hasCredential(.soniox),
+      hasTranscriptionCredential: model.hasCredential(
+        model.preferences.transcriptionProvider.credentialKind),
       hasOpenRouterCredential: model.hasCredential(.openRouter),
       hasPermissions: model.permissionsReady,
       hasShortcut: model.preferences.shortcut != nil)

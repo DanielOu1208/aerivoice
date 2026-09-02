@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     configureMenu()
     configureNotifications()
     observeLifecycle()
+    RealtimeTranscriptionPrewarmer.prewarm(provider: model.preferences.transcriptionProvider)
     if !model.setupComplete {
       openSettings()
     }
@@ -79,6 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     let workspace = NSWorkspace.shared.notificationCenter
     workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) {
       [weak self] _ in Task { @MainActor in self?.model.coordinator.cancel() }
+    }
+    workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) {
+      [weak self] _ in
+      guard let self else { return }
+      RealtimeTranscriptionPrewarmer.prewarm(provider: self.model.preferences.transcriptionProvider)
     }
     DistributedNotificationCenter.default().addObserver(
       forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main

@@ -5,8 +5,8 @@
 # AeriVoice
 
 AeriVoice is a fast, native macOS menu-bar dictation app. It streams speech to
-Soniox for transcription, refines the transcript with an AI cleanup provider,
-and inserts the result into the app you are using.
+your selected transcription provider, refines the transcript with an AI cleanup
+provider, and inserts the result into the app you are using.
 
 > [!WARNING]
 > AeriVoice is beta software for power users. It requires your own paid or
@@ -14,7 +14,8 @@ and inserts the result into the app you are using.
 
 ## What it does
 
-- Realtime Soniox transcription with a compact notch-style live transcript.
+- Realtime transcription through Soniox or Meta Muse Voice Transcribe, with a
+  compact notch-style live transcript. Soniox remains the default.
 - Faithful or polished AI cleanup through OpenRouter, with optional experimental
   direct Groq cleanup.
 - Gemini 3.5 Flash Lite with Minimal reasoning as the default for new installs.
@@ -27,12 +28,15 @@ and inserts the result into the app you are using.
 ## Requirements
 
 - An Apple Silicon Mac running macOS 26 or newer.
-- A [Soniox API key](https://console.soniox.com/) for realtime transcription.
+- A [Soniox API key](https://console.soniox.com/) or a
+  [Meta Model API key](https://dev.meta.ai/docs/speech-to-text) for realtime
+  transcription.
 - An [OpenRouter API key](https://openrouter.ai/settings/keys) for the default
   cleanup provider.
 - Microphone and Accessibility permission.
 
-Groq is optional and experimental. You can configure it after onboarding.
+Meta transcription and direct Groq cleanup are optional. You can configure them
+during onboarding or later in Settings.
 
 ## Install the beta
 
@@ -79,7 +83,8 @@ xcodebuild \
 AeriVoice has no account system or first-party server. Audio, transcripts, and
 API keys still cross important trust boundaries:
 
-- Microphone audio and vocabulary hints are sent to Soniox.
+- Microphone audio and vocabulary hints are sent to the selected transcription
+  provider: Soniox or Meta. Meta sessions request zero data retention.
 - The completed transcript is sent to OpenRouter or Groq when cleanup is used.
 - API keys are stored in the macOS Keychain.
 - Latency diagnostics stay on this Mac and exclude transcript text, vocabulary,

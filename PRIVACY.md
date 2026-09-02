@@ -1,8 +1,8 @@
 # AeriVoice Privacy
 
-This document describes the data flow in AeriVoice `0.1.0-beta.1`. AeriVoice
-does not operate an account system, analytics service, or first-party backend.
-It does use third-party transcription and AI providers selected by the user.
+This document describes the current AeriVoice data flow. AeriVoice does not
+operate an account system, analytics service, or first-party backend. It does
+use third-party transcription and AI providers selected by the user.
 
 ## Data sent to providers
 
@@ -13,11 +13,24 @@ realtime 16 kHz mono PCM stream. The Soniox API key, a random session reference,
 and any vocabulary hints configured in AeriVoice are sent with the stream.
 Soniox returns partial and final transcript tokens.
 
+### Meta Model API
+
+When Meta is selected for transcription, AeriVoice sends microphone audio as a
+realtime 16 kHz mono PCM stream to Meta's Model API. The Meta Model API key, a
+random session reference, and any vocabulary hints configured in AeriVoice are
+sent with the stream. Meta's `muse-voice-transcribe-1.0` model returns
+cumulative partial transcripts and a final transcript.
+
+AeriVoice sets Meta's zero-data-retention override for every session. Meta's
+current account controls, enforcement, abuse monitoring, and terms remain
+controlled by Meta; review them before enabling this provider.
+
 ### OpenRouter or Groq
 
-After Soniox finalizes a transcript, AeriVoice sends that transcript to the
-selected cleanup provider. The request includes the selected model, reasoning
-level, cleanup instructions, and the provider API key.
+After the selected transcription provider finalizes a transcript, AeriVoice
+sends that transcript to the selected cleanup provider. The request includes
+the selected model, reasoning level, cleanup instructions, and the provider API
+key.
 
 OpenRouter can route requests to an underlying model provider. AeriVoice asks
 OpenRouter for zero-data-retention routing for its Gemini and GPT-OSS choices,
@@ -26,7 +39,7 @@ underlying provider. Direct Groq cleanup is experimental; review Groq's current
 data controls before enabling it.
 
 Provider pricing, retention, abuse monitoring, and privacy terms can change.
-Review the current Soniox, OpenRouter, and Groq policies for your accounts.
+Review the current Soniox, Meta, OpenRouter, and Groq policies for your accounts.
 
 ## Data stored on the Mac
 
