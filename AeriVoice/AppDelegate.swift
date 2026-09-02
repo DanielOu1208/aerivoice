@@ -4,7 +4,9 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
+  UNUserNotificationCenterDelegate
+{
   let model = AppModel()
   private var statusItem: NSStatusItem?
   private var settingsWindow: NSWindow?
@@ -12,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    NSApp.mainMenu = Self.makeMainMenu()
     configureMenu()
     configureNotifications()
     observeLifecycle()
@@ -90,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     if model.preferences.onboardingComplete, !model.readinessComplete {
       model.settingsDestinationRequest = SettingsDestination.recommended(for: model)
     }
+    setSettingsWindowVisible(true)
     let window: NSWindow
     if let settingsWindow {
       window = settingsWindow
@@ -101,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
       window.title = "AeriVoice Settings"
       window.contentMinSize = NSSize(width: 700, height: 560)
       window.isReleasedWhenClosed = false
+      window.delegate = self
       settingsWindow = window
       window.contentView = NSHostingView(
         rootView: SettingsRootView(model: model) { [weak window] in
@@ -110,6 +115,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
     NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+    setSettingsWindowVisible(false)
+  }
+
+  private func setSettingsWindowVisible(_ isVisible: Bool) {
+    NSApp.setActivationPolicy(Self.activationPolicy(settingsWindowVisible: isVisible))
+  }
+
+  static func activationPolicy(settingsWindowVisible: Bool) -> NSApplication.ActivationPolicy {
+    settingsWindowVisible ? .regular : .accessory
+  }
+
+  static func makeMainMenu() -> NSMenu {
+    let mainMenu = NSMenu()
+
+    let applicationMenuItem = NSMenuItem(title: "AeriVoice", action: nil, keyEquivalent: "")
+    let applicationMenu = NSMenu(title: "AeriVoice")
+    applicationMenu.addItem(
+      withTitle: "About AeriVoice",
+      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+    applicationMenu.addItem(.separator())
+    applicationMenu.addItem(
+      withTitle: "Hide AeriVoice", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    let hideOthers = applicationMenu.addItem(
+      withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
+      keyEquivalent: "h")
+    hideOthers.keyEquivalentModifierMask = [.command, .option]
+    applicationMenu.addItem(
+      withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)),
+      keyEquivalent: "")
+    applicationMenu.addItem(.separator())
+    applicationMenu.addItem(
+      withTitle: "Quit AeriVoice", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    mainMenu.addItem(applicationMenuItem)
+    mainMenu.setSubmenu(applicationMenu, for: applicationMenuItem)
+
+    let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+    let editMenu = NSMenu(title: "Edit")
+    editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+    let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+    redo.keyEquivalentModifierMask = [.command, .shift]
+    editMenu.addItem(.separator())
+    editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    editMenu.addItem(
+      withTitle: "Select All", action: #selector(NSStandardKeyBindingResponding.selectAll(_:)),
+      keyEquivalent: "a")
+    mainMenu.addItem(editMenuItem)
+    mainMenu.setSubmenu(editMenu, for: editMenuItem)
+
+    return mainMenu
   }
 
   nonisolated func userNotificationCenter(

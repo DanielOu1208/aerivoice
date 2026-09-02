@@ -85,6 +85,7 @@ final class AppModel: ObservableObject {
     NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
       .sink { [weak self] _ in
         guard let self else { return }
+        self.credentialManager.refreshStoredCredentials()
         self.permissionRefresh += 1
         guard AXIsProcessTrusted(), let shortcut = self.preferences.shortcut else { return }
         self.shortcutMonitor.start(
@@ -164,10 +165,6 @@ final class AppModel: ObservableObject {
       _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
     permissionRefresh += 1
-    if let shortcut = preferences.shortcut {
-      shortcutMonitor.start(
-        definition: shortcut, activationMode: preferences.shortcutActivationMode)
-    }
   }
 
   func requestMicrophonePermissionIfNeeded() async {

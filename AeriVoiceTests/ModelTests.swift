@@ -6,15 +6,26 @@ import XCTest
 @testable import AeriVoice
 
 final class ModelTests: XCTestCase {
-  func testKeychainServiceIsNamespacedByBundleIdentifier() {
+  func testKeychainServiceSeparatesReleaseAndDebugCredentials() {
     XCTAssertEqual(
-      KeychainStore.serviceName(bundleIdentifier: "com.danielou.AeriVoice"),
-      "com.danielou.AeriVoice.credentials")
+      KeychainStore.serviceName(
+        bundleIdentifier: "com.danielou.AeriVoice", namespace: .releaseV2),
+      "com.danielou.AeriVoice.credentials.v2")
     XCTAssertEqual(
-      KeychainStore.serviceName(bundleIdentifier: "com.danielou.AeriVoice.GroqQA"),
-      "com.danielou.AeriVoice.GroqQA.credentials")
+      KeychainStore.serviceName(
+        bundleIdentifier: "com.danielou.AeriVoice", namespace: .development),
+      "com.danielou.AeriVoice.credentials.development")
     XCTAssertEqual(
-      KeychainStore.serviceName(bundleIdentifier: nil), "com.danielou.AeriVoice.credentials")
+      KeychainStore.serviceName(bundleIdentifier: nil, namespace: .releaseV2),
+      "com.danielou.AeriVoice.credentials.v2")
+  }
+
+  func testCurrentKeychainNamespaceMatchesBuildConfiguration() {
+    #if AERIVOICE_DISTRIBUTION
+      XCTAssertEqual(CredentialNamespace.current.rawValue, "credentials.v2")
+    #else
+      XCTAssertEqual(CredentialNamespace.current.rawValue, "credentials.development")
+    #endif
   }
 
   func testCleanupModelCatalogAndCapabilities() {

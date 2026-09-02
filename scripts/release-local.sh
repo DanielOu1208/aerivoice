@@ -95,6 +95,7 @@ xcodebuild \
   DEVELOPMENT_TEAM="$development_team" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$signing_identity" \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) AERIVOICE_DISTRIBUTION' \
   OTHER_CODE_SIGN_FLAGS="--timestamp" \
   archive
 

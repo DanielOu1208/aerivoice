@@ -217,7 +217,7 @@ struct CleanupConfiguration: Equatable, Sendable {
   }
 }
 
-enum ShortcutActivationMode: String, CaseIterable, Identifiable, Sendable {
+enum ShortcutActivationMode: String, CaseIterable, Equatable, Identifiable, Sendable {
   case toggle
   case hybrid
 

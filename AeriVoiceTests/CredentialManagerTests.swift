@@ -3,6 +3,33 @@ import XCTest
 
 @MainActor
 final class CredentialManagerTests: XCTestCase {
+  func testCredentialPresenceUsesInitialSnapshotWithoutRepeatedStoreReads() {
+    let store = FakeCredentialStore(values: [.soniox: "existing"])
+    let manager = CredentialManager(store: store)
+
+    XCTAssertEqual(store.presenceReadCount(for: .soniox), 1)
+    for _ in 0..<50 {
+      XCTAssertTrue(manager.hasCredential(.soniox))
+      XCTAssertFalse(manager.hasCredential(.openRouter))
+    }
+    XCTAssertEqual(store.presenceReadCount(for: .soniox), 1)
+    XCTAssertEqual(store.presenceReadCount(for: .openRouter), 1)
+  }
+
+  func testCredentialRefreshUpdatesSnapshotWithOneReadPerKind() throws {
+    let store = FakeCredentialStore()
+    let manager = CredentialManager(store: store)
+    try store.save("new-key", for: .openRouter)
+
+    manager.refreshStoredCredentials()
+
+    XCTAssertTrue(manager.hasCredential(.openRouter))
+    XCTAssertEqual(manager.status(for: .openRouter), .saved)
+    XCTAssertEqual(store.presenceReadCount(for: .soniox), 2)
+    XCTAssertEqual(store.presenceReadCount(for: .openRouter), 2)
+    XCTAssertEqual(store.presenceReadCount(for: .groq), 2)
+  }
+
   func testCancelPreventsLateSaveWhenValidatorIgnoresCancellation() async throws {
     let store = FakeCredentialStore(values: [.openRouter: "existing"])
     let validator = SuspendedCredentialValidator()
@@ -35,6 +62,7 @@ final class CredentialManagerTests: XCTestCase {
 
     XCTAssertNil(store.value(for: .openRouter))
     XCTAssertEqual(manager.status(for: .openRouter), .missing)
+    XCTAssertFalse(manager.hasCredential(.openRouter))
   }
 
   func testRemovePreventsValidationFromRecreatingCredential() async throws {
@@ -52,6 +80,7 @@ final class CredentialManagerTests: XCTestCase {
 
     XCTAssertNil(store.value(for: .openRouter))
     XCTAssertEqual(manager.status(for: .openRouter), .missing)
+    XCTAssertFalse(manager.hasCredential(.openRouter))
   }
 
   func testFailedReplacementPreservesExistingCredential() async throws {
@@ -63,6 +92,7 @@ final class CredentialManagerTests: XCTestCase {
     try await validator.waitUntilCalled()
 
     XCTAssertEqual(store.value(for: .groq), "existing")
+    XCTAssertTrue(manager.hasCredential(.groq))
     guard case .error(let message) = manager.status(for: .groq) else {
       return XCTFail("Expected failed validation status")
     }
@@ -79,6 +109,7 @@ final class CredentialManagerTests: XCTestCase {
 
     XCTAssertEqual(store.value(for: .soniox), "replacement")
     XCTAssertEqual(manager.status(for: .soniox), .saved)
+    XCTAssertTrue(manager.hasCredential(.soniox))
   }
 }
 
@@ -91,14 +122,23 @@ private extension CleanupConfiguration {
 
 private final class FakeCredentialStore: CredentialStoring, @unchecked Sendable {
   private var values: [CredentialKind: String]
+  private var presenceReadCounts: [CredentialKind: Int] = [:]
 
   init(values: [CredentialKind: String] = [:]) {
     self.values = values
   }
 
   func value(for kind: CredentialKind) -> String? { values[kind] }
+  func containsCredential(_ kind: CredentialKind) -> Bool {
+    presenceReadCounts[kind, default: 0] += 1
+    return values[kind].map { !$0.isEmpty } == true
+  }
   func save(_ value: String, for kind: CredentialKind) throws { values[kind] = value }
   func remove(_ kind: CredentialKind) throws { values[kind] = nil }
+
+  func presenceReadCount(for kind: CredentialKind) -> Int {
+    presenceReadCounts[kind, default: 0]
+  }
 }
 
 private final class SuspendedCredentialValidator: CredentialValidating, @unchecked Sendable {

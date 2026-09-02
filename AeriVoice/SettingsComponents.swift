@@ -1,4 +1,11 @@
+import AppKit
 import SwiftUI
+
+enum CredentialInput {
+  static func pastedValue(from pasteboard: NSPasteboard = .general) -> String? {
+    pasteboard.string(forType: .string)
+  }
+}
 
 struct SettingsPageHeader: View {
   let title: String
@@ -218,9 +225,11 @@ struct CredentialEditorView: View {
   @State private var isReplacing = false
   @State private var confirmsRemoval = false
   @State private var showsErrorDetails = false
+  @FocusState private var isCandidateFocused: Bool
 
   private var status: CredentialStatus { model.credentialStatus(for: kind) }
   private var hasSavedKey: Bool { model.hasCredential(kind) }
+  private var apiKeyLabel: String { "\(kind.label) API key" }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -242,20 +251,42 @@ struct CredentialEditorView: View {
           Spacer()
         }
       } else {
-        HStack {
-          SecureField(hasSavedKey ? "Enter a replacement key" : "API key", text: $candidate)
+        VStack(alignment: .leading, spacing: 6) {
+          Text(apiKeyLabel)
+            .font(.subheadline.weight(.medium))
+          HStack {
+            SecureField(
+              hasSavedKey ? "Paste a replacement key" : "Paste your \(kind.label) key",
+              text: $candidate
+            )
+            .textFieldStyle(.roundedBorder)
             .textContentType(.password)
-          Button(hasSavedKey ? "Verify & Replace" : "Verify & Save") { verifyAndSave() }
-            .disabled(
-              candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || status == .validating)
-          if hasSavedKey || status == .validating {
-            Button("Cancel") {
-              model.cancelCredentialValidation(kind)
-              candidate = ""
-              isReplacing = false
+            .focused($isCandidateFocused)
+            .accessibilityLabel(apiKeyLabel)
+            Button {
+              pasteCredential()
+            } label: {
+              Label("Paste", systemImage: "doc.on.clipboard")
+            }
+            .help("Paste the \(kind.label) API key from the clipboard")
+            .disabled(status == .validating)
+            Button(hasSavedKey ? "Verify & Replace" : "Verify & Save") { verifyAndSave() }
+              .disabled(
+                candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  || status == .validating)
+            if hasSavedKey || status == .validating {
+              Button("Cancel") {
+                model.cancelCredentialValidation(kind)
+                candidate = ""
+                isReplacing = false
+              }
             }
           }
+          Text(
+            "The key stays hidden and is saved to your Mac’s Keychain only after verification."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
         }
       }
 
@@ -337,6 +368,12 @@ struct CredentialEditorView: View {
 
   private func verifyAndSave() {
     model.validateAndSave(candidate, kind: kind)
+  }
+
+  private func pasteCredential() {
+    guard let clipboardValue = CredentialInput.pastedValue() else { return }
+    candidate = clipboardValue
+    isCandidateFocused = true
   }
 }
 

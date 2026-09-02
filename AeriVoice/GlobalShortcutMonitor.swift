@@ -99,6 +99,11 @@ final class GlobalShortcutMonitor {
   private var heldLifecycleGeneration: UUID?
 
   func start(definition: ShortcutDefinition, activationMode: ShortcutActivationMode) {
+    if self.definition == definition, self.activationMode == activationMode, let tap,
+      CFMachPortIsValid(tap)
+    {
+      return
+    }
     stop()
     self.definition = definition
     self.activationMode = activationMode
@@ -133,6 +138,7 @@ final class GlobalShortcutMonitor {
     if let tap { CFMachPortInvalidate(tap) }
     source = nil
     tap = nil
+    definition = nil
     resetPressedState()
   }
 

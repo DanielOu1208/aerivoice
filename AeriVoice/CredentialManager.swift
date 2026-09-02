@@ -40,6 +40,7 @@ final class CredentialManager: ObservableObject {
 
   private let store: CredentialStoring
   private let validator: CredentialValidating
+  private var storedCredentialKinds: Set<CredentialKind>
   private var validationTasks: [CredentialKind: Task<Void, Never>] = [:]
   private var validationGenerations: [CredentialKind: UUID] = [:]
 
@@ -49,15 +50,32 @@ final class CredentialManager: ObservableObject {
   ) {
     self.store = store
     self.validator = validator
+    let loadedCredentialKinds = Set(
+      CredentialKind.allCases.filter(store.containsCredential))
+    storedCredentialKinds = loadedCredentialKinds
     statuses = Dictionary(
       uniqueKeysWithValues: CredentialKind.allCases.map {
-        let hasCredential = store.value(for: $0).map { !$0.isEmpty } == true
-        return ($0, hasCredential ? .saved : .missing)
+        ($0, loadedCredentialKinds.contains($0) ? .saved : .missing)
+      })
+  }
+
+  func refreshStoredCredentials() {
+    let refreshedKinds = Set(CredentialKind.allCases.filter(store.containsCredential))
+    storedCredentialKinds = refreshedKinds
+    statuses = Dictionary(
+      uniqueKeysWithValues: CredentialKind.allCases.map { kind in
+        let currentStatus = statuses[kind] ?? .missing
+        switch currentStatus {
+        case .validating, .error:
+          return (kind, currentStatus)
+        case .saved, .missing:
+          return (kind, refreshedKinds.contains(kind) ? .saved : .missing)
+        }
       })
   }
 
   func hasCredential(_ kind: CredentialKind) -> Bool {
-    store.value(for: kind).map { !$0.isEmpty } == true
+    storedCredentialKinds.contains(kind)
   }
 
   func status(for kind: CredentialKind) -> CredentialStatus {
@@ -83,6 +101,7 @@ final class CredentialManager: ObservableObject {
         try Task.checkCancellation()
         guard let self, self.validationGenerations[kind] == generation else { return }
         try store.save(trimmed, for: kind)
+        self.storedCredentialKinds.insert(kind)
         self.finishValidation(.saved, kind: kind, generation: generation)
       } catch is CancellationError {
         self?.restoreStoredStatusIfCurrent(kind: kind, generation: generation)
@@ -102,6 +121,7 @@ final class CredentialManager: ObservableObject {
     invalidateValidation(kind)
     do {
       try store.remove(kind)
+      storedCredentialKinds.remove(kind)
       statuses[kind] = .missing
     } catch {
       statuses[kind] = .error(error.localizedDescription)
