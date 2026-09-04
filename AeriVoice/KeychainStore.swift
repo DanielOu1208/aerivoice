@@ -6,6 +6,7 @@ enum CredentialKind: String, CaseIterable, Sendable {
   case metaModelAPI
   case openRouter
   case groq
+  case cerebras
 
   var label: String {
     switch self {
@@ -13,6 +14,7 @@ enum CredentialKind: String, CaseIterable, Sendable {
     case .metaModelAPI: "Meta Model API"
     case .openRouter: "OpenRouter"
     case .groq: "Groq"
+    case .cerebras: "Cerebras"
     }
   }
 

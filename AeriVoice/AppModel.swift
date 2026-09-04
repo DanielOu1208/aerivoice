@@ -215,6 +215,7 @@ final class AppModel: ObservableObject {
     case .metaModelAPI: nil
     case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
     case .groq: preferences.cleanupConfiguration(for: .groq)
+    case .cerebras: preferences.cleanupConfiguration(for: .cerebras)
     }
   }
 }

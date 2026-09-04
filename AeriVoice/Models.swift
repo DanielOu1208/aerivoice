@@ -144,20 +144,23 @@ enum CleanupReasoningEffort: String, CaseIterable, Codable, Sendable {
 enum CleanupProvider: String, CaseIterable, Codable, Sendable {
   case openRouter
   case groq
+  case cerebras
 
   var displayName: String {
     switch self {
     case .openRouter: "OpenRouter"
     case .groq: "Groq"
+    case .cerebras: "Cerebras"
     }
   }
 
-  var isExperimental: Bool { self == .groq }
+  var isExperimental: Bool { self == .groq || self == .cerebras }
 
   var credentialKind: CredentialKind {
     switch self {
     case .openRouter: .openRouter
     case .groq: .groq
+    case .cerebras: .cerebras
     }
   }
 
@@ -169,6 +172,7 @@ enum CleanupProvider: String, CaseIterable, Codable, Sendable {
     switch self {
     case .openRouter: .gemini35FlashLite
     case .groq: .qwen38_27BGroq
+    case .cerebras: .qwen38_27BCerebras
     }
   }
 
@@ -176,6 +180,7 @@ enum CleanupProvider: String, CaseIterable, Codable, Sendable {
     switch self {
     case .openRouter: .missingOpenRouterKey
     case .groq: .missingGroqKey
+    case .cerebras: .missingCerebrasKey
     }
   }
 }
@@ -195,6 +200,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
   case gemini35FlashLite = "google/gemini-3.5-flash-lite"
   case gpt56LunaFast = "openai/gpt-5.6-luna"
   case qwen38_27BGroq = "qwen/qwen3.8-27b"
+  case qwen38_27BCerebras = "qwen-3.8-27b"
 
   static let defaultModel: CleanupModel = .gemini35FlashLite
 
@@ -205,6 +211,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     case .gemini35FlashLite: "Gemini 3.5 Flash Lite"
     case .gpt56LunaFast: "GPT-5.6 Luna · Fast"
     case .qwen38_27BGroq: "Qwen 3.8 27B"
+    case .qwen38_27BCerebras: "Qwen 3.8 27B"
     }
   }
 
@@ -214,6 +221,8 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
       .openRouter
     case .qwen38_27BGroq:
       .groq
+    case .qwen38_27BCerebras:
+      .cerebras
     }
   }
 
@@ -227,13 +236,15 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
       [.none, .low, .medium, .high, .xhigh, .max]
     case .qwen38_27BGroq:
       [.none, .low]
+    case .qwen38_27BCerebras:
+      [.none, .low, .medium, .high]
     }
   }
 
   var defaultReasoningEffort: CleanupReasoningEffort {
     switch self {
     case .gemini35FlashLite: .minimal
-    case .qwen38_27BGroq: .none
+    case .qwen38_27BGroq, .qwen38_27BCerebras: .none
     default: .low
     }
   }
@@ -252,7 +263,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
       CleanupProviderRoute(
         only: ["openai/fast"], sort: nil, requiresZeroDataRetention: false,
         allowsFallbacks: false)
-    case .qwen38_27BGroq:
+    case .qwen38_27BGroq, .qwen38_27BCerebras:
       CleanupProviderRoute(
         only: nil, sort: nil, requiresZeroDataRetention: false,
         allowsFallbacks: false)
@@ -514,6 +525,7 @@ enum AppError: LocalizedError {
   case missingMetaModelAPIKey
   case missingOpenRouterKey
   case missingGroqKey
+  case missingCerebrasKey
   case microphoneUnavailable
   case connectionTimeout
   case finalizeTimeout
@@ -526,6 +538,7 @@ enum AppError: LocalizedError {
     case .missingMetaModelAPIKey: "Add and verify a Meta Model API key in Settings."
     case .missingOpenRouterKey: "Add and verify an OpenRouter API key in Settings."
     case .missingGroqKey: "Add and verify a Groq API key in Settings."
+    case .missingCerebrasKey: "Add and verify a Cerebras API key in Settings."
     case .microphoneUnavailable: "Microphone access is required."
     case .connectionTimeout: "The transcription provider did not connect in time."
     case .finalizeTimeout: "The transcription provider did not finish in time."

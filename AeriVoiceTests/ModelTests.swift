@@ -77,12 +77,14 @@ final class ModelTests: XCTestCase {
       CleanupModel.allCases,
       [
         .gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast,
-        .qwen38_27BGroq,
+        .qwen38_27BGroq, .qwen38_27BCerebras,
       ])
     XCTAssertEqual(CleanupModel.defaultModel, .gemini35FlashLite)
     XCTAssertEqual(CleanupProvider.openRouter.defaultModel, .gemini35FlashLite)
     XCTAssertEqual(CleanupProvider.groq.defaultModel, .qwen38_27BGroq)
     XCTAssertEqual(CleanupProvider.groq.models, [.qwen38_27BGroq])
+    XCTAssertEqual(CleanupProvider.cerebras.defaultModel, .qwen38_27BCerebras)
+    XCTAssertEqual(CleanupProvider.cerebras.models, [.qwen38_27BCerebras])
     XCTAssertEqual(
       CleanupModel.gemini37Flash.supportedReasoningEfforts, [.low, .medium, .high])
     XCTAssertEqual(
@@ -96,12 +98,17 @@ final class ModelTests: XCTestCase {
       [.none, .low, .medium, .high, .xhigh, .max])
     XCTAssertEqual(CleanupModel.qwen38_27BGroq.supportedReasoningEfforts, [.none, .low])
     XCTAssertEqual(CleanupModel.qwen38_27BGroq.defaultReasoningEffort, .none)
+    XCTAssertEqual(
+      CleanupModel.qwen38_27BCerebras.supportedReasoningEfforts,
+      [.none, .low, .medium, .high])
+    XCTAssertEqual(CleanupModel.qwen38_27BCerebras.defaultReasoningEffort, .none)
     XCTAssertEqual(CleanupModel.gptOSS120BCerebras.providerRoute.only, ["cerebras/fp16"])
     XCTAssertTrue(CleanupModel.gptOSS120BCerebras.providerRoute.requiresZeroDataRetention)
     XCTAssertEqual(CleanupModel.gpt56LunaFast.providerRoute.only, ["openai/fast"])
     XCTAssertFalse(CleanupModel.gpt56LunaFast.providerRoute.requiresZeroDataRetention)
     XCTAssertFalse(CleanupProvider.openRouter.isExperimental)
     XCTAssertTrue(CleanupProvider.groq.isExperimental)
+    XCTAssertTrue(CleanupProvider.cerebras.isExperimental)
   }
 
   func testOnboardingReadinessRoutesToFirstIncompleteStep() {
@@ -235,6 +242,11 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(preferences.cleanupReasoningEffort, .none)
     preferences.cleanupReasoningEffort = .low
 
+    preferences.cleanupProvider = .cerebras
+    XCTAssertEqual(preferences.cleanupModel, .qwen38_27BCerebras)
+    XCTAssertEqual(preferences.cleanupReasoningEffort, .none)
+    preferences.cleanupReasoningEffort = .high
+
     preferences.cleanupProvider = .openRouter
     XCTAssertEqual(preferences.cleanupModel, .gpt56LunaFast)
     XCTAssertEqual(preferences.cleanupReasoningEffort, .xhigh)
@@ -245,6 +257,9 @@ final class ModelTests: XCTestCase {
     restored.cleanupProvider = .groq
     XCTAssertEqual(restored.cleanupModel, .qwen38_27BGroq)
     XCTAssertEqual(restored.cleanupReasoningEffort, .low)
+    restored.cleanupProvider = .cerebras
+    XCTAssertEqual(restored.cleanupModel, .qwen38_27BCerebras)
+    XCTAssertEqual(restored.cleanupReasoningEffort, .high)
   }
 
   @MainActor
@@ -340,6 +355,9 @@ final class ModelTests: XCTestCase {
       .low)
     XCTAssertEqual(
       CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .medium).reasoningEffort,
+      .none)
+    XCTAssertEqual(
+      CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .max).reasoningEffort,
       .none)
   }
 

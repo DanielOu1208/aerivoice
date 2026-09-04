@@ -383,6 +383,8 @@ struct CredentialEditorView: View {
       "Recommended stable connection for configurable AI transcript cleanup."
     case .groq:
       "Direct Qwen cleanup for evaluation. Models, limits, and behavior may change."
+    case .cerebras:
+      "Fast inference through the Cerebras shared endpoint. Requires a Cerebras API key."
     }
   }
 

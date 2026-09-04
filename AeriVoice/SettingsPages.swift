@@ -191,6 +191,10 @@ struct CleanupSettingsPage: View {
             warning(
               "Groq may temporarily log inputs and outputs for reliability or abuse monitoring. Enable Zero Data Retention in Groq Data Controls to opt out."
             )
+          } else if preferences.cleanupProvider == .cerebras {
+            warning(
+              "Direct Cerebras cleanup is experimental. Shared endpoint availability and usage limits may change."
+            )
           } else if preferences.cleanupModel == .gpt56LunaFast {
             warning(
               "Luna Fast may retain prompts at the provider. Choose another model when zero data retention is required."
@@ -219,7 +223,7 @@ struct CleanupSettingsPage: View {
                 set: { preferences.cleanupReasoningEffort = $0 })
             ) {
               ForEach(preferences.cleanupModel.supportedReasoningEfforts, id: \.self) { effort in
-                Text(effort.displayName).tag(effort)
+                Text(effortDisplayName(for: effort, model: preferences.cleanupModel)).tag(effort)
               }
             }
             .pickerStyle(.menu)
@@ -237,6 +241,13 @@ struct CleanupSettingsPage: View {
       }
       .formStyle(.grouped)
     }
+  }
+
+  private func effortDisplayName(for effort: CleanupReasoningEffort, model: CleanupModel) -> String {
+    if model == .qwen38_27BCerebras && effort == .none {
+      return "None (Recommended)"
+    }
+    return effort.displayName
   }
 
   private var cleanupModeDescription: String {
@@ -284,6 +295,9 @@ struct ProviderSettingsPage: View {
         }
         Section {
           CredentialEditorView(model: model, kind: .groq)
+        }
+        Section {
+          CredentialEditorView(model: model, kind: .cerebras)
         }
       }
       .formStyle(.grouped)

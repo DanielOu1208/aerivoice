@@ -17,8 +17,9 @@ provider, and inserts the result into the app you are using.
 - Realtime transcription through Soniox or Meta Muse Voice Transcribe, with a
   compact notch-style live transcript. Soniox remains the default.
 - Faithful or polished AI cleanup through OpenRouter, with optional experimental
-  direct Groq cleanup.
-- Gemini 3.5 Flash Lite with Minimal reasoning as the default for new installs.
+  direct Groq and Cerebras cleanup.
+- Gemini 3.5 Flash Lite with Minimal reasoning as the default for new installs,
+  with Qwen 3.8 27B available directly on Cerebras's ultra-fast shared endpoint.
 - A global tap-or-hold shortcut, vocabulary hints, optional sound cues, and
   launch at login.
 - Accessibility-aware insertion into native and Electron apps, with a safe
@@ -35,17 +36,17 @@ provider, and inserts the result into the app you are using.
   cleanup provider.
 - Microphone and Accessibility permission.
 
-Meta transcription and direct Groq cleanup are optional. You can configure them
-during onboarding or later in Settings.
+Meta transcription, direct Groq cleanup, and direct Cerebras cleanup are optional.
+You can configure them in Settings.
 
 ## Install the beta
 
-1. Download `AeriVoice-v0.1.0-beta.3-arm64.dmg` and its `.sha256` file from the
+1. Download `AeriVoice-v0.1.0-beta.4-arm64.dmg` and its `.sha256` file from the
    [latest GitHub release](https://github.com/DanielOu1208/aerivoice/releases).
 2. From the download directory, verify the artifact:
 
    ```sh
-   shasum -a 256 -c AeriVoice-v0.1.0-beta.3-arm64.dmg.sha256
+   shasum -a 256 -c AeriVoice-v0.1.0-beta.4-arm64.dmg.sha256
    ```
 
 3. Open the DMG and drag AeriVoice to Applications.

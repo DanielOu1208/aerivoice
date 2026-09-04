@@ -28,6 +28,7 @@ final class CredentialManagerTests: XCTestCase {
     XCTAssertEqual(store.presenceReadCount(for: .soniox), 2)
     XCTAssertEqual(store.presenceReadCount(for: .openRouter), 2)
     XCTAssertEqual(store.presenceReadCount(for: .groq), 2)
+    XCTAssertEqual(store.presenceReadCount(for: .cerebras), 2)
   }
 
   func testLegacyCredentialDetectionDoesNotReadSecret() {
@@ -235,6 +236,20 @@ final class CredentialManagerTests: XCTestCase {
     XCTAssertEqual(manager.status(for: .soniox), .saved)
     XCTAssertTrue(manager.hasCredential(.soniox))
   }
+
+  func testSuccessfulCerebrasValidationSavesCredential() async throws {
+    let store = FakeCredentialStore()
+    let validator = SuccessfulCredentialValidator()
+    let manager = CredentialManager(store: store, validator: validator)
+
+    manager.beginValidation(
+      " cerebras-key ", kind: .cerebras, configuration: .cerebrasTestConfiguration)
+    try await validator.waitUntilCalled()
+    try await waitUntil { manager.status(for: .cerebras) == .saved }
+
+    XCTAssertEqual(store.value(for: .cerebras), "cerebras-key")
+    XCTAssertTrue(manager.hasCredential(.cerebras))
+  }
 }
 
 private extension CleanupConfiguration {
@@ -242,6 +257,8 @@ private extension CleanupConfiguration {
     model: .gemini37Flash, reasoningEffort: .low)
   static let groqTestConfiguration = CleanupConfiguration(
     model: .qwen38_27BGroq, reasoningEffort: .none)
+  static let cerebrasTestConfiguration = CleanupConfiguration(
+    model: .qwen38_27BCerebras, reasoningEffort: .none)
 }
 
 private final class FakeCredentialStore: CredentialStoring, @unchecked Sendable {

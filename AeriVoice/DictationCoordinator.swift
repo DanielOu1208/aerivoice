@@ -605,7 +605,8 @@ final class DictationCoordinator: ObservableObject {
     if error is URLError { return (.network, nil) }
     if let error = error as? AppError {
       switch error {
-      case .missingSonioxKey, .missingMetaModelAPIKey, .missingOpenRouterKey, .missingGroqKey:
+      case .missingSonioxKey, .missingMetaModelAPIKey, .missingOpenRouterKey, .missingGroqKey,
+        .missingCerebrasKey:
         return (.missingCredential, nil)
       case .microphoneUnavailable: return (.microphonePermission, nil)
       case .connectionTimeout: return (.connectionTimeout, nil)

@@ -241,8 +241,13 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     guard enabled, active == nil else { return }
     let wallTime = wallNow()
     let route = cleanupConfiguration.model.providerRoute
-    let requestedProviderTag =
-      cleanupConfiguration.provider == .groq ? "groq-direct" : route.requestedProviderTag
+    let requestedProviderTag: String? = {
+      switch cleanupConfiguration.provider {
+      case .groq: "groq-direct"
+      case .cerebras: "cerebras-direct"
+      case .openRouter: route.requestedProviderTag
+      }
+    }()
     let record = LatencyBenchmarkRecord(
       schemaVersion: 1,
       interactionID: UUID(),

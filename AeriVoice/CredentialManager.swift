@@ -24,6 +24,11 @@ struct LiveCredentialValidator: CredentialValidating {
         throw AppError.provider("Groq validation configuration is missing.")
       }
       try await GroqCleanupClient().validate(apiKey: value, model: configuration.model)
+    case .cerebras:
+      guard let configuration, configuration.provider == .cerebras else {
+        throw AppError.provider("Cerebras validation configuration is missing.")
+      }
+      try await CerebrasCleanupClient().validate(apiKey: value, model: configuration.model)
     case .soniox:
       let client = SonioxRealtimeClient()
       defer { client.cancel() }

@@ -92,6 +92,31 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertFalse(fixture.audio.didStart)
   }
 
+  func testSelectedCerebrasProviderUsesCerebrasCredential() async throws {
+    let fixture = makeFixture(cleanupProvider: .cerebras)
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+
+    XCTAssertEqual(fixture.cleaner.lastConfiguration?.provider, .cerebras)
+    XCTAssertEqual(fixture.cleaner.lastAPIKey, "cerebras-key")
+  }
+
+  func testMissingSelectedCerebrasCredentialFailsBeforeAudioCapture() async throws {
+    let fixture = makeFixture(hasCerebrasKey: false, cleanupProvider: .cerebras)
+
+    fixture.coordinator.toggle()
+    try await waitUntil {
+      if case .error = fixture.coordinator.phase { return true }
+      return false
+    }
+
+    XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
+    XCTAssertFalse(fixture.audio.didStart)
+  }
+
   func testSelectedMetaProviderUsesMetaCredentialAndConfiguration() async throws {
     let fixture = makeFixture(transcriptionProvider: .meta)
 
@@ -471,6 +496,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
   private func makeFixture(
     transcriptionProvider: TranscriptionProvider = .soniox,
     hasSonioxKey: Bool = true, hasMetaKey: Bool = true, hasGroqKey: Bool = true,
+    hasCerebrasKey: Bool = true,
     cleanupProvider: CleanupProvider = .openRouter, cleanupError: ProviderHTTPError? = nil,
     provisionalText: String = "Raw", cleanupWaitsForCancellation: Bool = false,
     soundCues: Bool = false, cueDelay: Duration = .zero,
@@ -492,6 +518,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
         .metaModelAPI: hasMetaKey ? "meta-key" : nil,
         .openRouter: "openrouter-key",
         .groq: hasGroqKey ? "groq-key" : nil,
+        .cerebras: hasCerebrasKey ? "cerebras-key" : nil,
       ])
     let audio = FakeAudioCapture(frameCount: audioFrameCount)
     let transcriber = FakeTranscriber(

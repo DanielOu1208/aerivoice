@@ -25,7 +25,7 @@ AeriVoice sets Meta's zero-data-retention override for every session. Meta's
 current account controls, enforcement, abuse monitoring, and terms remain
 controlled by Meta; review them before enabling this provider.
 
-### OpenRouter or Groq
+### OpenRouter, Groq, or Cerebras
 
 After the selected transcription provider finalizes a transcript, AeriVoice
 sends that transcript to the selected cleanup provider. The request includes
@@ -35,11 +35,12 @@ key.
 OpenRouter can route requests to an underlying model provider. AeriVoice asks
 OpenRouter for zero-data-retention routing for its Gemini and GPT-OSS choices,
 but provider behavior and terms remain controlled by OpenRouter and the
-underlying provider. Direct Groq cleanup is experimental; review Groq's current
-data controls before enabling it.
+underlying provider. Direct Groq and Cerebras cleanups are experimental and
+send requests directly to their respective API endpoints; review their current
+data controls before enabling them.
 
 Provider pricing, retention, abuse monitoring, and privacy terms can change.
-Review the current Soniox, Meta, OpenRouter, and Groq policies for your accounts.
+Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for your accounts.
 
 ## Data stored on the Mac
 
