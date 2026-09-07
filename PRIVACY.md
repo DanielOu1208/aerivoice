@@ -48,11 +48,12 @@ Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for you
   identifier.
 - App preferences, including selected providers and models, are stored with
   macOS preferences.
-- Direct selected-text insertion leaves the clipboard untouched. When insertion
-  uses Paste or falls back to copying, the transcript stays on the clipboard until
-  you replace it. AeriVoice does not restore an earlier clipboard on a timer:
-  macOS cannot confirm when another app has consumed a paste. Unconfirmed insertion
-  is shown as a warning, not a verified insertion.
+- Insertion uses the normal Paste shortcut. The transcript stays on the clipboard
+  until you replace it; AeriVoice does not restore an earlier clipboard on a timer.
+  “Paste sent” describes dispatch, because macOS cannot confirm consumption by
+  another app. Secure fields and secure keyboard-input mode copy with a warning
+  instead of receiving an automatic Paste. Copies you make after dictation stops
+  are preserved; if the clipboard changed, the transcript is not copied over it.
 - Optional latency diagnostics are enabled by default and stored in
   `~/Library/Application Support/AeriVoice/Benchmarks` with user-only file
   permissions.

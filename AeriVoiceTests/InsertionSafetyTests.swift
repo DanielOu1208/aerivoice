@@ -70,48 +70,32 @@ final class InsertionSafetyTests: XCTestCase {
     XCTAssertEqual(reads, 1)
   }
 
-  func testAXMutationSeparatesAcceptedRejectedAndAmbiguousResults() {
-    XCTAssertEqual(AXMutationOutcome.resolve(.success, success: .pasteRequested), .pasteRequested)
-    XCTAssertEqual(AXMutationOutcome.resolve(.success, success: .inserted), .inserted)
-    for result in [
-      AXError.actionUnsupported, .attributeUnsupported, .invalidUIElement,
-      .illegalArgument, .apiDisabled, .notImplemented,
-    ] {
-      XCTAssertEqual(AXMutationOutcome.resolve(result, success: .pasteRequested), .unavailable)
-    }
-    XCTAssertEqual(AXMutationOutcome.resolve(.cannotComplete, success: .pasteRequested), .uncertain)
-    XCTAssertEqual(AXMutationOutcome.resolve(.failure, success: .inserted), .uncertain)
-  }
-
   func testCompleteAncestryReturnsEditor() {
-    XCTAssertEqual(resolve(parents: [.parent(1), .root]), 0)
+    XCTAssertEqual(resolve(parents: [.parent(1), .root]), .success(0))
   }
 
-  func testMissingParentAfterEditorIsNotARoot() {
+  func testMissingParentAndUnknownSecurityRequireRecovery() {
     XCTAssertNil(resolve(parents: [.parent(1), .unavailable]))
-  }
-
-  func testSecureAncestorRejectsEditor() {
-    XCTAssertNil(resolve(parents: [.parent(1), .root], secureIndex: 1))
-  }
-
-  func testUnknownAncestorRejectsEditor() {
     XCTAssertNil(resolve(parents: [.parent(1), .root], unknownIndex: 1))
   }
 
+  func testSecureAncestorRejectsEditorWithoutRecovery() {
+    XCTAssertEqual(resolve(parents: [.parent(1), .root], secureIndex: 1), .failure(.secureField))
+  }
+
   func testDepthLimitAndCyclesRejectEditor() {
-    XCTAssertNil(resolve(parents: [.parent(1), .root], maximumDepth: 1))
-    XCTAssertNil(resolve(parents: [.parent(1), .parent(0)]))
-    XCTAssertNil(resolve(parents: [.parent(0)]))
+    XCTAssertEqual(
+      resolve(parents: [.parent(1), .root], maximumDepth: 1), .failure(.targetUnavailable))
+    XCTAssertEqual(resolve(parents: [.parent(1), .parent(0)]), .failure(.targetUnavailable))
   }
 
   func testDeepSecureAncestorIsNotSkipped() {
     let parents: [ParentLookup<Int>] = (1...12).map { .parent($0) } + [.root]
-    XCTAssertNil(resolve(parents: parents, secureIndex: 12))
+    XCTAssertEqual(resolve(parents: parents, secureIndex: 12), .failure(.secureField))
   }
 
   func testCancellationStopsBeforeReadingTraits() {
-    let editor: Int? = EditorAncestry.resolve(
+    let editor: Result<Int, PasteBlockReason>? = EditorAncestry.resolve(
       startingAt: 0,
       traits: { _ in
         XCTFail("Cancelled walk must not query AX")
@@ -121,16 +105,38 @@ final class InsertionSafetyTests: XCTestCase {
     XCTAssertNil(editor)
   }
 
+  func testReadOnlyFocusedControlCannotBeBypassedByEditableAncestor() {
+    let result = EditorAncestry.resolve(
+      startingAt: 0,
+      traits: {
+        TextTargetTraits(
+          roles: [kAXTextAreaRole as String], secureTextStatus: .nonSecure, editable: $0 != 0)
+      },
+      parent: { $0 == 1 ? .root : .parent(1) }, same: ==, shouldStop: { false })
+    XCTAssertEqual(result, .failure(.readOnlyTarget))
+  }
+
+  func testDisabledAncestorRejectsOtherwiseEligibleTextField() {
+    let result = EditorAncestry.resolve(
+      startingAt: 0,
+      traits: {
+        TextTargetTraits(
+          roles: [$0 == 0 ? kAXTextAreaRole as String : kAXGroupRole as String],
+          secureTextStatus: .nonSecure, enabled: $0 == 0)
+      },
+      parent: { $0 == 1 ? .root : .parent(1) }, same: ==, shouldStop: { false })
+    XCTAssertEqual(result, .failure(.readOnlyTarget))
+  }
+
   private func resolve(
     parents: [ParentLookup<Int>], secureIndex: Int? = nil, unknownIndex: Int? = nil,
     maximumDepth: Int = 32
-  ) -> Int? {
+  ) -> Result<Int, PasteBlockReason>? {
     EditorAncestry.resolve(
       startingAt: 0, maximumDepth: maximumDepth,
       traits: { index in
         TextTargetTraits(
-          roles: [kAXTextFieldRole as String],
-          settableAttributes: index == 0 ? [kAXValueAttribute as String] : [],
+          roles: [index == 0 ? kAXTextFieldRole as String : kAXGroupRole as String],
           secureTextStatus: index == secureIndex
             ? .secure : index == unknownIndex ? .unknown : .nonSecure)
       },

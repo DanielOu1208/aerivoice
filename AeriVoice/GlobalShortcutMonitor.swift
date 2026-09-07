@@ -64,7 +64,7 @@ enum TargetedPasteEvent {
   static let marker: Int64 = 0x4145_5249
 
   static func makePair() -> (down: CGEvent, up: CGEvent)? {
-    guard let source = CGEventSource(stateID: .combinedSessionState) else { return nil }
+    guard let source = CGEventSource(stateID: .privateState) else { return nil }
     source.userData = marker
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),

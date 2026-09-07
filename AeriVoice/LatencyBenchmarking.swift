@@ -22,6 +22,7 @@ enum BenchmarkMilestone: String, Codable, CaseIterable, Sendable {
 }
 
 enum BenchmarkTerminalResult: String, Codable, Sendable {
+  case pasteSent
   case inserted
   case insertionUnconfirmed
   case copied
@@ -49,6 +50,8 @@ enum BenchmarkFailureStage: String, Codable, Sendable {
 }
 
 enum BenchmarkFailureCategory: String, Codable, Sendable {
+  case secureField, secureInput, readOnlyTarget, unsupportedField, targetUnavailable
+  case targetChanged, modifiersHeld, shortcutUnavailable, clipboardChanged
   case missingCredential
   case microphonePermission
   case accessibilityPermission

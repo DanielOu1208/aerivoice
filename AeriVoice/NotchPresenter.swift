@@ -335,9 +335,9 @@ private struct NotchContentView: View {
           .foregroundStyle(.orange)
           .lineLimit(1)
       } else {
-        Image(systemName: "checkmark")
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(.green)
+        Text("Paste sent")
+          .font(NotchStyle.textFont)
+          .foregroundStyle(NotchStyle.normalText)
       }
     case .error(let message):
       HStack(spacing: 6) {

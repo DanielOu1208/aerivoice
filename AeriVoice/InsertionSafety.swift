@@ -32,21 +32,6 @@ struct InsertionDeadline {
   }
 }
 
-enum AXMutationOutcome {
-  static func resolve(_ result: AXError, success: TargetInsertionOutcome) -> TargetInsertionOutcome
-  {
-    switch result {
-    case .success: return success
-    case .actionUnsupported, .attributeUnsupported, .invalidUIElement, .illegalArgument,
-      .apiDisabled, .notImplemented:
-      return .unavailable
-    default:
-      // In particular, cannotComplete may mean the app executed the request.
-      return .uncertain
-    }
-  }
-}
-
 enum AXQuery {
   /// Retry reads only, with a refreshed timeout before each attempt. Mutations
   /// deliberately do not use this helper because a timeout is not non-delivery.
@@ -71,31 +56,40 @@ enum ParentLookup<Element> {
 
 enum EditorAncestry {
   /// Only an explicitly verified application root completes the security walk.
-  /// Missing parents, cycles and the depth limit are not roots.
+  /// nil means unavailable metadata; a failure is a definite rejection and is
+  /// never retried as if accessibility were still loading.
   static func resolve<Element>(
     startingAt focus: Element, maximumDepth: Int = 32,
     traits: (Element) -> TextTargetTraits,
     parent: (Element) -> ParentLookup<Element>,
     same: (Element, Element) -> Bool,
     shouldStop: () -> Bool
-  ) -> Element? {
+  ) -> Result<Element, PasteBlockReason>? {
     var current = focus
     var visited: [Element] = []
     var editor: Element?
     for _ in 0..<maximumDepth {
-      guard !shouldStop(), !visited.contains(where: { same($0, current) }) else { return nil }
+      guard !shouldStop() else { return nil }
+      guard !visited.contains(where: { same($0, current) }) else {
+        return .failure(.targetUnavailable)
+      }
       visited.append(current)
       let evidence = traits(current)
-      guard !shouldStop(), TextTargetPolicy.permitsInsertion(evidence) else { return nil }
-      if editor == nil, TextTargetPolicy.isEditable(evidence) { editor = current }
+      guard !shouldStop(), evidence.secureTextStatus != .unknown else { return nil }
+      if evidence.secureTextStatus == .secure { return .failure(.secureField) }
+      if evidence.enabled == false || (editor == nil && evidence.editable == false) {
+        return .failure(.readOnlyTarget)
+      }
+      if editor == nil, TextTargetPolicy.isTextTarget(evidence) { editor = current }
       let result = parent(current)
       guard !shouldStop() else { return nil }
       switch result {
-      case .root: return editor
+      case .root:
+        return editor.map { .success($0) } ?? .failure(.unsupportedField)
       case .parent(let next): current = next
       case .unavailable: return nil
       }
     }
-    return nil
+    return .failure(.targetUnavailable)
   }
 }

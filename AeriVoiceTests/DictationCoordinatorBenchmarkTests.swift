@@ -27,14 +27,15 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
   func testTargetIsCapturedSynchronouslyAtStopAndNotRecapturedAtInsertion() async throws {
     let fixture = makeFixture()
-    let original = TextInsertionTarget { _, _ in .inserted }
+    let original = TextInsertionTarget { _ in .pasteSent }
     fixture.inserter.target = original
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .recording }
     XCTAssertEqual(fixture.inserter.captureCount, 0)
+    fixture.inserter.onCapture = { XCTAssertTrue(fixture.audio.didStop) }
     fixture.coordinator.toggle()
     XCTAssertEqual(fixture.inserter.captureCount, 1)
-    fixture.inserter.target = TextInsertionTarget { _, _ in .inserted }
+    fixture.inserter.target = TextInsertionTarget { _ in .pasteSent }
     try await waitUntil { fixture.coordinator.phase == .success }
     XCTAssertEqual(fixture.inserter.receivedTarget?.id, original.id)
     XCTAssertEqual(fixture.inserter.captureCount, 1)
@@ -53,17 +54,32 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertEqual(fixture.benchmark.terminalResult, .cancelled)
   }
 
-  func testUnconfirmedPasteShowsWarningAndDoesNotLogInserted() async throws {
+  func testPasteSentDoesNotClaimConfirmedInsertion() async throws {
     let fixture = makeFixture()
-    fixture.inserter.result = .unconfirmed("Check destination—text kept on clipboard.")
+    fixture.inserter.result = .pasteSent
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .recording }
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .success }
-    XCTAssertEqual(fixture.benchmark.terminalResult, .insertionUnconfirmed)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
+    XCTAssertNil(fixture.notch.presentedStates.last?.warning)
+    XCTAssertEqual(fixture.notch.hideDelays.last, .milliseconds(700))
+  }
+
+  func testSecureFieldCopiesWithSpecificWarningAndBenchmarkReason() async throws {
+    let fixture = makeFixture()
+    fixture.inserter.result = .copied(.secureField)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil {
+      fixture.coordinator.phase == .error(PasteBlockReason.secureField.copiedMessage)
+    }
+    XCTAssertEqual(fixture.benchmark.terminalResult, .copied)
+    XCTAssertEqual(fixture.benchmark.failureStage, .insertion)
+    XCTAssertEqual(fixture.benchmark.failureCategory, .secureField)
     XCTAssertEqual(
-      fixture.notch.presentedStates.last?.warning, "Check destination—text kept on clipboard.")
-    XCTAssertEqual(fixture.notch.hideDelays.last, .seconds(3))
+      fixture.notch.presentedStates.last?.warning, PasteBlockReason.secureField.copiedMessage)
   }
 
   func testCopyFailureIsNotLoggedAsCopied() async throws {
@@ -104,7 +120,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertEqual(fixture.benchmark.rawCharacters, 14)
     XCTAssertEqual(fixture.benchmark.cleanedCharacters, 13)
     XCTAssertEqual(fixture.benchmark.cleanupMetrics?.selectedProvider, "Test Provider")
-    XCTAssertEqual(fixture.benchmark.terminalResult, .inserted)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
     XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
   }
 
@@ -120,7 +136,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertEqual(fixture.inserter.insertedText, "Raw transcript")
     XCTAssertEqual(fixture.benchmark.cleanupFallbackStatus, 503)
     XCTAssertEqual(fixture.benchmark.cleanedCharacters, 14)
-    XCTAssertEqual(fixture.benchmark.terminalResult, .inserted)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
   }
 
   func testMissingCredentialRecordsReadinessFailure() async throws {
@@ -410,7 +426,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
     try await waitUntil { fixture.coordinator.phase == .success }
 
-    XCTAssertEqual(fixture.benchmark.terminalResult, .inserted)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
     XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
   }
 
@@ -426,7 +442,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     await Task.yield()
 
     XCTAssertEqual(fixture.coordinator.phase, .success)
-    XCTAssertEqual(fixture.benchmark.terminalResult, .inserted)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
   }
 
   func testOldHeldReleaseCannotStopNewerMenuStartedSession() async throws {
@@ -823,13 +839,15 @@ private final class FakeInserter: TextInserting, @unchecked Sendable {
   var suspendInsert = false
   var pendingInsert: CheckedContinuation<Void, Never>?
   var didReturn = false
+  var onCapture: (() -> Void)?
   var captureCount = 0
   var suspendCapture = false
   var captureCancelled = false
-  var result: InsertionResult = .inserted
+  var result: InsertionResult = .pasteSent
   var target: TextInsertionTarget?
   var receivedTarget: TextInsertionTarget?
   func captureTarget() -> Task<TextInsertionTarget?, Never> {
+    onCapture?()
     captureCount += 1
     let pinned = target
     return Task {

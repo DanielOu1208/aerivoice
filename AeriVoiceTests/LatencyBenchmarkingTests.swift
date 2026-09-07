@@ -12,7 +12,7 @@ final class LatencyBenchmarkingTests: XCTestCase {
       directory: directory, clock: TestClock(milliseconds: 0),
       wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
     await recorder.flushForTesting()
-    for outcome in [BenchmarkTerminalResult.inserted, .insertionUnconfirmed] {
+    for outcome in [BenchmarkTerminalResult.inserted, .insertionUnconfirmed, .pasteSent] {
       recorder.begin(
         enabled: true, cleanupMode: .faithful,
         cleanupConfiguration: defaultCleanupConfiguration)
@@ -21,7 +21,8 @@ final class LatencyBenchmarkingTests: XCTestCase {
     await recorder.flushForTesting()
     let records = try decodeRecords(
       at: directory.appending(path: LatencyBenchmarkStore.logFilename))
-    XCTAssertEqual(records.map { $0.outcome?.terminalResult }, [.inserted, .insertionUnconfirmed])
+    XCTAssertEqual(
+      records.map { $0.outcome?.terminalResult }, [.inserted, .insertionUnconfirmed, .pasteSent])
   }
 
   func testRecorderWritesDeterministicPrivacySafeInteraction() async throws {

@@ -103,126 +103,49 @@ final class TextInsertionPolicyTests: XCTestCase {
     XCTAssertEqual(waits, 9)
   }
 
-  func testExplicitReadOnlyOrDisabledOverridesMutableAttributes() {
-    var traits = TextTargetTraits(
-      roles: [kAXTextFieldRole as String],
-      settableAttributes: [kAXSelectedTextAttribute as String],
-      secureTextStatus: .nonSecure, enabled: false)
-    XCTAssertFalse(TextTargetPolicy.isEditable(traits))
-    traits.enabled = true
+  func testStandardTextRolesAcceptPasteWithoutAXMutationSupport() {
+    for role in [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole] {
+      XCTAssertTrue(
+        TextTargetPolicy.isTextTarget(
+          TextTargetTraits(roles: [role as String], secureTextStatus: .nonSecure)))
+    }
+  }
+
+  func testExplicitReadOnlyDisabledSecureOrUnknownAlwaysRejects() {
+    var traits = TextTargetTraits(roles: [kAXTextAreaRole as String], secureTextStatus: .nonSecure)
     traits.editable = false
-    XCTAssertFalse(TextTargetPolicy.isEditable(traits))
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.editable = true
+    traits.enabled = false
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.enabled = true
+    for status in [SecureTextStatus.secure, .unknown] {
+      traits.secureTextStatus = status
+      XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    }
   }
 
-  func testSelectionAttributesAloneAreNotMutabilityEvidence() {
-    let traits = TextTargetTraits(
-      roles: [kAXGroupRole as String],
-      supportedAttributes: [
-        kAXSelectedTextAttribute as String,
-        kAXSelectedTextRangeAttribute as String, kAXNumberOfCharactersAttribute as String,
-      ],
-      secureTextStatus: .nonSecure)
-    XCTAssertFalse(TextTargetPolicy.isEditable(traits))
+  func testCustomEditorNeedsEditableFlagAndSelectionMetadataTogether() {
+    var traits = TextTargetTraits(roles: [kAXGroupRole as String], secureTextStatus: .nonSecure)
+    traits.supportedAttributes = [
+      kAXSelectedTextAttribute as String, kAXSelectedTextRangeAttribute as String,
+    ]
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.editable = true
+    XCTAssertTrue(TextTargetPolicy.isTextTarget(traits))
+    traits.supportedAttributes.remove(kAXSelectedTextRangeAttribute as String)
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
   }
 
-  func testNativeTextFieldUsesEnabledPasteCommand() {
-    let traits = TextTargetTraits(
-      roles: [kAXTextFieldRole as String],
-      supportedAttributes: [kAXSelectedTextAttribute as String],
-      settableAttributes: [kAXValueAttribute as String],
-      secureTextStatus: .nonSecure)
-
-    XCTAssertTrue(TextTargetPolicy.isEditable(traits))
-    XCTAssertEqual(
-      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: true),
-      .menuCommand)
-  }
-
-  func testElectronStyleEditableGroupUsesEnabledPasteCommand() {
-    let traits = TextTargetTraits(
-      roles: [kAXGroupRole as String],
-      supportedAttributes: [
-        kAXSelectedTextAttribute as String,
-        kAXSelectedTextRangeAttribute as String,
-        kAXNumberOfCharactersAttribute as String,
-      ],
-      secureTextStatus: .nonSecure, editable: true)
-
-    XCTAssertTrue(TextTargetPolicy.isEditable(traits))
-    XCTAssertEqual(
-      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: true),
-      .menuCommand)
-  }
-
-  func testSecureAncestorAlwaysCopies() {
-    let traits = TextTargetTraits(
-      roles: [kAXTextFieldRole as String],
-      settableAttributes: [kAXValueAttribute as String],
-      secureTextStatus: .secure)
-
-    XCTAssertFalse(TextTargetPolicy.permitsInsertion(traits))
-    XCTAssertEqual(
-      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: true),
-      .copyOnly)
-  }
-
-  func testUnverifiedGroupCopiesEvenWhenAppHasPasteCommand() {
-    let traits = TextTargetTraits(
-      roles: [kAXGroupRole as String], secureTextStatus: .nonSecure)
-
-    XCTAssertFalse(TextTargetPolicy.isEditable(traits))
-    XCTAssertEqual(
-      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: true),
-      .copyOnly)
-  }
-
-  func testStrongEditableTargetWithoutMenuUsesTargetedShortcut() {
-    let traits = TextTargetTraits(
-      roles: [kAXGroupRole as String],
-      settableAttributes: [kAXSelectedTextAttribute as String],
-      secureTextStatus: .nonSecure)
-
-    XCTAssertEqual(
-      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: false),
-      .targetedShortcut)
-  }
-
-  func testReadOnlyTextAreaWithoutMenuCopies() {
-    let traits = TextTargetTraits(
-      roles: [kAXTextAreaRole as String],
-      supportedAttributes: [kAXSelectedTextRangeAttribute as String],
-      secureTextStatus: .nonSecure)
-
-    XCTAssertEqual(
-      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: false),
-      .copyOnly)
-  }
-
-  func testEvidenceFromDifferentElementsDoesNotCreateAnEditor() {
-    let roleOnly = TextTargetTraits(roles: [kAXGroupRole as String])
-    let rangeOnly = TextTargetTraits(
-      supportedAttributes: [kAXSelectedTextRangeAttribute as String])
-    let selectionOnly = TextTargetTraits(
-      supportedAttributes: [
-        kAXSelectedTextAttribute as String,
-        kAXNumberOfCharactersAttribute as String,
-      ])
-
-    XCTAssertFalse(TextTargetPolicy.isEditable(roleOnly))
-    XCTAssertFalse(TextTargetPolicy.isEditable(rangeOnly))
-    XCTAssertFalse(TextTargetPolicy.isEditable(selectionOnly))
-  }
-
-  func testUnknownSecureStatusAlwaysCopies() {
-    let traits = TextTargetTraits(
-      roles: [kAXTextFieldRole as String],
-      settableAttributes: [kAXValueAttribute as String])
-
-    XCTAssertEqual(traits.secureTextStatus, .unknown)
-    XCTAssertFalse(TextTargetPolicy.permitsInsertion(traits))
-    XCTAssertEqual(
-      TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: true),
-      .copyOnly)
+  func testDefinitePolicyRejectionDoesNotActivateOrRetryAccessibility() async {
+    let result: Result<Int, PasteBlockReason>? = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { .failure(.secureField) },
+      requestAccessibility: {
+        XCTFail("Secure target must not trigger recovery")
+        return true
+      },
+      wait: { XCTFail("Secure target must not be retried") })
+    XCTAssertEqual(result, .failure(.secureField))
   }
 
   func testSecureStatusMapsAccessibilityOutcomesConservatively() {
@@ -241,32 +164,6 @@ final class TextInsertionPolicyTests: XCTestCase {
     XCTAssertEqual(
       SecureTextStatus.resolve(subrole: nil, result: .cannotComplete), .unknown)
     XCTAssertEqual(SecureTextStatus.resolve(subrole: nil, result: .failure), .unknown)
-  }
-
-  func testStandardPasteMenuMatchesCommandV() {
-    XCTAssertTrue(
-      PasteMenuItemPolicy.isStandardPaste(
-        PasteMenuItemTraits(
-          commandCharacter: "V", virtualKey: nil, modifiers: 0, enabled: true)))
-    XCTAssertTrue(
-      PasteMenuItemPolicy.isStandardPaste(
-        PasteMenuItemTraits(
-          commandCharacter: nil, virtualKey: 9, modifiers: 0, enabled: true)))
-  }
-
-  func testStandardPasteMenuRejectsDisabledOrModifiedVariants() {
-    XCTAssertFalse(
-      PasteMenuItemPolicy.isStandardPaste(
-        PasteMenuItemTraits(
-          commandCharacter: "V", virtualKey: 9, modifiers: 0, enabled: false)))
-    XCTAssertFalse(
-      PasteMenuItemPolicy.isStandardPaste(
-        PasteMenuItemTraits(
-          commandCharacter: "V", virtualKey: 9, modifiers: 1, enabled: true)))
-    XCTAssertFalse(
-      PasteMenuItemPolicy.isStandardPaste(
-        PasteMenuItemTraits(
-          commandCharacter: "V", virtualKey: 9, modifiers: nil, enabled: true)))
   }
 
   func testTargetedPasteEventsCarryCommandVAndSyntheticMarker() throws {

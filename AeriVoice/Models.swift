@@ -506,11 +506,30 @@ protocol TextInserting: Sendable {
 }
 
 enum InsertionResult: Equatable, Sendable {
-  case inserted
-  case unconfirmed(String)
-  case copied(String)
+  case pasteSent
+  case copied(PasteBlockReason)
   case failed(String)
   case cancelled
+}
+
+enum PasteBlockReason: String, Error, Equatable, Sendable, CaseIterable {
+  case secureField, secureInput, readOnlyTarget, unsupportedField, targetUnavailable
+  case targetChanged, accessibilityPermission, modifiersHeld, shortcutUnavailable, clipboardChanged
+
+  var copiedMessage: String {
+    switch self {
+    case .secureField: "Secure field—copied instead. Paste manually if intended."
+    case .secureInput: "Secure keyboard input—copied instead. Paste manually if intended."
+    case .readOnlyTarget: "Read-only field—copied instead."
+    case .unsupportedField: "No supported text field—copied instead."
+    case .targetUnavailable: "Couldn’t verify the original field—copied instead."
+    case .targetChanged: "App or field changed—copied instead."
+    case .accessibilityPermission: "Accessibility permission needed—copied instead."
+    case .modifiersHeld: "Shortcut keys still held—copied instead."
+    case .shortcutUnavailable: "Couldn’t send Paste—copied instead."
+    case .clipboardChanged: "Clipboard changed—paste skipped."
+    }
+  }
 }
 
 @MainActor

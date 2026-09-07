@@ -394,20 +394,13 @@ final class DictationCoordinator: ObservableObject {
       guard sessionID == id else { return }
       benchmark.mark(.insertionFinished)
       switch result {
-      case .inserted:
-        benchmark.finish(.inserted, stage: nil, category: nil, httpStatus: nil)
+      case .pasteSent:
+        benchmark.finish(.pasteSent, stage: nil, category: nil, httpStatus: nil)
         phase = .success
         state.phase = .success
         state.warning = nil
         notch.present(state: state)
-        notch.hide(after: .milliseconds(350))
-      case .unconfirmed(let warning):
-        benchmark.finish(.insertionUnconfirmed, stage: nil, category: nil, httpStatus: nil)
-        phase = .success
-        state.phase = .success
-        state.warning = warning
-        notch.present(state: state)
-        notch.hide(after: .seconds(3))
+        notch.hide(after: .milliseconds(700))
       case .failed(let warning):
         benchmark.finish(.failed, stage: .insertion, category: .unknown, httpStatus: nil)
         phase = .error(warning)
@@ -418,8 +411,12 @@ final class DictationCoordinator: ObservableObject {
       case .cancelled:
         cancel()
         return
-      case .copied(let warning):
-        benchmark.finish(.copied, stage: nil, category: nil, httpStatus: nil)
+      case .copied(let reason):
+        let warning = reason.copiedMessage
+        benchmark.finish(
+          .copied, stage: .insertion,
+          category: BenchmarkFailureCategory(rawValue: reason.rawValue) ?? .unknown, httpStatus: nil
+        )
         phase = .error(warning)
         state.phase = phase
         state.warning = warning
@@ -516,6 +513,7 @@ final class DictationCoordinator: ObservableObject {
     benchmark.mark(.stopRequested)
     let taskID = UUID()
     stopTaskID = taskID
+    stopAudioIfNeeded(playCue: true)
     let targetCapture = inserter.captureTarget()
     targetCaptureTask = targetCapture
     stopTask = Task { @MainActor [weak self] in
