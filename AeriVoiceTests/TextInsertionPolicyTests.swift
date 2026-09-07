@@ -4,6 +4,127 @@ import XCTest
 @testable import AeriVoice
 
 final class TextInsertionPolicyTests: XCTestCase {
+  func testExistingFocusDoesNotRequestAccessibilityOrWait() async {
+    let focus = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { 42 },
+      requestAccessibility: {
+        XCTFail("Existing focus needs no activation")
+        return false
+      },
+      wait: { XCTFail("Existing focus needs no delay") })
+    XCTAssertEqual(focus, 42)
+  }
+
+  func testFocusCanAppearAfterAccessibilityActivation() async {
+    var activated = false
+    var waits = 0
+    let focus = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { activated && waits == 2 ? 42 : nil },
+      requestAccessibility: {
+        activated = true
+        return true
+      },
+      wait: { waits += 1 })
+    XCTAssertEqual(focus, 42)
+    XCTAssertEqual(waits, 2)
+  }
+
+  func testUnavailableFocusStopsAfterThreeRetries() async {
+    var waits = 0
+    let focus: Int? = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { nil }, requestAccessibility: { true },
+      wait: { waits += 1 })
+    XCTAssertNil(focus)
+    XCTAssertEqual(waits, 3)
+  }
+
+  func testUnsupportedAccessibilityDoesNotRetryFocus() async {
+    let focus: Int? = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { nil }, requestAccessibility: { false },
+      wait: { XCTFail("Unsupported activation should copy immediately") })
+    XCTAssertNil(focus)
+  }
+
+  func testAppSwitchDuringRecoveryRejectsNewFocus() async {
+    var current = true
+    var reads = 0
+    let focus = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { current },
+      readFocus: {
+        reads += 1
+        return reads > 1 ? 42 : nil
+      },
+      requestAccessibility: { true }, wait: { current = false })
+    XCTAssertNil(focus)
+    XCTAssertEqual(reads, 1)
+  }
+
+  func testCancellationDuringRecoveryRejectsNewFocus() async {
+    var cancelled = false
+    var reads = 0
+    let focus = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true },
+      readFocus: {
+        reads += 1
+        return reads > 1 ? 42 : nil
+      },
+      requestAccessibility: { true }, wait: { cancelled = true },
+      isCancelled: { cancelled })
+    XCTAssertNil(focus)
+    XCTAssertEqual(reads, 1)
+  }
+
+  func testCancelledWaitStopsRecovery() async {
+    let focus: Int? = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { nil }, requestAccessibility: { true },
+      wait: { throw CancellationError() })
+    XCTAssertNil(focus)
+  }
+
+  func testExistingButUnusableFocusRequestsAccessibility() async {
+    var activated = false
+    let focus = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { 42 },
+      requestAccessibility: {
+        activated = true
+        return true
+      },
+      isUsable: { _ in activated }, wait: {})
+    XCTAssertEqual(focus, 42)
+    XCTAssertTrue(activated)
+  }
+
+  func testDelayedActivationUsesConfiguredBound() async {
+    var waits = 0
+    let focus: Int? = await FocusedElementRecovery.resolve(
+      targetIsCurrent: { true }, readFocus: { 42 }, requestAccessibility: { true },
+      isUsable: { _ in waits >= 9 }, attempts: 12, wait: { waits += 1 })
+    XCTAssertEqual(focus, 42)
+    XCTAssertEqual(waits, 9)
+  }
+
+  func testExplicitReadOnlyOrDisabledOverridesMutableAttributes() {
+    var traits = TextTargetTraits(
+      roles: [kAXTextFieldRole as String],
+      settableAttributes: [kAXSelectedTextAttribute as String],
+      secureTextStatus: .nonSecure, enabled: false)
+    XCTAssertFalse(TextTargetPolicy.isEditable(traits))
+    traits.enabled = true
+    traits.editable = false
+    XCTAssertFalse(TextTargetPolicy.isEditable(traits))
+  }
+
+  func testSelectionAttributesAloneAreNotMutabilityEvidence() {
+    let traits = TextTargetTraits(
+      roles: [kAXGroupRole as String],
+      supportedAttributes: [
+        kAXSelectedTextAttribute as String,
+        kAXSelectedTextRangeAttribute as String, kAXNumberOfCharactersAttribute as String,
+      ],
+      secureTextStatus: .nonSecure)
+    XCTAssertFalse(TextTargetPolicy.isEditable(traits))
+  }
+
   func testNativeTextFieldUsesEnabledPasteCommand() {
     let traits = TextTargetTraits(
       roles: [kAXTextFieldRole as String],
@@ -25,7 +146,7 @@ final class TextInsertionPolicyTests: XCTestCase {
         kAXSelectedTextRangeAttribute as String,
         kAXNumberOfCharactersAttribute as String,
       ],
-      secureTextStatus: .nonSecure)
+      secureTextStatus: .nonSecure, editable: true)
 
     XCTAssertTrue(TextTargetPolicy.isEditable(traits))
     XCTAssertEqual(
@@ -66,7 +187,7 @@ final class TextInsertionPolicyTests: XCTestCase {
       .targetedShortcut)
   }
 
-  func testKnownTextAreaWithoutMenuUsesTargetedShortcut() {
+  func testReadOnlyTextAreaWithoutMenuCopies() {
     let traits = TextTargetTraits(
       roles: [kAXTextAreaRole as String],
       supportedAttributes: [kAXSelectedTextRangeAttribute as String],
@@ -74,7 +195,7 @@ final class TextInsertionPolicyTests: XCTestCase {
 
     XCTAssertEqual(
       TextTargetPolicy.dispatchStrategy(for: traits, hasEnabledPasteCommand: false),
-      .targetedShortcut)
+      .copyOnly)
   }
 
   func testEvidenceFromDifferentElementsDoesNotCreateAnEditor() {
@@ -159,49 +280,4 @@ final class TextInsertionPolicyTests: XCTestCase {
     }
   }
 
-  func testDispatcherRunsOnlyTheSelectedAction() {
-    var menuCount = 0
-    var shortcutCount = 0
-
-    XCTAssertTrue(
-      PasteActionDispatcher.dispatch(
-        strategy: .targetedShortcut,
-        targetIsCurrent: { true },
-        pressMenuItem: {
-          menuCount += 1
-          return true
-        },
-        postTargetedShortcut: {
-          shortcutCount += 1
-          return true
-        },
-        isCancelled: { false }))
-
-    XCTAssertEqual(menuCount, 0)
-    XCTAssertEqual(shortcutCount, 1)
-  }
-
-  func testDispatcherDoesNotActWhenCancellationArrivesDuringTargetValidation() {
-    var cancelled = false
-    var dispatchCount = 0
-
-    XCTAssertFalse(
-      PasteActionDispatcher.dispatch(
-        strategy: .targetedShortcut,
-        targetIsCurrent: {
-          cancelled = true
-          return true
-        },
-        pressMenuItem: {
-          dispatchCount += 1
-          return true
-        },
-        postTargetedShortcut: {
-          dispatchCount += 1
-          return true
-        },
-        isCancelled: { cancelled }))
-
-    XCTAssertEqual(dispatchCount, 0)
-  }
 }

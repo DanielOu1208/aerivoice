@@ -329,9 +329,16 @@ private struct NotchContentView: View {
     case .processing, .cleaning, .inserting:
       PulsingEllipsisLabel(label: "Refining")
     case .success:
-      Image(systemName: "checkmark")
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.green)
+      if let warning = model.state.warning {
+        Text(warning)
+          .font(NotchStyle.textFont)
+          .foregroundStyle(.orange)
+          .lineLimit(1)
+      } else {
+        Image(systemName: "checkmark")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(.green)
+      }
     case .error(let message):
       HStack(spacing: 6) {
         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)

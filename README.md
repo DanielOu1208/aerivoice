@@ -22,8 +22,10 @@ provider, and inserts the result into the app you are using.
   with Qwen 3.8 27B available directly on Cerebras's ultra-fast shared endpoint.
 - A global tap-or-hold shortcut, vocabulary hints, optional sound cues, and
   launch at login.
-- Accessibility-aware insertion into native and Electron apps, with a safe
-  copy-and-warn fallback when direct insertion cannot be verified.
+- Accessibility-aware insertion into native and Electron apps, pinned to the field
+  captured when dictation stops. Direct selected-text insertion preserves your
+  clipboard; fallback Paste keeps the transcript on it and warns that delivery is
+  unconfirmed. Unavailable or changed targets copy instead of being retargeted.
 - Local, content-free latency diagnostics with a 90-day retention window.
 
 ## Requirements

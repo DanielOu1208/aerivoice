@@ -614,21 +614,21 @@ final class ModelTests: XCTestCase {
     XCTAssertTrue(prompt.contains("without summarizing or inventing"))
   }
 
-  func testClipboardRestoresOnlyWhileOwned() {
+  func testClipboardOwnershipRequiresMarkerAndChangeCount() {
     XCTAssertTrue(
-      ClipboardOwnership.shouldRestore(
+      ClipboardOwnership.isCurrent(
         currentMarker: "mine", expectedMarker: "mine", currentChangeCount: 3,
         expectedChangeCount: 3))
     XCTAssertFalse(
-      ClipboardOwnership.shouldRestore(
+      ClipboardOwnership.isCurrent(
         currentMarker: "changed", expectedMarker: "mine", currentChangeCount: 3,
         expectedChangeCount: 3))
     XCTAssertFalse(
-      ClipboardOwnership.shouldRestore(
+      ClipboardOwnership.isCurrent(
         currentMarker: nil, expectedMarker: "mine", currentChangeCount: 3,
         expectedChangeCount: 3))
     XCTAssertFalse(
-      ClipboardOwnership.shouldRestore(
+      ClipboardOwnership.isCurrent(
         currentMarker: "mine", expectedMarker: "mine", currentChangeCount: 4,
         expectedChangeCount: 3))
   }

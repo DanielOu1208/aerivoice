@@ -5,6 +5,25 @@ import XCTest
 
 @MainActor
 final class LatencyBenchmarkingTests: XCTestCase {
+  func testUnconfirmedPastePersistsDistinctOutcomeAlongsideLegacyInserted() async throws {
+    let directory = makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = makeRecorder(
+      directory: directory, clock: TestClock(milliseconds: 0),
+      wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
+    await recorder.flushForTesting()
+    for outcome in [BenchmarkTerminalResult.inserted, .insertionUnconfirmed] {
+      recorder.begin(
+        enabled: true, cleanupMode: .faithful,
+        cleanupConfiguration: defaultCleanupConfiguration)
+      recorder.finish(outcome, stage: nil, category: nil, httpStatus: nil)
+    }
+    await recorder.flushForTesting()
+    let records = try decodeRecords(
+      at: directory.appending(path: LatencyBenchmarkStore.logFilename))
+    XCTAssertEqual(records.map { $0.outcome?.terminalResult }, [.inserted, .insertionUnconfirmed])
+  }
+
   func testRecorderWritesDeterministicPrivacySafeInteraction() async throws {
     let directory = makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

@@ -23,6 +23,7 @@ enum BenchmarkMilestone: String, Codable, CaseIterable, Sendable {
 
 enum BenchmarkTerminalResult: String, Codable, Sendable {
   case inserted
+  case insertionUnconfirmed
   case copied
   case cancelled
   case failed

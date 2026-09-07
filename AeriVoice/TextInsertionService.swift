@@ -30,6 +30,8 @@ struct TextTargetTraits: Equatable {
   var supportedAttributes: Set<String> = []
   var settableAttributes: Set<String> = []
   var secureTextStatus: SecureTextStatus = .unknown
+  var enabled: Bool?
+  var editable: Bool?
 }
 
 enum TextTargetPolicy {
@@ -44,11 +46,15 @@ enum TextTargetPolicy {
   }
 
   static func isEditable(_ traits: TextTargetTraits) -> Bool {
-    if !traits.roles.isDisjoint(with: editableRoles) { return true }
-    if hasSettableTextAttribute(traits) { return true }
-    return traits.supportedAttributes.contains(kAXSelectedTextAttribute as String)
+    guard traits.enabled != false, traits.editable != false else { return false }
+    if traits.settableAttributes.contains(kAXSelectedTextAttribute as String) { return true }
+    if !traits.roles.isDisjoint(with: editableRoles) {
+      return traits.editable == true
+        || traits.settableAttributes.contains(kAXValueAttribute as String)
+    }
+    return traits.editable == true
+      && traits.supportedAttributes.contains(kAXSelectedTextAttribute as String)
       && traits.supportedAttributes.contains(kAXSelectedTextRangeAttribute as String)
-      && traits.supportedAttributes.contains(kAXNumberOfCharactersAttribute as String)
   }
 
   static func dispatchStrategy(
@@ -58,10 +64,6 @@ enum TextTargetPolicy {
     return hasEnabledPasteCommand ? .menuCommand : .targetedShortcut
   }
 
-  private static func hasSettableTextAttribute(_ traits: TextTargetTraits) -> Bool {
-    traits.settableAttributes.contains(kAXValueAttribute as String)
-      || traits.settableAttributes.contains(kAXSelectedTextAttribute as String)
-  }
 }
 
 struct PasteMenuItemTraits: Equatable {
@@ -79,204 +81,350 @@ enum PasteMenuItemPolicy {
   }
 }
 
-enum PasteActionDispatcher {
-  static func dispatch(
-    strategy: PasteDispatchStrategy,
+enum FocusedElementRecovery {
+  static func resolve<Element>(
     targetIsCurrent: () -> Bool,
-    pressMenuItem: () -> Bool,
-    postTargetedShortcut: () -> Bool,
+    readFocus: () -> Element?,
+    requestAccessibility: () -> Bool,
+    isUsable: (Element) -> Bool = { _ in true },
+    attempts: Int = 3,
+    wait: () async throws -> Void = { try await Task.sleep(for: .milliseconds(50)) },
     isCancelled: () -> Bool = { Task.isCancelled }
-  ) -> Bool {
-    guard !isCancelled() else { return false }
-    switch strategy {
-    case .menuCommand:
-      guard targetIsCurrent(), !isCancelled() else { return false }
-      return pressMenuItem()
-    case .targetedShortcut:
-      guard targetIsCurrent(), !isCancelled() else { return false }
-      return postTargetedShortcut()
-    case .copyOnly:
-      return false
+  ) async -> Element? {
+    guard !isCancelled(), targetIsCurrent() else { return nil }
+    if let focus = readFocus(), isUsable(focus) {
+      return !isCancelled() && targetIsCurrent() ? focus : nil
     }
+    guard !isCancelled(), targetIsCurrent(), requestAccessibility() else { return nil }
+    for _ in 0..<attempts {
+      guard !isCancelled(), targetIsCurrent() else { return nil }
+      do { try await wait() } catch { return nil }
+      guard !isCancelled(), targetIsCurrent() else { return nil }
+      if let focus = readFocus(), isUsable(focus) {
+        return !isCancelled() && targetIsCurrent() ? focus : nil
+      }
+    }
+    return nil
   }
 }
 
-struct TextInsertionService: TextInserting {
+/// Final validation, clipboard commit and action run synchronously on MainActor.
+/// There is no actor hop between the last target check and the action.
+typealias PasteCommit =
+  @MainActor @Sendable (
+    @MainActor @Sendable () -> Bool, @MainActor @Sendable () -> TargetInsertionOutcome
+  ) -> TargetInsertionOutcome
+
+/// Immutable, session-owned capability. AX handles never escape into the coordinator.
+struct TextInsertionTarget: Sendable {
+  let id = UUID()
+  let perform:
+    @Sendable (
+      String, @escaping PasteCommit
+    ) async -> TargetInsertionOutcome
+}
+
+enum TargetInsertionOutcome: Equatable, Sendable {
+  case inserted
+  case pasteRequested
+  case unavailable
+  case uncertain
+}
+
+@MainActor
+final class TextInsertionService: TextInserting {
   private static let markerType = NSPasteboard.PasteboardType(
     "com.danielou.AeriVoice.clipboard-owner")
-  private static let copiedWarning = "Couldn’t insert—copied instead."
-  private static let copyFailedWarning = "Couldn’t insert or copy the transcript."
+  // Shared across instances, but isolated per pasteboard (tests use private boards).
+  private static var activeBoards: Set<NSPasteboard.Name> = []
+  private let pasteboard: NSPasteboard
+  private let capture: @MainActor () -> Task<TextInsertionTarget?, Never>
 
-  @MainActor
-  func insert(_ text: String) async -> InsertionResult {
-    let pasteboard = NSPasteboard.general
-    let previous = PasteboardSnapshot(pasteboard: pasteboard)
+  init(
+    pasteboard: NSPasteboard = .general,
+    capture: @escaping @MainActor () -> Task<TextInsertionTarget?, Never> = captureSystemTarget
+  ) {
+    self.pasteboard = pasteboard
+    self.capture = capture
+  }
+
+  func captureTarget() -> Task<TextInsertionTarget?, Never> { capture() }
+
+  func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult {
+    guard !Task.isCancelled else { return .cancelled }
+    guard Self.activeBoards.insert(pasteboard.name).inserted else {
+      return .failed("Another insertion is still finishing—nothing copied.")
+    }
+    defer { Self.activeBoards.remove(pasteboard.name) }
+    let initialChangeCount = pasteboard.changeCount
     let marker = UUID().uuidString
-    guard write(text, marker: marker, to: pasteboard) else {
-      pasteboard.clearContents()
-      let copied = pasteboard.setString(text, forType: .string)
-      return .copied(copied ? Self.copiedWarning : Self.copyFailedWarning)
-    }
-    let ownershipChangeCount = pasteboard.changeCount
+    var ownedChangeCount: Int?
 
-    guard AXIsProcessTrusted() else {
-      return .copied(Self.copiedWarning)
-    }
-
-    await Task.yield()
-    guard !Task.isCancelled, let processIdentifier = frontmostTargetProcessIdentifier() else {
-      return .copied(Self.copiedWarning)
-    }
-    let dispatched = await withTaskGroup(of: Bool.self) { group in
-      group.addTask(priority: .userInitiated) {
-        AccessibilityPasteWorker().paste(into: processIdentifier)
-      }
-      return await group.next() ?? false
-    }
-    guard !Task.isCancelled, dispatched else {
-      return .copied(Self.copiedWarning)
-    }
-
-    Task { @MainActor in
-      try? await Task.sleep(for: .seconds(1))
-      guard
-        ClipboardOwnership.shouldRestore(
+    // Write only at the action boundary, after AX validation. Calling again checks
+    // ownership rather than overwriting a user's intervening copy.
+    let authorizePaste: @MainActor @Sendable () -> Bool = { [self] in
+      guard !Task.isCancelled else { return false }
+      if let ownedChangeCount {
+        return ClipboardOwnership.isCurrent(
           currentMarker: pasteboard.string(forType: Self.markerType), expectedMarker: marker,
-          currentChangeCount: pasteboard.changeCount, expectedChangeCount: ownershipChangeCount)
-      else { return }
-      previous.restore(to: pasteboard)
+          currentChangeCount: pasteboard.changeCount, expectedChangeCount: ownedChangeCount)
+      }
+      guard pasteboard.changeCount == initialChangeCount else { return false }
+      let item = NSPasteboardItem()
+      guard item.setString(text, forType: .string),
+        item.setString(marker, forType: Self.markerType)
+      else { return false }
+      pasteboard.clearContents()
+      guard pasteboard.writeObjects([item]) else { return false }
+      ownedChangeCount = pasteboard.changeCount
+      return true
     }
-    return .inserted
+
+    let commit: PasteCommit = { validate, dispatch in
+      guard !Task.isCancelled, validate(), authorizePaste() else { return .unavailable }
+      return dispatch()
+    }
+    let outcome = await target?.perform(text, commit) ?? .unavailable
+    guard !Task.isCancelled else { return .cancelled }
+    switch outcome {
+    case .inserted:
+      return .inserted
+    case .pasteRequested, .uncertain:
+      let kept = authorizePaste()
+      return .unconfirmed(
+        kept
+          ? "Insertion unconfirmed—check destination. Text is on the clipboard."
+          : "Insertion unconfirmed—check destination. Clipboard changed or unavailable.")
+    case .unavailable:
+      guard authorizePaste() else {
+        return .failed("Couldn’t insert or copy—clipboard changed or unavailable.")
+      }
+      return .copied("Couldn’t insert into the original field—copied instead.")
+    }
   }
 
-  @MainActor
-  private func write(_ text: String, marker: String, to pasteboard: NSPasteboard) -> Bool {
-    let item = NSPasteboardItem()
-    guard item.setString(text, forType: .string), item.setString(marker, forType: Self.markerType)
-    else { return false }
-    pasteboard.clearContents()
-    return pasteboard.writeObjects([item])
-  }
-
-  @MainActor
-  private func frontmostTargetProcessIdentifier() -> pid_t? {
-    guard let application = NSWorkspace.shared.frontmostApplication,
+  private static func captureSystemTarget() -> Task<TextInsertionTarget?, Never> {
+    // Snapshot the PID synchronously at stop, not after cleanup or a task hop.
+    guard AXIsProcessTrusted(), let application = NSWorkspace.shared.frontmostApplication,
       !application.isTerminated,
       application.processIdentifier != ProcessInfo.processInfo.processIdentifier
-    else { return nil }
-    return application.processIdentifier
+    else { return Task { nil } }
+    let pid = application.processIdentifier
+    return Task {
+      await withTaskGroup(of: TextInsertionTarget?.self) { group in
+        group.addTask(priority: .userInitiated) {
+          await AccessibilityPasteWorker(seconds: 3.25).capture(in: pid)
+        }
+        return await group.next() ?? nil
+      }
+    }
   }
 }
 
 private final class AccessibilityPasteWorker: @unchecked Sendable {
-  private let queryTimeout: Float = 0.1
-  private let actionTimeout: Float = 0.2
+  private let deadline: InsertionDeadline
+
+  init(seconds: TimeInterval = 0.75) { deadline = InsertionDeadline(seconds: seconds) }
   private let menuSearchLimit = 180
-  private let menuSearchDuration: CFTimeInterval = 0.25
+  private let menuSearchDuration: CFTimeInterval = 0.2
+  private var shouldStop: Bool { Task.isCancelled || deadline.isExpired }
 
-  func paste(into processIdentifier: pid_t) -> Bool {
-    guard !Task.isCancelled else { return false }
-    let applicationElement = AXUIElementCreateApplication(processIdentifier)
-    setTimeout(on: applicationElement)
-    guard booleanAttribute(applicationElement, kAXFrontmostAttribute as CFString) == true,
-      let focusedElement = elementAttribute(
-        applicationElement, kAXFocusedUIElementAttribute as CFString),
-      let editor = editableCandidate(startingAt: focusedElement)
-    else { return false }
+  // AXUIElement references are immutable identities. Each worker uses them only
+  // serially on its task; the snapshot carries no mutable state across tasks.
+  private struct Snapshot: @unchecked Sendable {
+    let pid: pid_t
+    let application: AXUIElement
+    let focus: AXUIElement
+    let editor: AXUIElement
+  }
 
-    let pasteMenuItem = enabledPasteMenuItem(in: applicationElement)
-    guard targetIsCurrent(
-      applicationElement: applicationElement, focusedElement: focusedElement, editor: editor)
-    else { return false }
+  private struct MenuItem: @unchecked Sendable {
+    let element: AXUIElement
+  }
 
-    let strategy = TextTargetPolicy.dispatchStrategy(
-      for: traits(of: editor), hasEnabledPasteCommand: pasteMenuItem != nil)
-    if strategy == .menuCommand {
-      guard let pasteMenuItem, pasteMenuItemIsEnabledStandardPaste(pasteMenuItem) else {
-        return false
+  func capture(in processIdentifier: pid_t) async -> TextInsertionTarget? {
+    let application = AXUIElementCreateApplication(processIdentifier)
+    // Chromium uses this role read to activate basic/native accessibility.
+    _ = stringAttribute(application, kAXRoleAttribute as CFString)
+    guard let pinnedFocus = elementAttribute(application, kAXFocusedUIElementAttribute as CFString)
+    else {
+      _ = requestAccessibility(in: application)
+      return nil  // No stop-time identity: never substitute a later field.
+    }
+    guard
+      let snapshot = await FocusedElementRecovery.resolve(
+        targetIsCurrent: {
+          guard !self.shouldStop,
+            self.booleanAttribute(application, kAXFrontmostAttribute as CFString) == true,
+            let current = self.elementAttribute(
+              application, kAXFocusedUIElementAttribute as CFString)
+          else { return false }
+          return CFEqual(current, pinnedFocus)
+        },
+        readFocus: { () -> Snapshot? in
+          guard
+            let focus = self.elementAttribute(
+              application, kAXFocusedUIElementAttribute as CFString),
+            CFEqual(focus, pinnedFocus),
+            let editor = self.editableCandidate(startingAt: focus, application: application)
+          else { return nil }
+          return Snapshot(
+            pid: processIdentifier, application: application, focus: focus, editor: editor)
+        },
+        requestAccessibility: { self.requestAccessibility(in: application) },
+        attempts: 12,
+        wait: {
+          guard let delay = self.deadline.remainingDelay(maximum: 0.25) else {
+            throw CancellationError()
+          }
+          try await Task.sleep(for: .seconds(delay))
+        },
+        isCancelled: { self.shouldStop })
+    else { return nil }
+    return TextInsertionTarget { text, authorizePaste in
+      await withTaskGroup(of: TargetInsertionOutcome.self) { group in
+        group.addTask(priority: .userInitiated) {
+          await AccessibilityPasteWorker().insert(
+            text, into: snapshot, authorizePaste: authorizePaste)
+        }
+        return await group.next() ?? .unavailable
       }
     }
-    return PasteActionDispatcher.dispatch(
-      strategy: strategy,
-      targetIsCurrent: {
-        self.targetIsCurrent(
-          applicationElement: applicationElement, focusedElement: focusedElement, editor: editor)
+  }
+
+  private func insert(
+    _ text: String, into target: Snapshot,
+    authorizePaste: @escaping PasteCommit
+  ) async -> TargetInsertionOutcome {
+    guard targetIsCurrent(target) else { return .unavailable }
+    let evidence = traits(of: target.editor)
+    guard TextTargetPolicy.permitsInsertion(evidence), TextTargetPolicy.isEditable(evidence) else {
+      return .unavailable
+    }
+    // Prefer replacing only the selection, never the entire AXValue. This path
+    // does not depend on the global clipboard or a queued keyboard event.
+    if evidence.settableAttributes.contains(kAXSelectedTextAttribute as String) {
+      guard focusIsCurrent(target), setTimeout(on: target.editor, maximum: 0.2), !shouldStop else {
+        return .unavailable
+      }
+      let result = AXUIElementSetAttributeValue(
+        target.editor, kAXSelectedTextAttribute as CFString, text as CFString)
+      // A timed-out mutation may already have happened. Never retry it as Paste.
+      return AXMutationOutcome.resolve(result, success: .inserted)
+    }
+
+    let menu = enabledPasteMenuItem(in: target.application).map { MenuItem(element: $0) }
+    let strategy = TextTargetPolicy.dispatchStrategy(
+      for: evidence, hasEnabledPasteCommand: menu != nil)
+    guard strategy != .copyOnly else { return .unavailable }
+    return await authorizePaste(
+      {
+        guard !self.shouldStop else { return false }
+        if let menu, !self.pasteMenuItemIsEnabledStandardPaste(menu.element) { return false }
+        return self.targetIsCurrent(target)
       },
-      pressMenuItem: {
-        guard let pasteMenuItem else { return false }
-        AXUIElementSetMessagingTimeout(pasteMenuItem, self.actionTimeout)
-        guard !Task.isCancelled else { return false }
-        return AXUIElementPerformAction(pasteMenuItem, kAXPressAction as CFString) == .success
-      },
-      postTargetedShortcut: {
-        guard !Task.isCancelled else { return false }
-        return TargetedPasteEvent.post(to: processIdentifier)
+      {
+        guard !self.shouldStop else { return .unavailable }
+        if let menu {
+          guard self.setTimeout(on: menu.element, maximum: 0.2), !self.shouldStop else {
+            return .unavailable
+          }
+          // Accepted request, not proof of clipboard consumption. Never retry.
+          return AXMutationOutcome.resolve(
+            AXUIElementPerformAction(menu.element, kAXPressAction as CFString),
+            success: .pasteRequested)
+        }
+        return TargetedPasteEvent.post(to: target.pid) ? .pasteRequested : .unavailable
       })
   }
 
-  private func targetIsCurrent(
-    applicationElement: AXUIElement, focusedElement: AXUIElement, editor: AXUIElement
-  ) -> Bool {
-    guard booleanAttribute(applicationElement, kAXFrontmostAttribute as CFString) == true,
-      let currentFocus = elementAttribute(
-        applicationElement, kAXFocusedUIElementAttribute as CFString),
-      CFEqual(currentFocus, focusedElement),
-      let currentEditor = editableCandidate(startingAt: currentFocus)
+  private func requestAccessibility(in application: AXUIElement) -> Bool {
+    guard !shouldStop,
+      booleanAttribute(application, kAXFrontmostAttribute as CFString) == true
     else { return false }
-    return CFEqual(currentEditor, editor)
+    // Electron documents this opt-in. Do not toggle the undocumented/debounced
+    // AXEnhancedUserInterface flag or assume that a successful setter is immediate.
+    let attribute = "AXManualAccessibility" as CFString
+    guard setTimeout(on: application) else { return false }
+    var settable = DarwinBoolean(false)
+    if AXUIElementIsAttributeSettable(application, attribute, &settable) == .success,
+      settable.boolValue
+    {
+      if booleanAttribute(application, attribute) == true { return true }
+      guard setTimeout(on: application), !shouldStop else { return false }
+      return AXUIElementSetAttributeValue(application, attribute, kCFBooleanTrue) == .success
+    }
+    // Chromium's generic assistive-technology activation path is a role read.
+    return stringAttribute(application, kAXRoleAttribute as CFString) != nil
   }
 
-  private func editableCandidate(startingAt focusedElement: AXUIElement) -> AXUIElement? {
-    var candidate: AXUIElement?
-    var current: AXUIElement? = focusedElement
-    var depth = 0
+  private func focusIsCurrent(_ target: Snapshot) -> Bool {
+    guard !shouldStop,
+      booleanAttribute(target.application, kAXFrontmostAttribute as CFString) == true,
+      let focus = elementAttribute(target.application, kAXFocusedUIElementAttribute as CFString)
+    else { return false }
+    return !shouldStop && CFEqual(focus, target.focus)
+  }
 
-    while let element = current, depth < 8 {
-      guard !Task.isCancelled else { return nil }
-      let traits = traits(of: element)
-      guard TextTargetPolicy.permitsInsertion(traits) else { return nil }
-      if candidate == nil, TextTargetPolicy.isEditable(traits) { candidate = element }
+  private func targetIsCurrent(_ target: Snapshot) -> Bool {
+    guard focusIsCurrent(target),
+      let editor = editableCandidate(startingAt: target.focus, application: target.application)
+    else { return false }
+    return !shouldStop && CFEqual(editor, target.editor) && focusIsCurrent(target)
+  }
 
-      let parent = elementAttribute(element, kAXParentAttribute as CFString)
-      if let parent, CFEqual(parent, element) { break }
-      current = parent
-      depth += 1
-    }
-    return candidate
+  private func editableCandidate(
+    startingAt focus: AXUIElement, application: AXUIElement
+  ) -> AXUIElement? {
+    EditorAncestry.resolve(
+      startingAt: focus,
+      traits: { self.traits(of: $0) },
+      parent: { element in
+        if CFEqual(element, application) { return .root }
+        guard let parent = self.elementAttribute(element, kAXParentAttribute as CFString) else {
+          return .unavailable
+        }
+        return .parent(parent)
+      }, same: { CFEqual($0, $1) }, shouldStop: { self.shouldStop })
   }
 
   private func traits(of element: AXUIElement) -> TextTargetTraits {
-    var traits = TextTargetTraits()
+    var evidence = TextTargetTraits()
+    guard !shouldStop else { return evidence }
     if let role = stringAttribute(element, kAXRoleAttribute as CFString) {
-      traits.roles.insert(role)
+      evidence.roles.insert(role)
     }
-    traits.secureTextStatus = secureTextStatus(of: element)
+    evidence.secureTextStatus = secureTextStatus(of: element)
+    guard TextTargetPolicy.permitsInsertion(evidence) else { return evidence }
+    // Containers still participate in the security walk, but need no editor probes.
+    let containers: Set<String> = [
+      kAXApplicationRole as String, kAXWindowRole as String,
+      kAXScrollAreaRole as String, kAXSplitGroupRole as String,
+    ]
+    if !evidence.roles.isDisjoint(with: containers) { return evidence }
+    evidence.enabled = booleanAttribute(element, kAXEnabledAttribute as CFString)
+    evidence.editable = booleanAttribute(element, "AXEditable" as CFString)
     if let names = attributeNames(element) {
-      traits.supportedAttributes = names
+      evidence.supportedAttributes = names
+      if names.contains(kAXEnabledAttribute as String), evidence.enabled == nil {
+        return TextTargetTraits()
+      }
     }
     for attribute in [kAXValueAttribute, kAXSelectedTextAttribute] {
+      guard setTimeout(on: element), !shouldStop else { return TextTargetTraits() }
       var settable = DarwinBoolean(false)
-      setTimeout(on: element)
       if AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success,
         settable.boolValue
       {
-        traits.settableAttributes.insert(attribute as String)
+        evidence.settableAttributes.insert(attribute as String)
       }
     }
-    return traits
+    return evidence
   }
 
   private func secureTextStatus(of element: AXUIElement) -> SecureTextStatus {
-    setTimeout(on: element)
-    for attempt in 0..<2 {
-      guard !Task.isCancelled else { return .unknown }
-      var value: CFTypeRef?
-      let result = AXUIElementCopyAttributeValue(
-        element, kAXSubroleAttribute as CFString, &value)
-      if result == .cannotComplete, attempt == 0 { continue }
-      return SecureTextStatus.resolve(subrole: value as? String, result: result)
-    }
-    return .unknown
+    let (result, value) = readAttribute(element, kAXSubroleAttribute as CFString)
+    return SecureTextStatus.resolve(subrole: value as? String, result: result)
   }
 
   private func enabledPasteMenuItem(in applicationElement: AXUIElement) -> AXUIElement? {
@@ -287,14 +435,14 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     var visited = 0
 
     func find(in element: AXUIElement, depth: Int) -> AXUIElement? {
-      guard !Task.isCancelled, depth <= 5, visited < menuSearchLimit,
+      guard !shouldStop, depth <= 5, visited < menuSearchLimit,
         CACurrentMediaTime() < deadline
       else {
         return nil
       }
       visited += 1
 
-      if pasteMenuItemIsEnabledStandardPaste(element) { return element }
+      if pasteMenuItemIsEnabledStandardPaste(element, requireEnabled: false) { return element }
       for child in children(of: element) {
         if let match = find(in: child, depth: depth + 1) { return match }
       }
@@ -304,7 +452,9 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     return find(in: menuBar, depth: 0)
   }
 
-  private func pasteMenuItemIsEnabledStandardPaste(_ element: AXUIElement) -> Bool {
+  private func pasteMenuItemIsEnabledStandardPaste(
+    _ element: AXUIElement, requireEnabled: Bool = true
+  ) -> Bool {
     guard stringAttribute(element, kAXRoleAttribute as CFString) == kAXMenuItemRole as String else {
       return false
     }
@@ -315,23 +465,30 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
         modifiers: integerAttribute(element, kAXMenuItemCmdModifiersAttribute as CFString).map {
           UInt32($0)
         },
-        enabled: booleanAttribute(element, kAXEnabledAttribute as CFString) ?? false))
+        enabled: !requireEnabled
+          || booleanAttribute(element, kAXEnabledAttribute as CFString) == true))
   }
 
-  private func setTimeout(on element: AXUIElement) {
-    AXUIElementSetMessagingTimeout(element, queryTimeout)
+  @discardableResult
+  private func setTimeout(on element: AXUIElement, maximum: Float = 0.1) -> Bool {
+    guard let timeout = deadline.timeout(maximum: maximum) else { return false }
+    return AXUIElementSetMessagingTimeout(element, timeout) == .success
+  }
+
+  private func readAttribute(_ element: AXUIElement, _ attribute: CFString) -> (AXError, CFTypeRef?)
+  {
+    AXQuery.read {
+      self.setTimeout(on: element) && !self.shouldStop
+    } perform: {
+      var value: CFTypeRef?
+      let result = AXUIElementCopyAttributeValue(element, attribute, &value)
+      return (result, value)
+    }
   }
 
   private func copyAttribute(_ element: AXUIElement, _ attribute: CFString) -> CFTypeRef? {
-    setTimeout(on: element)
-    for attempt in 0..<2 {
-      guard !Task.isCancelled else { return nil }
-      var value: CFTypeRef?
-      let result = AXUIElementCopyAttributeValue(element, attribute, &value)
-      if result == .success { return value }
-      if result != .cannotComplete || attempt == 1 { return nil }
-    }
-    return nil
+    let (result, value) = readAttribute(element, attribute)
+    return result == .success ? value : nil
   }
 
   private func elementAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
@@ -354,15 +511,15 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
   }
 
   private func attributeNames(_ element: AXUIElement) -> Set<String>? {
-    setTimeout(on: element)
-    for attempt in 0..<2 {
-      guard !Task.isCancelled else { return nil }
+    let (result, names) = AXQuery.read {
+      self.setTimeout(on: element) && !self.shouldStop
+    } perform: {
       var names: CFArray?
       let result = AXUIElementCopyAttributeNames(element, &names)
-      if result == .success, let names = names as? [String] { return Set(names) }
-      if result != .cannotComplete || attempt == 1 { return nil }
+      return (result, names)
     }
-    return nil
+    guard result == .success, let names = names as? [String] else { return nil }
+    return Set(names)
   }
 
   private func children(of element: AXUIElement) -> [AXUIElement] {
@@ -374,33 +531,10 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
 }
 
 enum ClipboardOwnership {
-  static func shouldRestore(
+  static func isCurrent(
     currentMarker: String?, expectedMarker: String, currentChangeCount: Int,
     expectedChangeCount: Int
   ) -> Bool {
     currentMarker == expectedMarker && currentChangeCount == expectedChangeCount
-  }
-}
-
-private struct PasteboardSnapshot {
-  let items: [[NSPasteboard.PasteboardType: Data]]
-
-  init(pasteboard: NSPasteboard) {
-    items = (pasteboard.pasteboardItems ?? []).map { item in
-      Dictionary(
-        uniqueKeysWithValues: item.types.compactMap { type in
-          item.data(forType: type).map { (type, $0) }
-        })
-    }
-  }
-
-  func restore(to pasteboard: NSPasteboard) {
-    pasteboard.clearContents()
-    let restored = items.map { values -> NSPasteboardItem in
-      let item = NSPasteboardItem()
-      for (type, data) in values { item.setData(data, forType: type) }
-      return item
-    }
-    pasteboard.writeObjects(restored)
   }
 }

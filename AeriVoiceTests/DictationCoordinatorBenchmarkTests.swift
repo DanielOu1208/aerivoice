@@ -5,6 +5,78 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorBenchmarkTests: XCTestCase {
+  func testCancelledInsertionCannotMarkNewSession() async throws {
+    let fixture = makeFixture()
+    fixture.inserter.suspendInsert = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.inserter.pendingInsert != nil }
+    fixture.coordinator.cancel()
+    fixture.benchmark.milestones.removeAll()
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.inserter.pendingInsert?.resume()
+    fixture.inserter.pendingInsert = nil
+    try await waitUntil { fixture.inserter.didReturn }
+    await Task.yield()
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.insertionFinished))
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    fixture.coordinator.cancel()
+  }
+
+  func testTargetIsCapturedSynchronouslyAtStopAndNotRecapturedAtInsertion() async throws {
+    let fixture = makeFixture()
+    let original = TextInsertionTarget { _, _ in .inserted }
+    fixture.inserter.target = original
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    XCTAssertEqual(fixture.inserter.captureCount, 0)
+    fixture.coordinator.toggle()
+    XCTAssertEqual(fixture.inserter.captureCount, 1)
+    fixture.inserter.target = TextInsertionTarget { _, _ in .inserted }
+    try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertEqual(fixture.inserter.receivedTarget?.id, original.id)
+    XCTAssertEqual(fixture.inserter.captureCount, 1)
+  }
+
+  func testCancellationCancelsTargetAcquisitionAndNeverInserts() async throws {
+    let fixture = makeFixture()
+    fixture.inserter.suspendCapture = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .inserting }
+    fixture.coordinator.cancel()
+    try await waitUntil { fixture.inserter.captureCancelled }
+    XCTAssertNil(fixture.inserter.insertedText)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .cancelled)
+  }
+
+  func testUnconfirmedPasteShowsWarningAndDoesNotLogInserted() async throws {
+    let fixture = makeFixture()
+    fixture.inserter.result = .unconfirmed("Check destination—text kept on clipboard.")
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertEqual(fixture.benchmark.terminalResult, .insertionUnconfirmed)
+    XCTAssertEqual(
+      fixture.notch.presentedStates.last?.warning, "Check destination—text kept on clipboard.")
+    XCTAssertEqual(fixture.notch.hideDelays.last, .seconds(3))
+  }
+
+  func testCopyFailureIsNotLoggedAsCopied() async throws {
+    let fixture = makeFixture()
+    fixture.inserter.result = .failed("Clipboard changed")
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .error("Clipboard changed") }
+    XCTAssertEqual(fixture.benchmark.terminalResult, .failed)
+    XCTAssertEqual(fixture.benchmark.failureStage, .insertion)
+  }
+
   func testSuccessfulDictationRecordsPipelineMilestones() async throws {
     let fixture = makeFixture()
     fixture.coordinator.toggle()
@@ -748,9 +820,34 @@ private final class FakeCuePlayer: SoundCuePlaying {
 @MainActor
 private final class FakeInserter: TextInserting, @unchecked Sendable {
   var insertedText: String?
-  func insert(_ text: String) async -> InsertionResult {
+  var suspendInsert = false
+  var pendingInsert: CheckedContinuation<Void, Never>?
+  var didReturn = false
+  var captureCount = 0
+  var suspendCapture = false
+  var captureCancelled = false
+  var result: InsertionResult = .inserted
+  var target: TextInsertionTarget?
+  var receivedTarget: TextInsertionTarget?
+  func captureTarget() -> Task<TextInsertionTarget?, Never> {
+    captureCount += 1
+    let pinned = target
+    return Task {
+      if suspendCapture {
+        do { try await Task.sleep(for: .seconds(10)) } catch {
+          captureCancelled = true
+          return nil
+        }
+      }
+      return pinned
+    }
+  }
+  func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult {
+    receivedTarget = target
+    if suspendInsert { await withCheckedContinuation { pendingInsert = $0 } }
+    defer { didReturn = true }
     insertedText = text
-    return .inserted
+    return result
   }
 }
 

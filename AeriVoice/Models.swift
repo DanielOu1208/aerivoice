@@ -500,12 +500,17 @@ protocol OutputMuting: AnyObject {
 
 @MainActor
 protocol TextInserting: Sendable {
-  func insert(_ text: String) async -> InsertionResult
+  /// Begins acquisition immediately at stop; callers cancel this task with the session.
+  func captureTarget() -> Task<TextInsertionTarget?, Never>
+  func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult
 }
 
 enum InsertionResult: Equatable, Sendable {
   case inserted
+  case unconfirmed(String)
   case copied(String)
+  case failed(String)
+  case cancelled
 }
 
 @MainActor
