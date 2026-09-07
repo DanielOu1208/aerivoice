@@ -29,6 +29,10 @@ AeriVoice is a native macOS menu-bar dictation app that turns your speech into
 clean text in the app you're using. See your words appear live, refine them with
 AI, and keep writing without switching windows.
 
+<p align="center">
+  <img src="docs/images/aerivoice-demo.gif" alt="Silent looping demo: AeriVoice transcribes speech live, cleans it up, and pastes the result into a terminal" width="800">
+</p>
+
 ## Why AeriVoice?
 
 - **Fast transcription. Fast cleanup.** Pair Soniox's live transcription with
@@ -49,15 +53,11 @@ AI, and keep writing without switching windows.
 **~500 ms median from finishing dictation to sending cleaned text to your app
 with Soniox + Cerebras.**
 
-Based on median timings in recent local testing. Performance varies by network,
-model, and provider load. See the [benchmark details](docs/CLEANUP-PERFORMANCE.md#readme-performance-checkpoint-2026-09-07)
-for measurements and methodology.
+[Local benchmark details](docs/CLEANUP-PERFORMANCE.md#readme-performance-checkpoint-2026-09-07).
+Timings vary by network, model, and provider load.
 
-AeriVoice sends text using Paste in native apps, browsers, Electron apps, and
-terminals. The result also stays on your clipboard. If the target is detected as
-secure, unavailable, read-only, or changed, AeriVoice copies the result and tells
-you why it couldn't paste. A green check mark means Paste was sent; it does not
-confirm the destination app accepted the text.
+If Paste is unavailable, AeriVoice can copy the result for you.
+[How Paste works](docs/TEXT-INSERTION.md#clipboard-and-result-reporting).
 
 ## Providers and models
 
@@ -65,16 +65,17 @@ Choose transcription and cleanup separately in Settings, using your own API keys
 
 | Stage | Provider | Supported models |
 | --- | --- | --- |
-| Live transcription | Soniox — default | Soniox Realtime |
-| Live transcription | Meta — optional | Muse Voice Transcribe 1.0 |
-| AI cleanup | OpenRouter — default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras |
-| AI cleanup | Cerebras — experimental direct connection | Qwen 3.8 27B |
-| AI cleanup | Groq — experimental direct connection | Qwen 3.8 27B |
+| Live transcription | <img src="docs/images/providers/soniox.png" width="24" height="24" alt=""> **Soniox** — Default | Soniox Realtime |
+| Live transcription | <img src="docs/images/providers/meta.svg" width="24" height="24" alt=""> **Meta** | Muse Voice Transcribe 1.0 |
+| AI cleanup | <img src="docs/images/providers/openrouter.svg" width="24" height="24" alt=""> **OpenRouter** — Default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras |
+| AI cleanup | <img src="docs/images/providers/cerebras.svg" width="24" height="24" alt=""> **Cerebras** — Experimental | Qwen 3.8 27B |
+| AI cleanup | <img src="docs/images/providers/groq.svg" width="24" height="24" alt=""> **Groq** — Experimental | Qwen 3.8 27B |
 
-New installs use Soniox and Gemini 3.5 Flash Lite through OpenRouter, with Minimal
-reasoning. You can switch cleanup models and adjust reasoning effort where
-supported. To try the Soniox + Cerebras pairing above, select Cerebras for cleanup
-and Qwen 3.8 27B with reasoning set to None.
+**Default:** Soniox + Gemini 3.5 Flash Lite via OpenRouter, with Minimal reasoning.
+
+**Speed setup:** Soniox + Qwen 3.8 27B via direct Cerebras, with reasoning set to None.
+
+Switch providers, supported models, and reasoning effort in Settings.
 
 ## Getting started
 
@@ -82,46 +83,39 @@ AeriVoice is currently in **beta**. You'll need an **Apple Silicon Mac running
 macOS 26 or newer**, plus your own provider accounts. Provider charges and usage
 limits may apply.
 
-### Install the beta
+1. **Install.** [Download the beta](https://github.com/DanielOu1208/aerivoice/releases/latest), open the DMG, and drag AeriVoice to Applications.
+2. **Set up.** Add your API keys and grant Microphone and Accessibility permission during onboarding.
+3. **Dictate.** Focus a text field and tap or hold your configured shortcut.
 
-1. Download `AeriVoice-v0.1.0-beta.5-arm64.dmg` and its `.sha256` file from
-   [GitHub Releases](https://github.com/DanielOu1208/aerivoice/releases).
-2. From the download directory, verify the artifact:
+For the default setup: [Soniox API key](https://console.soniox.com/) +
+[OpenRouter API key](https://openrouter.ai/settings/keys). Other providers are
+available in Settings.
 
-   ```sh
-   shasum -a 256 -c AeriVoice-v0.1.0-beta.5-arm64.dmg.sha256
-   ```
+<details>
+<summary>Verify your download</summary>
 
-3. Open the DMG and drag AeriVoice to Applications.
-4. Launch AeriVoice and follow onboarding to add your provider keys and grant
-   **Microphone** and **Accessibility** permission.
+Download `AeriVoice-v0.1.0-beta.5-arm64.dmg` and its `.sha256` file from
+[GitHub Releases](https://github.com/DanielOu1208/aerivoice/releases), then run
+this in your download directory before opening the DMG:
 
-For the default setup, get a [Soniox API key](https://console.soniox.com/) and an
-[OpenRouter API key](https://openrouter.ai/settings/keys). Alternatively, use a
-[Meta Model API key](https://dev.meta.ai/docs/speech-to-text) for transcription,
-or configure direct Cerebras or Groq cleanup in Settings.
+```sh
+shasum -a 256 -c AeriVoice-v0.1.0-beta.5-arm64.dmg.sha256
+```
 
-Once setup is complete, use your configured shortcut to dictate into a text field.
+</details>
 
-AeriVoice does not include an automatic updater. Check GitHub Releases for new
-versions.
+Updates are manual—check GitHub Releases for new versions.
 
 ## Privacy and security
 
-AeriVoice has no account system or first-party server. It uses cloud providers
-for transcription and cleanup:
+- **Cloud processing:** audio and vocabulary go to your transcription provider;
+  transcripts go to your cleanup provider. No AeriVoice account or first-party server.
+- **Keychain storage:** API keys stay in macOS Keychain and authenticate requests
+  to your chosen providers.
+- **Local diagnostics:** timing logs stay on your Mac for 90 days, without
+  transcript text, audio, or credentials.
 
-- Microphone audio and vocabulary hints are sent to your selected transcription
-  provider: Soniox or Meta. Meta sessions request zero data retention.
-- The completed transcript is sent to OpenRouter, Groq, or Cerebras when cleanup
-  is used.
-- API keys are stored in the macOS Keychain.
-- Latency diagnostics stay on your Mac for 90 days and exclude transcript text,
-  vocabulary, credentials, clipboard contents, provider bodies, and raw errors.
-
-Read [PRIVACY.md](PRIVACY.md) for details. Report vulnerabilities privately as
-described in [SECURITY.md](SECURITY.md); never put credentials or private
-transcript text in a public issue.
+[Privacy details](PRIVACY.md) · [Report a security issue privately](SECURITY.md)
 
 ## Build from source
 
@@ -160,4 +154,5 @@ pull requests; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Source code and repository artwork are available under the [MIT License](LICENSE).
+Source code and original AeriVoice artwork use the [MIT License](LICENSE).
+Provider logos belong to their respective owners; see [artwork credits](docs/ARTWORK.md).
