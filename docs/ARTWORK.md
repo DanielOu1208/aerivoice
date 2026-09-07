@@ -18,8 +18,8 @@ user's Mac.
 `images/aerivoice-demo.gif` is derived from Daniel Ou's supplied
 `aerivoice qwen demo.mp4` recording from September 3, 2026. The full recording
 retains its original timing, with no audio, at 800 × 600 and 20 frames per second.
-It loops continuously. Palette quantization uses 96 colors and Bayer dithering (scale 5);
-the GIF is approximately 2.7 MB. The source recording remains outside the repo.
+It loops continuously. Palette quantization uses 128 colors and Bayer dithering (scale 3);
+the GIF is approximately 3.9 MB. The source recording remains outside the repo.
 
 ## Provider logos
 
