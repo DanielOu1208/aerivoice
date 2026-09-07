@@ -25,7 +25,7 @@ final class CerebrasCleanupClientTests: XCTestCase {
       let jsonSchema = try XCTUnwrap(responseFormat["json_schema"] as? [String: Any])
       XCTAssertEqual(jsonSchema["strict"] as? Bool, true)
       let response =
-        #"{"model":"qwen-3.8-27b","service_tier":"shared","usage":{"prompt_tokens":22,"completion_tokens":5,"total_tokens":27},"choices":[{"message":{"content":"{\"text\":\"Hello, world.\"}"}}]}"#
+        #"{"model":"qwen-3.8-27b","service_tier":"shared","usage":{"prompt_tokens":22,"completion_tokens":5,"total_tokens":27,"prompt_tokens_details":{"cached_tokens":16}},"time_info":{"queue_time":0.004,"prompt_time":0.012,"completion_time":0.021,"total_time":0.037},"choices":[{"message":{"content":"{\"text\":\"Hello, world.\"}"}}]}"#
         .data(using: .utf8)!
       return (
         HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
@@ -46,7 +46,143 @@ final class CerebrasCleanupClientTests: XCTestCase {
     XCTAssertEqual(result.metrics.routingAttempt, 1)
     XCTAssertEqual(result.metrics.serviceTier, "shared")
     XCTAssertEqual(result.metrics.totalTokens, 27)
+    XCTAssertEqual(result.metrics.cachedPromptTokens, 16)
+    XCTAssertEqual(result.metrics.providerTiming?.queueMS, 4)
+    XCTAssertEqual(result.metrics.providerTiming?.promptMS, 12)
+    XCTAssertEqual(result.metrics.providerTiming?.completionMS, 21)
+    XCTAssertEqual(result.metrics.providerTiming?.totalMS, 37)
+    XCTAssertNotNil(result.metrics.requestEncodingMS)
+    XCTAssertNotNil(result.metrics.networkRequestMS)
+    XCTAssertNotNil(result.metrics.responseDecodingMS)
     XCTAssertEqual(result.metrics.httpStatus, 200)
+  }
+
+  func testWarmUpUsesAuthenticatedCerebrasEndpointWithoutContent() async {
+    var requestCount = 0
+    CerebrasURLProtocolStub.handler = { request in
+      requestCount += 1
+      XCTAssertEqual(request.url?.absoluteString, "https://api.cerebras.ai/v1/tcp_warming")
+      XCTAssertEqual(request.httpMethod, "GET")
+      XCTAssertEqual(request.timeoutInterval, 1)
+      XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+      XCTAssertNil(request.cerebrasBodyData)
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        Data()
+      )
+    }
+
+    await CerebrasCleanupClient(session: makeSession()).warmUp(
+      configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+      apiKey: "test-key")
+
+    XCTAssertEqual(requestCount, 1)
+  }
+
+  func testWarmUpCoalescesConcurrentAndRecentRequests() async {
+    let lock = NSLock()
+    var requestCount = 0
+    CerebrasURLProtocolStub.handler = { request in
+      lock.withLock { requestCount += 1 }
+      Thread.sleep(forTimeInterval: 0.05)
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        Data()
+      )
+    }
+    let client = CerebrasCleanupClient(session: makeSession())
+    let configuration = CleanupConfiguration(
+      model: .qwen38_27BCerebras, reasoningEffort: .none)
+
+    async let first: Void = client.warmUp(configuration: configuration, apiKey: "test-key")
+    async let second: Void = client.warmUp(configuration: configuration, apiKey: "test-key")
+    _ = await (first, second)
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+
+    XCTAssertEqual(lock.withLock { requestCount }, 1)
+  }
+
+  func testWarmUpBecomesEligibleAgainAfterInterval() async throws {
+    let lock = NSLock()
+    var requestCount = 0
+    CerebrasURLProtocolStub.handler = { request in
+      lock.withLock { requestCount += 1 }
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        Data()
+      )
+    }
+    let client = CerebrasCleanupClient(
+      session: makeSession(), warmUpInterval: .milliseconds(20))
+    let configuration = CleanupConfiguration(
+      model: .qwen38_27BCerebras, reasoningEffort: .none)
+
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+    try await Task.sleep(for: .milliseconds(40))
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+
+    XCTAssertEqual(lock.withLock { requestCount }, 2)
+  }
+
+  func testCleanupSuppressesImmediateWarmUp() async throws {
+    let lock = NSLock()
+    var requestedPaths: [String] = []
+    CerebrasURLProtocolStub.handler = { request in
+      lock.withLock { requestedPaths.append(request.url!.path) }
+      let response = #"{"choices":[{"message":{"content":"{\"text\":\"Cleaned.\"}"}}]}"#
+        .data(using: .utf8)!
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        response
+      )
+    }
+    let client = CerebrasCleanupClient(session: makeSession())
+    let configuration = CleanupConfiguration(
+      model: .qwen38_27BCerebras, reasoningEffort: .none)
+
+    _ = try await client.clean(
+      "raw", mode: .faithful, configuration: configuration, apiKey: "test-key")
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+
+    XCTAssertEqual(lock.withLock { requestedPaths }, ["/v1/chat/completions"])
+  }
+
+  func testWarmUpReturnsAfterOneSecondWhenTransportStalls() async {
+    let client = CerebrasCleanupClient(session: makeHangingSession())
+    let configuration = CleanupConfiguration(
+      model: .qwen38_27BCerebras, reasoningEffort: .none)
+    let started = ContinuousClock.now
+
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+
+    XCTAssertLessThan(started.duration(to: .now), .seconds(2))
+  }
+
+  func testWarmUpFailureIsIgnored() async {
+    CerebrasURLProtocolStub.handler = { _ in throw URLError(.cannotConnectToHost) }
+
+    await CerebrasCleanupClient(session: makeSession()).warmUp(
+      configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+      apiKey: "test-key")
+  }
+
+  func testCleanupAcceptsResponseWithoutOptionalTimingMetadata() async throws {
+    CerebrasURLProtocolStub.handler = { request in
+      let response = #"{"choices":[{"message":{"content":"{\"text\":\"Cleaned.\"}"}}]}"#
+        .data(using: .utf8)!
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        response
+      )
+    }
+
+    let result = try await CerebrasCleanupClient(session: makeSession()).clean(
+      "raw", mode: .faithful,
+      configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+      apiKey: "test-key")
+
+    XCTAssertNil(result.metrics.cachedPromptTokens)
+    XCTAssertNil(result.metrics.providerTiming)
   }
 
   func testConfiguredReasoningEffortsAreEncodedExactly() async throws {
@@ -163,6 +299,24 @@ final class CerebrasCleanupClientTests: XCTestCase {
     }
   }
 
+  func testNetworkErrorIncludesElapsedRequestMetrics() async {
+    CerebrasURLProtocolStub.handler = { _ in throw URLError(.cannotConnectToHost) }
+
+    do {
+      _ = try await CerebrasCleanupClient(session: makeSession()).clean(
+        "raw", mode: .faithful,
+        configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+        apiKey: "test-key")
+      XCTFail("Expected the network request to fail")
+    } catch {
+      let networkError = error as? CleanupNetworkError
+      XCTAssertEqual(networkError?.code, .cannotConnectToHost)
+      XCTAssertNil(networkError?.cleanupMetrics.httpStatus)
+      XCTAssertNotNil(networkError?.cleanupMetrics.requestEncodingMS)
+      XCTAssertNotNil(networkError?.cleanupMetrics.networkRequestMS)
+    }
+  }
+
   func testTokenBudgetGrowsWithInputAndStaysWithinTotalLimit() throws {
     XCTAssertEqual(try CerebrasTokenBudget.maxCompletionTokens(for: "Test."), 256)
     XCTAssertEqual(
@@ -237,6 +391,33 @@ final class CerebrasCleanupClientTests: XCTestCase {
     }
   }
 
+  func testStructurallyMalformedSuccessPreservesDecodableTimingMetadata() async {
+    CerebrasURLProtocolStub.handler = { request in
+      let response =
+        #"{"model":"qwen-3.8-27b","usage":{"prompt_tokens":20,"prompt_tokens_details":{"cached_tokens":16}},"time_info":{"queue_time":0.003,"total_time":0.025},"choices":"malformed"}"#
+        .data(using: .utf8)!
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        response
+      )
+    }
+
+    do {
+      _ = try await CerebrasCleanupClient(session: makeSession()).clean(
+        "raw", mode: .faithful,
+        configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+        apiKey: "test-key")
+      XCTFail("Expected malformed cleanup to fail")
+    } catch {
+      let metrics = (error as? ProviderHTTPError)?.cleanupMetrics
+      XCTAssertEqual(metrics?.actualModel, "qwen-3.8-27b")
+      XCTAssertEqual(metrics?.promptTokens, 20)
+      XCTAssertEqual(metrics?.cachedPromptTokens, 16)
+      XCTAssertEqual(metrics?.providerTiming?.queueMS, 3)
+      XCTAssertEqual(metrics?.providerTiming?.totalMS, 25)
+    }
+  }
+
   func testCleanupRouterUsesCerebrasForCerebrasModel() async throws {
     let session = makeSession()
     CerebrasURLProtocolStub.handler = { request in
@@ -265,6 +446,12 @@ final class CerebrasCleanupClientTests: XCTestCase {
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [CerebrasURLProtocolStub.self]
+    return URLSession(configuration: configuration)
+  }
+
+  private func makeHangingSession() -> URLSession {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [HangingCerebrasURLProtocolStub.self]
     return URLSession(configuration: configuration)
   }
 }
@@ -301,5 +488,12 @@ private final class CerebrasURLProtocolStub: URLProtocol, @unchecked Sendable {
       client?.urlProtocol(self, didFailWithError: error)
     }
   }
+  override func stopLoading() {}
+}
+
+private final class HangingCerebrasURLProtocolStub: URLProtocol, @unchecked Sendable {
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func startLoading() {}
   override func stopLoading() {}
 }

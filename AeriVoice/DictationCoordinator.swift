@@ -228,7 +228,10 @@ final class DictationCoordinator: ObservableObject {
       return
     }
     let cleanupProvider = cleanupSettings.configuration.provider
-    guard credentials.value(for: cleanupProvider.credentialKind).map({ !$0.isEmpty }) == true else {
+    guard
+      let cleanupKey = credentials.value(for: cleanupProvider.credentialKind),
+      !cleanupKey.isEmpty
+    else {
       showReadinessError(cleanupProvider.missingCredentialError, category: .missingCredential)
       return
     }
@@ -243,6 +246,14 @@ final class DictationCoordinator: ObservableObject {
         AppError.provider("Accessibility access is required to insert text."),
         category: .accessibilityPermission)
       return
+    }
+
+    if cleanupProvider == .cerebras {
+      let cleaner = self.cleaner
+      Task {
+        await cleaner.warmUp(
+          configuration: cleanupSettings.configuration, apiKey: cleanupKey)
+      }
     }
 
     state = NotchState(phase: .starting)
@@ -626,6 +637,7 @@ final class DictationCoordinator: ObservableObject {
     if let error = error as? ProviderHTTPError {
       return (.provider, error.statusCode)
     }
+    if error is CleanupNetworkError { return (.network, nil) }
     if error is URLError { return (.network, nil) }
     if let error = error as? AppError {
       switch error {

@@ -456,14 +456,37 @@ protocol RealtimeTranscribing: AnyObject {
 }
 
 protocol CleaningText: Sendable {
+  func warmUp(configuration: CleanupConfiguration, apiKey: String) async
   func clean(
     _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult
 }
 
+extension CleaningText {
+  func warmUp(configuration: CleanupConfiguration, apiKey: String) async {}
+}
+
 struct CleanupTextResult: Equatable, Sendable {
   let text: String
   let metrics: CleanupRequestMetrics
+}
+
+struct CleanupProviderTimingMetrics: Codable, Equatable, Sendable {
+  let queueMS: Double?
+  let promptMS: Double?
+  let completionMS: Double?
+  let totalMS: Double?
+}
+
+struct CleanupNetworkTimingMetrics: Codable, Equatable, Sendable {
+  let connectionReused: Bool?
+  let networkProtocolName: String?
+  let dnsMS: Double?
+  let connectMS: Double?
+  let secureConnectionMS: Double?
+  let requestUploadMS: Double?
+  let timeToFirstByteMS: Double?
+  let responseDownloadMS: Double?
 }
 
 struct CleanupRequestMetrics: Equatable, Sendable {
@@ -476,7 +499,39 @@ struct CleanupRequestMetrics: Equatable, Sendable {
   let promptTokens: Int?
   let completionTokens: Int?
   let totalTokens: Int?
-  let httpStatus: Int
+  let httpStatus: Int?
+  let cachedPromptTokens: Int?
+  let requestEncodingMS: Double?
+  let networkRequestMS: Double?
+  let responseDecodingMS: Double?
+  let providerTiming: CleanupProviderTimingMetrics?
+  let networkTiming: CleanupNetworkTimingMetrics?
+
+  init(
+    actualModel: String?, selectedProvider: String?, selectedProviderModel: String?,
+    routingStrategy: String?, routingAttempt: Int?, serviceTier: String?, promptTokens: Int?,
+    completionTokens: Int?, totalTokens: Int?, httpStatus: Int?, cachedPromptTokens: Int? = nil,
+    requestEncodingMS: Double? = nil, networkRequestMS: Double? = nil,
+    responseDecodingMS: Double? = nil, providerTiming: CleanupProviderTimingMetrics? = nil,
+    networkTiming: CleanupNetworkTimingMetrics? = nil
+  ) {
+    self.actualModel = actualModel
+    self.selectedProvider = selectedProvider
+    self.selectedProviderModel = selectedProviderModel
+    self.routingStrategy = routingStrategy
+    self.routingAttempt = routingAttempt
+    self.serviceTier = serviceTier
+    self.promptTokens = promptTokens
+    self.completionTokens = completionTokens
+    self.totalTokens = totalTokens
+    self.httpStatus = httpStatus
+    self.cachedPromptTokens = cachedPromptTokens
+    self.requestEncodingMS = requestEncodingMS
+    self.networkRequestMS = networkRequestMS
+    self.responseDecodingMS = responseDecodingMS
+    self.providerTiming = providerTiming
+    self.networkTiming = networkTiming
+  }
 }
 
 struct ProviderHTTPError: LocalizedError, Sendable {
@@ -491,6 +546,13 @@ struct ProviderHTTPError: LocalizedError, Sendable {
   }
 
   var errorDescription: String? { message }
+}
+
+struct CleanupNetworkError: LocalizedError, Sendable {
+  let code: URLError.Code
+  let cleanupMetrics: CleanupRequestMetrics
+
+  var errorDescription: String? { URLError(code).localizedDescription }
 }
 
 protocol OutputMuting: AnyObject {

@@ -73,7 +73,14 @@ final class LatencyBenchmarkingTests: XCTestCase {
         actualModel: "actual-model", selectedProvider: "provider",
         selectedProviderModel: "provider-model", routingStrategy: "direct",
         routingAttempt: 1, serviceTier: "default", promptTokens: 20,
-        completionTokens: 4, totalTokens: 24, httpStatus: 200))
+        completionTokens: 4, totalTokens: 24, httpStatus: 200, cachedPromptTokens: 16,
+        requestEncodingMS: 0.4, networkRequestMS: 44, responseDecodingMS: 0.7,
+        providerTiming: CleanupProviderTimingMetrics(
+          queueMS: 2, promptMS: 10, completionMS: 20, totalMS: 32),
+        networkTiming: CleanupNetworkTimingMetrics(
+          connectionReused: true, networkProtocolName: "h2", dnsMS: nil, connectMS: nil,
+          secureConnectionMS: nil, requestUploadMS: 1, timeToFirstByteMS: 40,
+          responseDownloadMS: 3)))
     recorder.recordCleanedCharacters(19)
     clock.milliseconds = 1_390
     recorder.mark(.cleanupFinished)
@@ -106,6 +113,13 @@ final class LatencyBenchmarkingTests: XCTestCase {
     XCTAssertEqual(record.workload.transcriptUpdates, 2)
     XCTAssertEqual(record.stt.finalAudioProcessedMS, 100)
     XCTAssertEqual(record.cleanup.selectedProvider, "provider")
+    XCTAssertEqual(record.cleanup.cachedPromptTokens, 16)
+    XCTAssertEqual(record.cleanup.requestEncodingMS, 0.4)
+    XCTAssertEqual(record.cleanup.networkRequestMS, 44)
+    XCTAssertEqual(record.cleanup.responseDecodingMS, 0.7)
+    XCTAssertEqual(record.cleanup.providerTiming?.totalMS, 32)
+    XCTAssertEqual(record.cleanup.networkTiming?.connectionReused, true)
+    XCTAssertEqual(record.cleanup.networkTiming?.networkProtocolName, "h2")
     XCTAssertEqual(record.cleanup.requestedModel, "openai/gpt-oss-120b")
     XCTAssertEqual(record.cleanup.requestedReasoningEffort, .high)
     XCTAssertEqual(record.cleanup.requestedProviderTag, "cerebras/fp16")
@@ -149,6 +163,47 @@ final class LatencyBenchmarkingTests: XCTestCase {
     XCTAssertFalse(
       FileManager.default.fileExists(
         atPath: directory.appending(path: LatencyBenchmarkStore.logFilename).path))
+  }
+
+  func testNetworkFallbackKeepsContentFreeCleanupTiming() async throws {
+    let directory = makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = makeRecorder(
+      directory: directory, clock: TestClock(milliseconds: 0),
+      wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
+    await recorder.flushForTesting()
+
+    recorder.begin(
+      enabled: true, cleanupMode: .faithful,
+      cleanupConfiguration: CleanupConfiguration(
+        model: .qwen38_27BCerebras, reasoningEffort: .none))
+    recorder.recordCleanupFallback(
+      rawCharacters: 11,
+      error: CleanupNetworkError(
+        code: .timedOut,
+        cleanupMetrics: CleanupRequestMetrics(
+          actualModel: nil, selectedProvider: "Cerebras",
+          selectedProviderModel: CleanupModel.qwen38_27BCerebras.rawValue,
+          routingStrategy: "direct", routingAttempt: 1, serviceTier: nil,
+          promptTokens: nil, completionTokens: nil, totalTokens: nil, httpStatus: nil,
+          requestEncodingMS: 0.3, networkRequestMS: 10_001,
+          networkTiming: CleanupNetworkTimingMetrics(
+            connectionReused: false, networkProtocolName: "h2", dnsMS: 1,
+            connectMS: 30, secureConnectionMS: 25, requestUploadMS: 0.2,
+            timeToFirstByteMS: nil, responseDownloadMS: nil))))
+    recorder.finish(.failed, stage: .cleanup, category: .network, httpStatus: nil)
+    await recorder.flushForTesting()
+
+    let logURL = directory.appending(path: LatencyBenchmarkStore.logFilename)
+    let serialized = String(decoding: try Data(contentsOf: logURL), as: UTF8.self)
+    let record = try XCTUnwrap(try decodeRecords(at: logURL).first)
+    XCTAssertFalse(serialized.contains("timedOut"))
+    XCTAssertEqual(record.workload.cleanedCharacters, 11)
+    XCTAssertEqual(record.cleanup.result, .rawFallback)
+    XCTAssertEqual(record.cleanup.networkRequestMS, 10_001)
+    XCTAssertEqual(record.cleanup.networkTiming?.connectionReused, false)
+    XCTAssertEqual(record.cleanup.networkTiming?.timeToFirstByteMS, nil)
+    XCTAssertEqual(record.outcome?.failureCategory, .network)
   }
 
   func testDirectGroqConfigurationRecordsProviderWithoutContent() async throws {

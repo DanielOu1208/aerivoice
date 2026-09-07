@@ -185,11 +185,37 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .recording }
+    try await waitUntil { fixture.cleaner.didRequestWarmUp }
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .success }
 
+    XCTAssertEqual(fixture.cleaner.lastWarmUpConfiguration?.provider, .cerebras)
+    XCTAssertEqual(fixture.cleaner.lastWarmUpAPIKey, "cerebras-key")
     XCTAssertEqual(fixture.cleaner.lastConfiguration?.provider, .cerebras)
     XCTAssertEqual(fixture.cleaner.lastAPIKey, "cerebras-key")
+  }
+
+  func testCerebrasWarmUpDoesNotDelayRecording() async throws {
+    let fixture = makeFixture(cleanupProvider: .cerebras, warmUpWaitsForResolution: true)
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.cleaner.didRequestWarmUp }
+    try await waitUntil { fixture.coordinator.phase == .recording }
+
+    XCTAssertTrue(fixture.audio.didStart)
+    fixture.cleaner.resolveWarmUp()
+    fixture.coordinator.cancel()
+  }
+
+  func testNonCerebrasProviderDoesNotWarmUp() async throws {
+    let fixture = makeFixture(cleanupProvider: .openRouter)
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    await Task.yield()
+
+    XCTAssertFalse(fixture.cleaner.didRequestWarmUp)
+    fixture.coordinator.cancel()
   }
 
   func testMissingSelectedCerebrasCredentialFailsBeforeAudioCapture() async throws {
@@ -587,6 +613,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     hasCerebrasKey: Bool = true,
     cleanupProvider: CleanupProvider = .openRouter, cleanupError: ProviderHTTPError? = nil,
     provisionalText: String = "Raw", cleanupWaitsForCancellation: Bool = false,
+    warmUpWaitsForResolution: Bool = false,
     soundCues: Bool = false, cueDelay: Duration = .zero,
     readiness: DictationReadinessChecking? = nil, connectWaitsForResolution: Bool = false,
     connectError: Error? = nil, audioFrameCount: Int = 1
@@ -613,7 +640,8 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
       provisionalText: provisionalText, waitsForConnectResolution: connectWaitsForResolution,
       connectError: connectError)
     let cleaner = FakeCleaner(
-      error: cleanupError, waitsForCancellation: cleanupWaitsForCancellation)
+      error: cleanupError, waitsForCancellation: cleanupWaitsForCancellation,
+      warmUpWaitsForResolution: warmUpWaitsForResolution)
     let inserter = FakeInserter()
     let benchmark = BenchmarkSpy()
     let notch = FakeNotch()
@@ -774,21 +802,60 @@ private final class FakeTranscriber: RealtimeTranscribing {
 private final class FakeCleaner: CleaningText, @unchecked Sendable {
   let error: ProviderHTTPError?
   let waitsForCancellation: Bool
+  let warmUpWaitsForResolution: Bool
   private let lock = NSLock()
   private var exited = false
   private var recordedConfiguration: CleanupConfiguration?
   private var recordedMode: CleanupMode?
   private var recordedAPIKey: String?
+  private var recordedWarmUpConfiguration: CleanupConfiguration?
+  private var recordedWarmUpAPIKey: String?
+  private var warmUpContinuation: CheckedContinuation<Void, Never>?
 
-  init(error: ProviderHTTPError?, waitsForCancellation: Bool) {
+  init(
+    error: ProviderHTTPError?, waitsForCancellation: Bool,
+    warmUpWaitsForResolution: Bool
+  ) {
     self.error = error
     self.waitsForCancellation = waitsForCancellation
+    self.warmUpWaitsForResolution = warmUpWaitsForResolution
   }
 
   var hasExited: Bool { lock.withLock { exited } }
   var lastConfiguration: CleanupConfiguration? { lock.withLock { recordedConfiguration } }
   var lastMode: CleanupMode? { lock.withLock { recordedMode } }
   var lastAPIKey: String? { lock.withLock { recordedAPIKey } }
+  var didRequestWarmUp: Bool { lock.withLock { recordedWarmUpConfiguration != nil } }
+  var lastWarmUpConfiguration: CleanupConfiguration? {
+    lock.withLock { recordedWarmUpConfiguration }
+  }
+  var lastWarmUpAPIKey: String? { lock.withLock { recordedWarmUpAPIKey } }
+
+  func warmUp(configuration: CleanupConfiguration, apiKey: String) async {
+    if warmUpWaitsForResolution {
+      await withCheckedContinuation { continuation in
+        lock.withLock {
+          warmUpContinuation = continuation
+          recordedWarmUpConfiguration = configuration
+          recordedWarmUpAPIKey = apiKey
+        }
+      }
+    } else {
+      lock.withLock {
+        recordedWarmUpConfiguration = configuration
+        recordedWarmUpAPIKey = apiKey
+      }
+    }
+  }
+
+  func resolveWarmUp() {
+    let continuation = lock.withLock {
+      let continuation = warmUpContinuation
+      warmUpContinuation = nil
+      return continuation
+    }
+    continuation?.resume()
+  }
 
   func clean(
     _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String

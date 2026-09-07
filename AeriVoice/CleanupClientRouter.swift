@@ -15,6 +15,11 @@ struct CleanupClientRouter: CleaningText {
     self.cerebras = cerebras
   }
 
+  func warmUp(configuration: CleanupConfiguration, apiKey: String) async {
+    guard configuration.provider == .cerebras else { return }
+    await cerebras.warmUp(configuration: configuration, apiKey: apiKey)
+  }
+
   func clean(
     _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult {

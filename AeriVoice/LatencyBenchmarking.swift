@@ -132,6 +132,12 @@ struct BenchmarkCleanupMetadata: Codable, Equatable, Sendable {
   var promptTokens: Int?
   var completionTokens: Int?
   var totalTokens: Int?
+  var cachedPromptTokens: Int?
+  var requestEncodingMS: Double?
+  var networkRequestMS: Double?
+  var responseDecodingMS: Double?
+  var providerTiming: CleanupProviderTimingMetrics?
+  var networkTiming: CleanupNetworkTimingMetrics?
   var httpStatus: Int?
   var result: BenchmarkCleanupResult = .notReached
 }
@@ -366,6 +372,8 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
       } else {
         active.record.cleanup.httpStatus = error.statusCode
       }
+    } else if let error = error as? CleanupNetworkError {
+      Self.apply(error.cleanupMetrics, to: &active.record.cleanup)
     }
     self.active = active
   }
@@ -440,6 +448,12 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     cleanup.promptTokens = metrics.promptTokens
     cleanup.completionTokens = metrics.completionTokens
     cleanup.totalTokens = metrics.totalTokens
+    cleanup.cachedPromptTokens = metrics.cachedPromptTokens
+    cleanup.requestEncodingMS = metrics.requestEncodingMS
+    cleanup.networkRequestMS = metrics.networkRequestMS
+    cleanup.responseDecodingMS = metrics.responseDecodingMS
+    cleanup.providerTiming = metrics.providerTiming
+    cleanup.networkTiming = metrics.networkTiming
     cleanup.httpStatus = metrics.httpStatus
   }
 
