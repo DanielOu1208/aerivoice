@@ -39,6 +39,10 @@ underlying provider. Direct Groq and Cerebras cleanups are experimental and
 send requests directly to their respective API endpoints; review their current
 data controls before enabling them.
 
+When Cerebras is selected, AeriVoice may also send an authenticated connection
+warm-up request when dictation starts. That request contains no audio or
+transcript text and is limited to at most one attempt per minute.
+
 Provider pricing, retention, abuse monitoring, and privacy terms can change.
 Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for your accounts.
 
@@ -50,8 +54,8 @@ Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for you
   macOS preferences.
 - Insertion uses the normal Paste shortcut. The transcript stays on the clipboard
   until you replace it; AeriVoice does not restore an earlier clipboard on a timer.
-  “Paste sent” describes dispatch, because macOS cannot confirm consumption by
-  another app. Secure fields and secure keyboard-input mode copy with a warning
+  The green check mark means the Paste shortcut was sent; macOS cannot confirm
+  consumption by another app. Detected secure fields and secure keyboard-input mode copy with a warning
   instead of receiving an automatic Paste. Copies you make after dictation stops
   are preserved; if the clipboard changed, the transcript is not copied over it.
 - Optional latency diagnostics are enabled by default and stored in

@@ -24,8 +24,9 @@ provider, and inserts the result into the app you are using.
   launch at login.
 - A shared Paste path for native, browser, Electron, and terminal text fields,
   pinned to the app, window, and field captured when dictation stops. The result
-  stays on the clipboard and the app reports “Paste sent.” Secure, unavailable,
-  read-only, or changed targets copy instead, with a specific reason.
+  stays on the clipboard and a green check mark appears after Paste is sent.
+  Targets detected as secure, unavailable, read-only, or changed copy instead,
+  with a specific reason.
 - Local, content-free latency diagnostics with a 90-day retention window.
 
 ## Requirements
@@ -43,12 +44,12 @@ You can configure them in Settings.
 
 ## Install the beta
 
-1. Download `AeriVoice-v0.1.0-beta.4-arm64.dmg` and its `.sha256` file from the
+1. Download `AeriVoice-v0.1.0-beta.5-arm64.dmg` and its `.sha256` file from the
    [latest GitHub release](https://github.com/DanielOu1208/aerivoice/releases).
 2. From the download directory, verify the artifact:
 
    ```sh
-   shasum -a 256 -c AeriVoice-v0.1.0-beta.4-arm64.dmg.sha256
+   shasum -a 256 -c AeriVoice-v0.1.0-beta.5-arm64.dmg.sha256
    ```
 
 3. Open the DMG and drag AeriVoice to Applications.
@@ -88,7 +89,7 @@ API keys still cross important trust boundaries:
 
 - Microphone audio and vocabulary hints are sent to the selected transcription
   provider: Soniox or Meta. Meta sessions request zero data retention.
-- The completed transcript is sent to OpenRouter or Groq when cleanup is used.
+- The completed transcript is sent to OpenRouter, Groq, or Cerebras when cleanup is used.
 - API keys are stored in the macOS Keychain.
 - Latency diagnostics stay on this Mac and exclude transcript text, vocabulary,
   credentials, clipboard contents, provider bodies, and raw errors.

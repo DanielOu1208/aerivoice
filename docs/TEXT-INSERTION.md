@@ -46,7 +46,8 @@ A private owner marker and change count guard the write. Cancellation before
 commit does not change the clipboard; after commit, the transcript is left there.
 The clipboard is never restored on a timer, since an app may consume Paste later.
 
-The UI reports **Paste sent** after dispatch. It does not claim confirmed insertion:
+The UI shows a **green check mark** for 700 ms after dispatch. This marks a sent
+Paste operation rather than confirmed insertion:
 CGEvent.postToPid returns no destination-consumption acknowledgment. Benchmarks
 record `pasteSent` and specific copy-rejection categories without field contents.
 Legacy `inserted` and `insertionUnconfirmed` records remain decodable.
