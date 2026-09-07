@@ -8,6 +8,45 @@ The measurements are content-free. Do not add transcript text, vocabulary,
 credentials, clipboard contents, request bodies, raw provider responses, or raw
 errors to this document or to latency telemetry.
 
+## README performance checkpoint (2026-09-07)
+
+The README's **~500 ms median** is an approximate summary of recent local
+Soniox + Cerebras build medians, which were about 0.43 and 0.56 seconds. It is
+not an exact pooled median, a guaranteed response time, or a comparison against
+other dictation apps.
+
+This read-only snapshot uses the installed app's
+`~/Library/Application Support/AeriVoice/Benchmarks/interactions-v1.jsonl`
+through **2026-09-07 07:47:02 UTC**. The selected pipeline is Soniox `stt-rt-v5`
+and direct Cerebras `qwen-3.8-27b`. Group by `environment.appBuild` and select
+records with cleanup `applied`, terminal result `pasteSent`, and a recorded
+`durationsMS.stopToOutputMS`. Use the ordinary median, averaging the middle two
+values for an even sample count. No slow samples or latency outliers are removed.
+
+| Build | Completed Paste samples | Median stop to Paste sent | Median cleanup | Median STT finalization |
+| --- | ---: | ---: | ---: | ---: |
+| `2026090604` | 11 | 429.9 ms | 237.8 ms | 147.1 ms |
+| `2026090701` | 2 | 556.1 ms | 264.0 ms | 216.2 ms |
+
+Build `2026090604` also contains one cancelled interaction and one copy-only
+outcome; these do not measure completed automatic Paste and are excluded for
+that reason, not because of their timing. Both recorded interactions on build
+`2026090701` meet the selection criteria. These are everyday recordings with
+varying lengths and content, not a matched controlled experiment.
+
+`stopToOutputMS` runs from the stop request through the app's insertion operation.
+For these builds, `pasteSent` records that Paste was dispatched, not that the
+destination app displayed or accepted the text. Component medians are computed
+independently and should not be added to reconstruct the total median.
+
+Both build medians are below the earlier 648 ms stop-to-insertion snapshot below,
+but different workloads and insertion behavior prevent attributing that
+reduction solely to optimizations. The newest build does not show a further
+stop-to-Paste reduction. Its launch preparation targets activation-to-capture,
+a separate interval; these results do not establish a startup improvement.
+Network conditions, transcript length, model settings, and provider load all
+affect timings. No new paid provider requests were made for this checkpoint.
+
 ## Experiment status and commands
 
 The measurement slice and Cerebras TCP warming are implemented in the current
