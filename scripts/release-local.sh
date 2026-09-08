@@ -92,6 +92,7 @@ xcodebuild \
   ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$marketing_version" \
   CURRENT_PROJECT_VERSION="$build_number" \
+  INFOPLIST_KEY_AeriVoiceSourceRevision="$commit" \
   DEVELOPMENT_TEAM="$development_team" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$signing_identity" \
@@ -183,6 +184,8 @@ ditto -c -k --keepParent "$archive_path/dSYMs/AeriVoice.app.dSYM" "$release_outp
   printf 'marketing_version=%s\n' "$marketing_version"
   printf 'build_number=%s\n' "$build_number"
   printf 'architecture=arm64\n'
+  printf 'executable_uuid=%s\n' "$(dwarfdump --uuid "$app_path/Contents/MacOS/AeriVoice")"
+  printf 'symbols_uuid=%s\n' "$(dwarfdump --uuid "$archive_path/dSYMs/AeriVoice.app.dSYM")"
   printf 'xcode=%s\n' "$(xcodebuild -version | tr '\n' ' ')"
 } > "$release_output/release-info.txt"
 

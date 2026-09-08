@@ -75,24 +75,52 @@ func report(_ name: String, _ values: [Double]) {
 }
 
 let defaultURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-  .appending(path: "AeriVoice/Benchmarks/interactions-v1.jsonl")
+  .appending(path: "AeriVoice/Benchmarks")
 let inputURL = CommandLine.arguments.dropFirst().first.map {
   URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath)
 } ?? defaultURL
 
-guard let data = try? Data(contentsOf: inputURL) else {
+var isDirectory: ObjCBool = false
+let exists = FileManager.default.fileExists(atPath: inputURL.path, isDirectory: &isDirectory)
+let inputFiles: [URL]
+if exists && isDirectory.boolValue {
+  let archives = inputURL.appendingPathComponent("Archives")
+  let archived = (try? FileManager.default.contentsOfDirectory(
+    at: archives, includingPropertiesForKeys: nil)) ?? []
+  inputFiles = archived.filter {
+    $0.lastPathComponent.hasPrefix("interactions-v1-") && $0.pathExtension == "jsonl"
+  }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    + [inputURL.appendingPathComponent("interactions-v1.jsonl")].filter {
+      FileManager.default.fileExists(atPath: $0.path)
+    }
+} else {
+  inputFiles = exists ? [inputURL] : []
+}
+guard !inputFiles.isEmpty else {
   FileHandle.standardError.write(Data("No latency log found at \(inputURL.path)\n".utf8))
   exit(66)
 }
 
 var malformedLines = 0
-let samples: [Sample] = data.split(separator: 0x0A).compactMap { line in
-  guard
-    let root = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
-  else {
-    malformedLines += 1
-    return nil
+var seenInteractionIDs = Set<String>()
+var roots: [[String: Any]] = []
+for file in inputFiles {
+  guard let data = try? Data(contentsOf: file) else {
+    FileHandle.standardError.write(Data("Cannot read latency log at \(file.path)\n".utf8))
+    exit(66)
   }
+  for line in data.split(separator: 0x0A) {
+    guard let root = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else {
+      malformedLines += 1
+      continue
+    }
+    // Explicit single-file input retains its original behavior, including repeated rows.
+    if isDirectory.boolValue, let id = root["interactionID"] as? String,
+      !seenInteractionIDs.insert(id).inserted { continue }
+    roots.append(root)
+  }
+}
+let samples: [Sample] = roots.compactMap { root in
   let isLiveBenchmark = root["fixtureID"] != nil
   let cleanup = isLiveBenchmark ? root : dictionary(root["cleanup"])
   let requestedProviderTag = cleanup["requestedProviderTag"] as? String

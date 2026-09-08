@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
   let coordinator: DictationCoordinator
   let credentialManager: CredentialManager
   let benchmarkRecorder: LatencyBenchmarkRecorder
+  let runtimeDiagnostics: RuntimeDiagnosticsRecorder
 
   @Published var shortcutConfirmation: ShortcutDefinition?
   @Published var permissionRefresh = 0
@@ -52,7 +53,7 @@ final class AppModel: ObservableObject {
   private let shortcutMonitor = GlobalShortcutMonitor()
   private var cancellables = Set<AnyCancellable>()
 
-  init() {
+  init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
     let preferences = AppPreferences()
     let credentials = KeychainStore()
     #if AERIVOICE_DISTRIBUTION
@@ -63,12 +64,32 @@ final class AppModel: ObservableObject {
     #endif
     let credentialManager = CredentialManager(
       store: credentials, legacyStore: legacyCredentials)
-    let benchmarkRecorder = LatencyBenchmarkRecorder()
+    let writer = DiagnosticsWriteQueue(directoryURL: LatencyBenchmarkStore.defaultDirectoryURL)
+    let environment = BenchmarkEnvironment.live
+    let runtime = RuntimeDiagnosticsRecorder(
+      enabled: preferences.latencyLogging, writer: writer, launchStartedMS: launchStartedMS,
+      environment: environment, settings: { DiagnosticSettings(preferences) })
+    let benchmarkRecorder = LatencyBenchmarkRecorder(
+      environment: environment, enabled: preferences.latencyLogging,
+      recordingGeneration: preferences.diagnosticsGeneration,
+      acceptLegacyCheckpoint: preferences.acceptsLegacyDiagnosticCheckpoint,
+      writer: writer, runtime: runtime)
     self.preferences = preferences
     self.credentialManager = credentialManager
     self.benchmarkRecorder = benchmarkRecorder
+    self.runtimeDiagnostics = runtime
     coordinator = DictationCoordinator(
-      preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder)
+      preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder,
+      runtimeDiagnostics: runtime)
+    preferences.onDiagnosticsLoggingChange = { [weak benchmarkRecorder, weak preferences] enabled in
+      benchmarkRecorder?.setEnabled(enabled, recordingGeneration: preferences?.diagnosticsGeneration)
+    }
+    preferences.onTranscriptionProviderChange = { [weak self] in self?.prewarmTranscription() }
+    preferences.objectWillChange
+      .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
+      .sink { [weak runtime] in runtime?.settingsChanged() }
+      .store(in: &cancellables)
+    shortcutMonitor.onAvailabilityChange = { [weak runtime] in runtime?.shortcutAvailable($0) }
     credentialManager.objectWillChange.sink { [weak self] in
       self?.objectWillChange.send()
     }.store(in: &cancellables)
@@ -201,6 +222,17 @@ final class AppModel: ObservableObject {
       at: benchmarkRecorder.directoryURL, withIntermediateDirectories: true,
       attributes: [.posixPermissions: 0o700])
     NSWorkspace.shared.activateFileViewerSelecting([benchmarkRecorder.directoryURL])
+  }
+
+  func prewarmTranscription() {
+    let runtime = runtimeDiagnostics
+    let token = runtime.beginPreparation(network: true)
+    RealtimeTranscriptionPrewarmer.prewarm(provider: preferences.transcriptionProvider) {
+      [weak runtime] success in
+      Task { @MainActor in
+        runtime?.finishPreparation(token, result: success ? .prepared : .failed)
+      }
+    }
   }
 
   func clearCompletedBenchmarkHistory() {

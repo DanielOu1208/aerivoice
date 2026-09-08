@@ -58,14 +58,23 @@ Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for you
   consumption by another app. Detected secure fields and secure keyboard-input mode copy with a warning
   instead of receiving an automatic Paste. Copies you make after dictation stops
   are preserved; if the clipboard changed, the transcript is not copied over it.
-- Optional latency diagnostics are enabled by default and stored in
+- Optional performance diagnostics are enabled by default and stored in
   `~/Library/Application Support/AeriVoice/Benchmarks` with user-only file
   permissions.
 
-Latency records include timings, workload sizes, provider routing metadata,
-HTTP status, and coarse outcomes. They do not include transcript text,
-vocabulary, API keys, clipboard contents, provider response bodies, or raw
-errors. Completed records are pruned after 90 days.
+Diagnostics include timings, workload sizes, provider routing metadata, HTTP
+status, and coarse outcomes. Runtime records add initialization and activity
+events, CPU time, memory footprint, disk and wakeup counters, thermal/power
+state, build identity, machine model and memory, selected settings, and coarse
+audio transport/format. Resource samples run at activity boundaries and about
+every five minutes while idle. They do not start microphone capture.
+
+Records do not include transcript text, vocabulary, API keys, clipboard contents,
+provider response bodies, raw errors, computer names, serial numbers, microphone
+names, or destination-app contents. Completed diagnostics are retained for up to
+365 days within a 200 MB limit; older completed segments are removed first.
+Disabling logging stops collection and discards the active recovery checkpoint.
+Existing completed history remains until cleared or expired.
 
 ## Permissions
 
@@ -77,9 +86,9 @@ system-wide shortcut and Accessibility-assisted insertion.
 
 ## Control and deletion
 
-- Disable latency logging under **Settings → Privacy & Data**.
-- Use **Clear Completed History** on that page to remove completed latency
-  records, or reveal the data folder and remove it manually while AeriVoice is
+- Disable performance logging under **Settings → Privacy & Data**.
+- Use **Clear Completed History** on that page to remove completed interaction
+  and runtime records and archives, or reveal the data folder and remove it manually while AeriVoice is
   not running.
 - Remove or replace provider keys under **Settings → Providers**.
 - Revoke Microphone or Accessibility access in macOS System Settings.

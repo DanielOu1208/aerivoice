@@ -5,41 +5,164 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   var onAudio: ((Data) -> Void)?
 
   private let queue = DispatchQueue(label: "com.danielou.AeriVoice.audio", qos: .userInteractive)
-  private var engine: AVAudioEngine?
+  private let makeEngine: @Sendable () -> CaptureAudioEngine
+  private let currentRoute: @Sendable () -> AudioInputRoute?
+  private let lifecycleLock = NSLock()
+  private var lifecycleGeneration = UUID()
+  private var engine: CaptureAudioEngine?
+  private var preparedRoute: AudioInputRoute?
+  private var configurationObserver: NSObjectProtocol?
   private var converter: PCM16AudioConverter?
-  private var tapInstalled = false
+  private var recording = false
   private var captureGeneration = UUID()
 
-  func start() throws {
-    try queue.sync { try startOnQueue() }
+  init(
+    makeEngine: @escaping @Sendable () -> CaptureAudioEngine = { SystemCaptureAudioEngine() },
+    currentRoute: @escaping @Sendable () -> AudioInputRoute? = { AudioInputRoute.current() }
+  ) {
+    self.makeEngine = makeEngine
+    self.currentRoute = currentRoute
+  }
+
+  deinit {
+    if let configurationObserver {
+      NotificationCenter.default.removeObserver(configurationObserver)
+    }
+    engine?.stop()
+  }
+
+  func prepare() async {
+    _ = await prepareWithDiagnostics()
+  }
+
+  func prepareWithDiagnostics() async -> DiagnosticPreparationResult {
+    let generation = lifecycleLock.withLock { lifecycleGeneration }
+    let request = AudioStartupRequest()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        queue.async {
+          guard self.isCurrent(generation), !request.isCancelled else {
+            continuation.resume(returning: .cancelled)
+            return
+          }
+          guard self.engine == nil else {
+            continuation.resume(returning: .skipped)
+            return
+          }
+          do {
+            try self.prepareOnQueue()
+            if !self.isCurrent(generation) || request.isCancelled {
+              self.stopOnQueue()
+              continuation.resume(returning: .cancelled)
+            } else {
+              continuation.resume(returning: self.preparedRoute == nil ? .skipped : .prepared)
+            }
+          } catch {
+            self.stopOnQueue()
+            continuation.resume(returning: .failed)
+          }
+        }
+      }
+    } onCancel: {
+      request.cancel()
+    }
+  }
+
+  /// Releases only unused preparation. Active capture is stopped by stop().
+  func discardPreparation() {
+    lifecycleLock.withLock { lifecycleGeneration = UUID() }
+    queue.async {
+      if !self.recording { self.stopOnQueue() }
+    }
+  }
+
+  func start() async throws -> Bool {
+    try Task.checkCancellation()
+    let generation = lifecycleLock.withLock { lifecycleGeneration }
+    let request = AudioStartupRequest()
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        queue.async {
+          do {
+            guard self.isCurrent(generation), !request.isCancelled else {
+              throw CancellationError()
+            }
+            let usedPreparation = try self.startOnQueue {
+              guard self.isCurrent(generation), !request.isCancelled else {
+                throw CancellationError()
+              }
+            }
+            guard self.isCurrent(generation), !request.isCancelled else {
+              self.stopOnQueue()
+              throw CancellationError()
+            }
+            continuation.resume(returning: usedPreparation)
+          } catch {
+            continuation.resume(throwing: error)
+          }
+        }
+      }
+    } onCancel: {
+      request.cancel()
+    }
+  }
+
+  func cancelStart() {
+    lifecycleLock.withLock { lifecycleGeneration = UUID() }
+    queue.async { self.stopOnQueue() }
   }
 
   func stop() {
+    lifecycleLock.withLock { lifecycleGeneration = UUID() }
     queue.sync { stopOnQueue() }
   }
 
-  private func startOnQueue() throws {
-    guard engine == nil else { return }
-    let engine = AVAudioEngine()
-    let input = engine.inputNode
-    let hardwareFormat = input.inputFormat(forBus: 0)
-    guard hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0,
-      let converter = PCM16AudioConverter()
-    else {
+  private func isCurrent(_ generation: UUID) -> Bool {
+    lifecycleLock.withLock { lifecycleGeneration == generation }
+  }
+
+  private func prepareOnQueue() throws {
+    guard let route = currentRoute() else { throw AppError.microphoneUnavailable }
+    let engine = makeEngine()
+    self.engine = engine
+    try engine.prepare()
+    guard currentRoute() == route else {
+      stopOnQueue()
+      return
+    }
+    preparedRoute = route
+    configurationObserver = NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange, object: engine.notificationObject, queue: nil
+    ) { [weak self, weak engine] _ in
+      guard let self, let engine else { return }
+      self.queue.async {
+        guard self.engine === engine, !self.recording else { return }
+        self.stopOnQueue()
+      }
+    }
+  }
+
+  private func startOnQueue(checkCancellation: @Sendable () throws -> Void) throws -> Bool {
+    guard !recording else { return false }
+    if preparedRoute == nil || preparedRoute != currentRoute() { stopOnQueue() }
+    let usedPreparation = engine != nil
+    let engine = self.engine ?? makeEngine()
+    self.engine = engine
+    preparedRoute = nil
+    guard let converter = PCM16AudioConverter() else {
+      stopOnQueue()
       throw AppError.microphoneUnavailable
     }
-    self.engine = engine
     self.converter = converter
     let generation = UUID()
     captureGeneration = generation
-    input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
-      guard let service = self else { return }
-      service.queue.async { service.convert(buffer, generation: generation) }
-    }
-    tapInstalled = true
-    engine.prepare()
     do {
-      try engine.start()
+      try engine.start(checkCancellation: checkCancellation) { [weak self] buffer in
+        guard let service = self else { return }
+        service.queue.async { service.convert(buffer, generation: generation) }
+      }
+      recording = true
+      return usedPreparation
     } catch {
       stopOnQueue()
       throw error
@@ -48,20 +171,30 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
 
   private func stopOnQueue() {
     captureGeneration = UUID()
-    if tapInstalled, let engine {
-      engine.inputNode.removeTap(onBus: 0)
-      tapInstalled = false
+    if let configurationObserver {
+      NotificationCenter.default.removeObserver(configurationObserver)
+      self.configurationObserver = nil
     }
-    if let engine, engine.isRunning { engine.stop() }
+    engine?.stop()
     engine = nil
+    preparedRoute = nil
     converter = nil
+    recording = false
   }
 
   private func convert(_ input: AVAudioPCMBuffer, generation: UUID) {
-    guard captureGeneration == generation, let converter else { return }
+    guard captureGeneration == generation, recording, let converter else { return }
     guard let data = converter.convert(input) else { return }
     onAudio?(data)
   }
+}
+
+private final class AudioStartupRequest: @unchecked Sendable {
+  private let lock = NSLock()
+  private var cancelled = false
+
+  var isCancelled: Bool { lock.withLock { cancelled } }
+  func cancel() { lock.withLock { cancelled = true } }
 }
 
 final class PCM16AudioConverter {

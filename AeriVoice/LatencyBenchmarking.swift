@@ -2,6 +2,17 @@ import Foundation
 import OSLog
 
 enum BenchmarkMilestone: String, Codable, CaseIterable, Sendable {
+  case credentialReadStarted
+  case credentialsReady
+  case readinessCheckStarted
+  case readinessChecksFinished
+  case startCuePlaybackStarted
+  case startCuePlaybackReturned
+  case startCueDelayFinished
+  case outputMuteStarted
+  case outputMuteFinished
+  case audioEngineStartRequested
+  case preparedAudioEngineUsed
   case captureStarted
   case sttConfigured
   case firstAudioCaptured
@@ -70,14 +81,37 @@ struct BenchmarkEnvironment: Codable, Equatable, Sendable {
   let appBuild: String?
   let macOSVersion: String
   let architecture: String
+  var executableUUID: String? = nil
+  var hardwareModel: String? = nil
+  var physicalMemoryBytes: UInt64? = nil
+  var logicalCPUCount: Int? = nil
+  var buildConfiguration: String? = nil
+  var distributionBuild: Bool? = nil
+  var sourceRevision: String? = nil
 
   static var live: BenchmarkEnvironment {
     let info = Bundle.main.infoDictionary
-    return BenchmarkEnvironment(
+    var value = BenchmarkEnvironment(
       appVersion: info?["CFBundleShortVersionString"] as? String,
       appBuild: info?["CFBundleVersion"] as? String,
       macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
       architecture: ProcessInfo.processInfo.machineArchitecture)
+    value.executableUUID = ProcessResourceSampler.executableUUID
+    value.hardwareModel = ProcessResourceSampler.hardwareModel
+    value.physicalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+    value.logicalCPUCount = ProcessInfo.processInfo.processorCount
+    #if DEBUG
+      value.buildConfiguration = "Debug"
+    #else
+      value.buildConfiguration = "Release"
+    #endif
+    #if AERIVOICE_DISTRIBUTION
+      value.distributionBuild = true
+    #else
+      value.distributionBuild = false
+    #endif
+    value.sourceRevision = info?["AeriVoiceSourceRevision"] as? String
+    return value
   }
 }
 
@@ -184,6 +218,8 @@ struct LatencyBenchmarkRecord: Codable, Equatable, Sendable {
   var stt: BenchmarkSTTMetadata
   var cleanup: BenchmarkCleanupMetadata
   var outcome: BenchmarkOutcome?
+  var context: InteractionDiagnosticContext? = nil
+  var recordingGeneration: UUID? = nil
 }
 
 @MainActor
@@ -217,13 +253,14 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
   }
 
   let directoryURL: URL
-  private let store: LatencyBenchmarkStore
+  let writer: DiagnosticsWriteQueue
+  private let runtime: RuntimeDiagnosticsRecorder?
+  private var collectionEnabled: Bool
+  private var recordingGeneration: UUID?
   private let monotonicNowMS: () -> Double
   private let wallNow: () -> Date
   private let environment: BenchmarkEnvironment
   private var active: ActiveInteraction?
-  private var persistenceTask: Task<Void, Never>?
-  private let logger = Logger(subsystem: "com.danielou.AeriVoice", category: "LatencyBenchmark")
 
   var isRecording: Bool { active != nil }
 
@@ -231,15 +268,43 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     directoryURL: URL = LatencyBenchmarkStore.defaultDirectoryURL,
     monotonicNowMS: @escaping () -> Double = LatencyBenchmarkRecorder.liveMonotonicClock(),
     wallNow: @escaping () -> Date = Date.init,
-    environment: BenchmarkEnvironment = .live
+    environment: BenchmarkEnvironment = .live,
+    enabled: Bool = true,
+    recordingGeneration: UUID? = nil,
+    acceptLegacyCheckpoint: Bool = true,
+    writer: DiagnosticsWriteQueue? = nil,
+    runtime: RuntimeDiagnosticsRecorder? = nil
   ) {
     self.directoryURL = directoryURL
-    store = LatencyBenchmarkStore(directoryURL: directoryURL)
+    self.writer = writer ?? DiagnosticsWriteQueue(directoryURL: directoryURL)
+    self.runtime = runtime
+    self.collectionEnabled = enabled
+    self.recordingGeneration = recordingGeneration
     self.monotonicNowMS = monotonicNowMS
     self.wallNow = wallNow
     self.environment = environment
     let recoveryNow = wallNow()
-    enqueue { store in try await store.recoverAndPrune(now: recoveryNow) }
+    if enabled {
+      self.writer.enqueue(critical: true) { store in
+        try await store.recoverAndPrune(
+          now: recoveryNow, allowedGeneration: recordingGeneration,
+          acceptLegacyCheckpoint: acceptLegacyCheckpoint)
+      }
+    } else {
+      self.writer.enqueue(control: true) { store in try await store.discardActiveCheckpoint() }
+    }
+  }
+
+  func setEnabled(_ enabled: Bool, recordingGeneration: UUID?) {
+    guard collectionEnabled != enabled else { return }
+    collectionEnabled = enabled
+    self.recordingGeneration = recordingGeneration
+    if !enabled {
+      active = nil
+      writer.revokePendingCollection()
+      writer.enqueue(control: true) { store in try await store.discardActiveCheckpoint() }
+    }
+    runtime?.setEnabled(enabled)
   }
 
   func begin(
@@ -248,7 +313,9 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
       provider: .soniox),
     cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration
   ) {
-    guard enabled, active == nil else { return }
+    guard active == nil else { return }
+    let context = runtime?.beginInteraction()
+    guard enabled, collectionEnabled else { return }
     let wallTime = wallNow()
     let route = cleanupConfiguration.model.providerRoute
     let requestedProviderTag: String? = {
@@ -258,9 +325,9 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
       case .openRouter: route.requestedProviderTag
       }
     }()
-    let record = LatencyBenchmarkRecord(
+    var record = LatencyBenchmarkRecord(
       schemaVersion: 1,
-      interactionID: UUID(),
+      interactionID: context?.0 ?? UUID(),
       startedAt: wallTime,
       lastCheckpointAt: wallTime,
       environment: environment,
@@ -277,11 +344,14 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
         requestedReasoningEffort: cleanupConfiguration.reasoningEffort,
         requestedProviderTag: requestedProviderTag,
         zeroDataRetentionRequired: route.requiresZeroDataRetention))
+    record.context = context?.1
+    record.recordingGeneration = recordingGeneration
     active = ActiveInteraction(originMS: monotonicNowMS(), record: record)
     checkpoint()
   }
 
   func mark(_ milestone: BenchmarkMilestone) {
+    runtime?.milestone(milestone)
     guard var active, active.record.milestonesMS[milestone.rawValue] == nil else { return }
     let elapsed = elapsedMS(for: active)
     active.record.milestonesMS[milestone.rawValue] = elapsed
@@ -386,6 +456,7 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     _ result: BenchmarkTerminalResult, stage: BenchmarkFailureStage? = nil,
     category: BenchmarkFailureCategory? = nil, httpStatus: Int? = nil
   ) {
+    runtime?.finishInteraction()
     guard var active else { return }
     let elapsed = elapsedMS(for: active)
     active.record.milestonesMS[BenchmarkMilestone.terminal.rawValue] = elapsed
@@ -397,26 +468,21 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     active.record.durationsMS = Self.makeDurations(from: active.record.milestonesMS)
     self.active = nil
     let finalRecord = active.record
-    enqueue { store in try await store.complete(finalRecord, now: finalRecord.endedAt!) }
+    writer.enqueue(critical: true) { store in try await store.complete(finalRecord, now: finalRecord.endedAt!) }
   }
 
   func clearCompletedHistory() {
-    enqueue { store in try await store.clearCompletedHistory() }
+    runtime?.historyWillClear()
+    writer.enqueue(control: true) { store in try await store.clearCompletedHistory() }
   }
 
   func flushForTesting() async {
-    await persistenceTask?.value
+    await writer.flush()
   }
 
   @discardableResult
   func flushBeforeTermination(timeout: TimeInterval = 2) -> Bool {
-    guard let persistenceTask else { return true }
-    let semaphore = DispatchSemaphore(value: 0)
-    Task.detached {
-      await persistenceTask.value
-      semaphore.signal()
-    }
-    return semaphore.wait(timeout: .now() + timeout) == .success
+    writer.flushBeforeTermination(timeout: timeout)
   }
 
   private func checkpoint() {
@@ -460,17 +526,7 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
   private func enqueue(
     _ operation: @escaping @Sendable (LatencyBenchmarkStore) async throws -> Void
   ) {
-    let previous = persistenceTask
-    let store = self.store
-    let logger = self.logger
-    persistenceTask = Task.detached(priority: .utility) {
-      await previous?.value
-      do {
-        try await operation(store)
-      } catch {
-        logger.error("Latency benchmark persistence failed")
-      }
-    }
+    writer.enqueue(operation)
   }
 
   nonisolated private static func makeDurations(from values: [String: Double])
@@ -508,147 +564,8 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
   }
 }
 
-actor LatencyBenchmarkStore {
-  static let logFilename = "interactions-v1.jsonl"
-  static let activeFilename = "active-interaction-v1.json"
-  static let retentionDays = 90
-
-  static var defaultDirectoryURL: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "AeriVoice/Benchmarks", directoryHint: .isDirectory)
-  }
-
-  let directoryURL: URL
-  private let fileManager: FileManager
-  private let encoder: JSONEncoder
-  private let decoder: JSONDecoder
-  private var lastPrunedAt: Date?
-
-  init(directoryURL: URL, fileManager: FileManager = .default) {
-    self.directoryURL = directoryURL
-    self.fileManager = fileManager
-    encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-  }
-
-  func checkpoint(_ record: LatencyBenchmarkRecord) throws {
-    try prepareDirectory()
-    let url = directoryURL.appending(path: Self.activeFilename)
-    try encoder.encode(record).write(to: url, options: .atomic)
-    try setPermissions(0o600, at: url)
-  }
-
-  func complete(_ record: LatencyBenchmarkRecord, now: Date) throws {
-    try prepareDirectory()
-    try append(record)
-    let activeURL = directoryURL.appending(path: Self.activeFilename)
-    if let activeData = try? Data(contentsOf: activeURL),
-      let activeRecord = try? decoder.decode(LatencyBenchmarkRecord.self, from: activeData),
-      activeRecord.interactionID == record.interactionID
-    {
-      try fileManager.removeItem(at: activeURL)
-    }
-    try pruneIfNeeded(now: now)
-  }
-
-  func recoverAndPrune(now: Date) throws {
-    try prepareDirectory()
-    let activeURL = directoryURL.appending(path: Self.activeFilename)
-    if let data = try? Data(contentsOf: activeURL),
-      var record = try? decoder.decode(LatencyBenchmarkRecord.self, from: data)
-    {
-      if try containsCompletedRecord(interactionID: record.interactionID) {
-        try fileManager.removeItem(at: activeURL)
-        try prune(now: now)
-        return
-      }
-      let lastElapsed = record.milestonesMS.values.max() ?? 0
-      record.milestonesMS[BenchmarkMilestone.terminal.rawValue] = lastElapsed
-      record.endedAt = record.lastCheckpointAt
-      record.outcome = BenchmarkOutcome(
-        terminalResult: .interrupted, failureStage: .lifecycle,
-        failureCategory: .unknown, httpStatus: nil)
-      record.durationsMS = LatencyBenchmarkRecorder.makeDurationsForStore(
-        from: record.milestonesMS)
-      try append(record)
-      try fileManager.removeItem(at: activeURL)
-    }
-    try prune(now: now)
-  }
-
-  func clearCompletedHistory() throws {
-    let url = directoryURL.appending(path: Self.logFilename)
-    if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
-  }
-
-  private func append(_ record: LatencyBenchmarkRecord) throws {
-    let url = directoryURL.appending(path: Self.logFilename)
-    var line = try encoder.encode(record)
-    line.append(0x0A)
-    if !fileManager.fileExists(atPath: url.path) {
-      guard
-        fileManager.createFile(
-          atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
-      else { throw CocoaError(.fileWriteUnknown) }
-    }
-    let handle = try FileHandle(forWritingTo: url)
-    defer { try? handle.close() }
-    try handle.seekToEnd()
-    try handle.write(contentsOf: line)
-    try setPermissions(0o600, at: url)
-  }
-
-  private func containsCompletedRecord(interactionID: UUID) throws -> Bool {
-    let url = directoryURL.appending(path: Self.logFilename)
-    guard let data = try? Data(contentsOf: url) else { return false }
-    return data.split(separator: 0x0A).contains { line in
-      (try? decoder.decode(LatencyBenchmarkRecord.self, from: Data(line)).interactionID)
-        == interactionID
-    }
-  }
-
-  private func pruneIfNeeded(now: Date) throws {
-    guard lastPrunedAt.map({ now.timeIntervalSince($0) >= 86_400 }) ?? true else { return }
-    try prune(now: now)
-  }
-
-  private func prune(now: Date) throws {
-    lastPrunedAt = now
-    let url = directoryURL.appending(path: Self.logFilename)
-    guard let data = try? Data(contentsOf: url), !data.isEmpty else { return }
-    let cutoff = now.addingTimeInterval(-Double(Self.retentionDays) * 86_400)
-    var retained = Data()
-    for line in data.split(separator: 0x0A) where !line.isEmpty {
-      let lineData = Data(line)
-      if let record = try? decoder.decode(LatencyBenchmarkRecord.self, from: lineData),
-        record.schemaVersion == 1, record.startedAt < cutoff
-      {
-        continue
-      }
-      retained.append(lineData)
-      retained.append(0x0A)
-    }
-    try retained.write(to: url, options: .atomic)
-    try setPermissions(0o600, at: url)
-  }
-
-  private func prepareDirectory() throws {
-    try fileManager.createDirectory(
-      at: directoryURL, withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    try setPermissions(0o700, at: directoryURL)
-  }
-
-  private func setPermissions(_ permissions: Int, at url: URL) throws {
-    try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
-  }
-}
-
 extension LatencyBenchmarkRecorder {
-  nonisolated fileprivate static func makeDurationsForStore(from values: [String: Double])
+  nonisolated static func makeDurationsForStore(from values: [String: Double])
     -> BenchmarkDurations
   {
     makeDurations(from: values)

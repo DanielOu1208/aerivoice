@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 
@@ -23,6 +24,37 @@ final class LatencyBenchmarkingTests: XCTestCase {
       at: directory.appending(path: LatencyBenchmarkStore.logFilename))
     XCTAssertEqual(
       records.map { $0.outcome?.terminalResult }, [.inserted, .insertionUnconfirmed, .pasteSent])
+  }
+
+  func testStartupMilestonesRoundTripWithoutChangingLegacyDurations() async throws {
+    let directory = makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let clock = TestClock(milliseconds: 0)
+    let recorder = makeRecorder(
+      directory: directory, clock: clock,
+      wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
+    await recorder.flushForTesting()
+    recorder.begin(
+      enabled: true, cleanupMode: .faithful,
+      cleanupConfiguration: defaultCleanupConfiguration)
+    let startup: [BenchmarkMilestone] = [
+      .credentialReadStarted, .credentialsReady, .readinessCheckStarted,
+      .readinessChecksFinished, .startCuePlaybackStarted, .startCuePlaybackReturned,
+      .startCueDelayFinished, .outputMuteStarted, .outputMuteFinished,
+      .audioEngineStartRequested, .preparedAudioEngineUsed, .captureStarted,
+    ]
+    for (index, milestone) in startup.enumerated() {
+      clock.milliseconds = Double(index + 1) * 10
+      recorder.mark(milestone)
+    }
+    recorder.finish(.cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    await recorder.flushForTesting()
+    let record = try XCTUnwrap(
+      decodeRecords(at: directory.appending(path: LatencyBenchmarkStore.logFilename)).first)
+    XCTAssertEqual(record.durationsMS.activationToCaptureMS, 120)
+    for (index, milestone) in startup.enumerated() {
+      XCTAssertEqual(record.milestonesMS[milestone.rawValue], Double(index + 1) * 10)
+    }
   }
 
   func testRecorderWritesDeterministicPrivacySafeInteraction() async throws {
@@ -368,7 +400,7 @@ final class LatencyBenchmarkingTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = LatencyBenchmarkStore(directoryURL: directory)
     let now = Date(timeIntervalSince1970: 2_000_000_000)
-    let oldDate = now.addingTimeInterval(-91 * 86_400)
+    let oldDate = now.addingTimeInterval(-366 * 86_400)
     let recentDate = now.addingTimeInterval(-5 * 86_400)
 
     try await store.complete(makeStoredRecord(startedAt: oldDate), now: oldDate)
@@ -382,6 +414,7 @@ final class LatencyBenchmarkingTests: XCTestCase {
     try handle.seekToEnd()
     try handle.write(contentsOf: Data("{malformed-but-preserved}\n".utf8))
     try handle.close()
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: logURL.path)
 
     try await store.recoverAndPrune(now: now)
 
@@ -409,15 +442,16 @@ final class LatencyBenchmarkingTests: XCTestCase {
   }
 
   private func makeTemporaryDirectory() -> URL {
-    FileManager.default.temporaryDirectory
+    let resolved = realpath(FileManager.default.temporaryDirectory.path, nil)!
+    defer { free(resolved) }
+    return URL(fileURLWithPath: String(cString: resolved))
       .appending(path: "AeriVoiceBenchmarkTests-\(UUID().uuidString)", directoryHint: .isDirectory)
   }
 
   private func decodeRecords(at url: URL, ignoringMalformed: Bool = false) throws
     -> [LatencyBenchmarkRecord]
   {
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
+    let decoder = DiagnosticsJSON.decoder()
     return try Data(contentsOf: url).split(separator: 0x0A).compactMap { line in
       do { return try decoder.decode(LatencyBenchmarkRecord.self, from: Data(line)) } catch {
         if ignoringMalformed { return nil }

@@ -79,8 +79,11 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
 }
 
 enum RealtimeTranscriptionPrewarmer {
-  nonisolated static func prewarm(provider: TranscriptionProvider? = nil) {
+  nonisolated static func prewarm(
+    provider: TranscriptionProvider? = nil, completion: (@Sendable (Bool) -> Void)? = nil
+  ) {
     Task.detached(priority: .utility) {
+      var succeeded = true
       let urls: [URL]
       switch provider {
       case .meta:
@@ -97,9 +100,9 @@ enum RealtimeTranscriptionPrewarmer {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.timeoutInterval = 3
-        _ = try? await URLSession.shared.data(for: request)
+        if (try? await URLSession.shared.data(for: request)) == nil { succeeded = false }
       }
+      completion?(succeeded)
     }
   }
 }
-

@@ -52,12 +52,15 @@ final class AppPreferences: ObservableObject {
     static let onboardingComplete = "onboardingComplete"
     static let launchAtLogin = "launchAtLogin"
     static let latencyLogging = "latencyLogging"
+    static let diagnosticsGeneration = "diagnosticsGeneration"
+    static let diagnosticsRevoked = "diagnosticsRevoked"
   }
 
   @Published var transcriptionProvider: TranscriptionProvider {
     didSet {
       defaults.set(transcriptionProvider.rawValue, forKey: Key.transcriptionProvider)
-      RealtimeTranscriptionPrewarmer.prewarm(provider: transcriptionProvider)
+      if let onTranscriptionProviderChange { onTranscriptionProviderChange() }
+      else { RealtimeTranscriptionPrewarmer.prewarm(provider: transcriptionProvider) }
     }
   }
   @Published var cleanupMode: CleanupMode {
@@ -84,8 +87,22 @@ final class AppPreferences: ObservableObject {
   }
   @Published var launchAtLogin: Bool
   @Published var latencyLogging: Bool {
-    didSet { defaults.set(latencyLogging, forKey: Key.latencyLogging) }
+    didSet {
+      if !latencyLogging, oldValue {
+        defaults.set(UUID().uuidString, forKey: Key.diagnosticsGeneration)
+        defaults.set(true, forKey: Key.diagnosticsRevoked)
+      }
+      defaults.set(latencyLogging, forKey: Key.latencyLogging)
+      onDiagnosticsLoggingChange?(latencyLogging)
+    }
   }
+
+  var onDiagnosticsLoggingChange: ((Bool) -> Void)?
+  var onTranscriptionProviderChange: (() -> Void)?
+  var diagnosticsGeneration: UUID? {
+    defaults.string(forKey: Key.diagnosticsGeneration).flatMap(UUID.init(uuidString:))
+  }
+  var acceptsLegacyDiagnosticCheckpoint: Bool { !defaults.bool(forKey: Key.diagnosticsRevoked) }
 
   private let defaults: UserDefaults
   private let loginItemManager: LoginItemManaging
@@ -173,6 +190,9 @@ final class AppPreferences: ObservableObject {
     onboardingComplete = defaults.bool(forKey: Key.onboardingComplete)
     launchAtLogin = defaults.object(forKey: Key.launchAtLogin) as? Bool ?? true
     latencyLogging = defaults.object(forKey: Key.latencyLogging) as? Bool ?? true
+    if defaults.string(forKey: Key.diagnosticsGeneration).flatMap(UUID.init(uuidString:)) == nil {
+      defaults.set(UUID().uuidString, forKey: Key.diagnosticsGeneration)
+    }
     if let data = defaults.data(forKey: Key.shortcut) {
       shortcut = try? JSONDecoder().decode(ShortcutDefinition.self, from: data)
     }

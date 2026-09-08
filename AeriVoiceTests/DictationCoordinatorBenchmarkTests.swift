@@ -5,6 +5,104 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorBenchmarkTests: XCTestCase {
+  func testLaunchPreparationRequiresOnboardingAndExistingMicrophonePermission() async throws {
+    let fixture = makeFixture()
+    fixture.coordinator.prepareForLaunch(microphoneAuthorized: true)
+    fixture.preferences.onboardingComplete = true
+    fixture.coordinator.prepareForLaunch(microphoneAuthorized: false)
+    XCTAssertEqual(fixture.audio.prepareCount, 0)
+    XCTAssertTrue(fixture.credentials.readKinds.isEmpty)
+
+    fixture.coordinator.prepareForLaunch(microphoneAuthorized: true)
+    try await waitUntil {
+      fixture.audio.prepareCount == 1 && fixture.credentials.readKinds.count == 2
+    }
+    fixture.coordinator.prepareForLaunch(microphoneAuthorized: true)
+    XCTAssertEqual(fixture.audio.prepareCount, 1)
+    XCTAssertEqual(fixture.credentials.readKinds, [.soniox, .openRouter])
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertTrue(fixture.cuePlayer.playedCues.isEmpty)
+    XCTAssertTrue(fixture.notch.presentedStates.isEmpty)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertEqual(fixture.coordinator.phase, .idle)
+    fixture.coordinator.cancel()
+    XCTAssertGreaterThan(fixture.audio.discardCount, 0)
+  }
+
+  func testActivationReadsFreshCredentialsAfterLaunchPreparation() async throws {
+    let fixture = makeFixture(cleanupProvider: .cerebras)
+    fixture.preferences.onboardingComplete = true
+    fixture.coordinator.prepareForLaunch(microphoneAuthorized: true)
+    try await waitUntil { fixture.credentials.readKinds.count == 2 }
+    fixture.credentials.setValue("replacement-key", for: .soniox)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    XCTAssertEqual(fixture.transcriber.lastAPIKey, "replacement-key")
+    XCTAssertEqual(fixture.credentials.readKinds, [.soniox, .cerebras, .soniox, .cerebras])
+    fixture.coordinator.cancel()
+  }
+
+  func testCancelDuringAudioStartupCannotReviveDictationOrMarkAnotherSession() async throws {
+    let fixture = makeFixture(audioStartWaitsForResolution: true)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.audio.hasPendingStart }
+    fixture.coordinator.cancel()
+    XCTAssertTrue(fixture.audio.didStop)
+    XCTAssertEqual(fixture.coordinator.phase, .error("Cancelled"))
+    fixture.benchmark.milestones.removeAll()
+    fixture.audio.resolveStart(usedPreparation: true)
+    try await waitUntil { fixture.audio.startReturned }
+    await Task.yield()
+    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.captureStarted))
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.preparedAudioEngineUsed))
+    XCTAssertEqual(fixture.coordinator.phase, .error("Cancelled"))
+  }
+
+  func testMetaFailureDuringAudioStartupCancelsTheStartupTask() async throws {
+    let fixture = makeFixture(
+      transcriptionProvider: .meta, audioStartWaitsForResolution: true)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.audio.hasPendingStart && fixture.transcriber.didConnect }
+    fixture.transcriber.emitError(AppError.provider("Meta stream failed"))
+    XCTAssertEqual(fixture.benchmark.terminalResult, .failed)
+    XCTAssertTrue(fixture.audio.didStop)
+    fixture.audio.resolveStart(usedPreparation: true)
+    try await waitUntil { fixture.audio.startReturned }
+    XCTAssertTrue(fixture.audio.startWasCancelled)
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.captureStarted))
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
+  }
+
+  func testHeldReleaseDuringAudioStartupCancelsInsteadOfFinishingUnstartedCapture() async throws {
+    let fixture = makeFixture(audioStartWaitsForResolution: true)
+    let generation = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.audio.hasPendingStart }
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: generation)
+    XCTAssertTrue(fixture.audio.didStop)
+    fixture.audio.resolveStart()
+    try await waitUntil { fixture.audio.startReturned }
+    XCTAssertEqual(fixture.benchmark.terminalResult, .cancelled)
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.stopRequested))
+    XCTAssertNil(fixture.inserter.insertedText)
+  }
+
+  func testStartupTimingsIncludePreparationUseAndPreserveOrdering() async throws {
+    let fixture = makeFixture(audioStartWaitsForResolution: true)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.audio.hasPendingStart }
+    fixture.audio.resolveStart(usedPreparation: true)
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    let expected: [BenchmarkMilestone] = [
+      .credentialReadStarted, .credentialsReady, .readinessCheckStarted,
+      .readinessChecksFinished, .startCuePlaybackStarted, .startCuePlaybackReturned,
+      .startCueDelayFinished, .outputMuteStarted, .outputMuteFinished,
+      .audioEngineStartRequested, .preparedAudioEngineUsed, .captureStarted, .sttConfigured,
+    ]
+    XCTAssertEqual(fixture.benchmark.orderedMilestones.filter { expected.contains($0) }, expected)
+    fixture.coordinator.cancel()
+  }
+
   func testCancelledInsertionCannotMarkNewSession() async throws {
     let fixture = makeFixture()
     fixture.inserter.suspendInsert = true
@@ -616,7 +714,8 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     warmUpWaitsForResolution: Bool = false,
     soundCues: Bool = false, cueDelay: Duration = .zero,
     readiness: DictationReadinessChecking? = nil, connectWaitsForResolution: Bool = false,
-    connectError: Error? = nil, audioFrameCount: Int = 1
+    connectError: Error? = nil, audioFrameCount: Int = 1,
+    audioStartWaitsForResolution: Bool = false
   ) -> CoordinatorFixture {
     let suite = "AeriVoiceTests.Coordinator.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -635,7 +734,8 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
         .groq: hasGroqKey ? "groq-key" : nil,
         .cerebras: hasCerebrasKey ? "cerebras-key" : nil,
       ])
-    let audio = FakeAudioCapture(frameCount: audioFrameCount)
+    let audio = FakeAudioCapture(
+      frameCount: audioFrameCount, waitsForStartResolution: audioStartWaitsForResolution)
     let transcriber = FakeTranscriber(
       provisionalText: provisionalText, waitsForConnectResolution: connectWaitsForResolution,
       connectError: connectError)
@@ -655,7 +755,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     return CoordinatorFixture(
       preferences: preferences, coordinator: coordinator, audio: audio, transcriber: transcriber,
       inserter: inserter, cleaner: cleaner, muter: muter, notch: notch, benchmark: benchmark,
-      cuePlayer: cuePlayer, defaultsSuite: suite)
+      cuePlayer: cuePlayer, credentials: credentials, defaultsSuite: suite)
   }
 
   private func waitUntil(
@@ -682,13 +782,25 @@ private struct CoordinatorFixture {
   let notch: FakeNotch
   let benchmark: BenchmarkSpy
   let cuePlayer: FakeCuePlayer
+  let credentials: FakeCredentialReader
   let defaultsSuite: String
 }
 
 private final class FakeCredentialReader: CredentialReading, @unchecked Sendable {
-  let values: [CredentialKind: String?]
+  private let lock = NSLock()
+  private var values: [CredentialKind: String?]
+  private var reads: [CredentialKind] = []
   init(values: [CredentialKind: String?]) { self.values = values }
-  func value(for kind: CredentialKind) -> String? { values[kind] ?? nil }
+  var readKinds: [CredentialKind] { lock.withLock { reads } }
+  func value(for kind: CredentialKind) -> String? {
+    lock.withLock {
+      reads.append(kind)
+      return values[kind] ?? nil
+    }
+  }
+  func setValue(_ value: String, for kind: CredentialKind) {
+    lock.withLock { values[kind] = value }
+  }
 }
 
 private struct FakeReadiness: DictationReadinessChecking {
@@ -715,21 +827,69 @@ private final class SuspendedReadiness: DictationReadinessChecking {
 }
 
 private final class FakeAudioCapture: AudioCapturing, @unchecked Sendable {
-  var onAudio: ((Data) -> Void)?
-  var didStart = false
-  var didStop = false
+  private let lock = NSLock()
+  private var callback: ((Data) -> Void)?
+  private var started = false
+  private var stopped = false
+  private var returned = false
+  private var cancelled = false
+  private var preparations = 0
+  private var discards = 0
+  private var startContinuation: CheckedContinuation<Bool, Never>?
   private let frameCount: Int
+  private let waitsForStartResolution: Bool
 
-  init(frameCount: Int) { self.frameCount = frameCount }
+  init(frameCount: Int, waitsForStartResolution: Bool) {
+    self.frameCount = frameCount
+    self.waitsForStartResolution = waitsForStartResolution
+  }
 
-  func start() throws {
-    didStart = true
+  var onAudio: ((Data) -> Void)? {
+    get { lock.withLock { callback } }
+    set { lock.withLock { callback = newValue } }
+  }
+  var didStart: Bool { lock.withLock { started } }
+  var didStop: Bool { lock.withLock { stopped } }
+  var startReturned: Bool { lock.withLock { returned } }
+  var startWasCancelled: Bool { lock.withLock { cancelled } }
+  var prepareCount: Int { lock.withLock { preparations } }
+  var discardCount: Int { lock.withLock { discards } }
+  var hasPendingStart: Bool { lock.withLock { startContinuation != nil } }
+
+  func prepare() async { lock.withLock { preparations += 1 } }
+  func discardPreparation() { lock.withLock { discards += 1 } }
+
+  func start() async throws -> Bool {
+    defer { lock.withLock { returned = true } }
+    lock.withLock { started = true }
+    let reused: Bool
+    if waitsForStartResolution {
+      reused = await withCheckedContinuation { continuation in
+        lock.withLock { startContinuation = continuation }
+      }
+    } else {
+      reused = false
+    }
+    let wasCancelled = Task.isCancelled
+    lock.withLock { cancelled = wasCancelled }
+    try Task.checkCancellation()
     for _ in 0..<frameCount {
       onAudio?(Data(repeating: 0, count: 3_200))
     }
+    return reused
   }
 
-  func stop() { didStop = true }
+  func resolveStart(usedPreparation: Bool = false) {
+    let continuation = lock.withLock {
+      let continuation = startContinuation
+      startContinuation = nil
+      return continuation
+    }
+    continuation?.resume(returning: usedPreparation)
+  }
+
+  func cancelStart() { lock.withLock { stopped = true } }
+  func stop() { lock.withLock { stopped = true } }
 }
 
 @MainActor
@@ -951,6 +1111,7 @@ private final class BenchmarkSpy: LatencyBenchmarkRecording {
   var isRecording = false
   var didBegin = false
   var milestones = Set<BenchmarkMilestone>()
+  var orderedMilestones: [BenchmarkMilestone] = []
   var audioBytes = 0
   var audioBytesSent = 0
   var sttUpdates = 0
@@ -973,7 +1134,10 @@ private final class BenchmarkSpy: LatencyBenchmarkRecording {
     self.transcriptionConfiguration = transcriptionConfiguration
   }
 
-  func mark(_ milestone: BenchmarkMilestone) { milestones.insert(milestone) }
+  func mark(_ milestone: BenchmarkMilestone) {
+    milestones.insert(milestone)
+    orderedMilestones.append(milestone)
+  }
 
   func recordAudioCaptured(bytes: Int, bufferedBytes: Int) { audioBytes += bytes }
   func recordAudioSent(bytes: Int) { audioBytesSent += bytes }

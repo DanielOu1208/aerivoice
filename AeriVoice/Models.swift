@@ -436,10 +436,22 @@ enum VocabularyNormalizer {
   }
 }
 
-protocol AudioCapturing: AnyObject {
+protocol AudioCapturing: AnyObject, Sendable {
   var onAudio: ((Data) -> Void)? { get set }
-  func start() throws
+  func prepare() async
+  func prepareWithDiagnostics() async -> DiagnosticPreparationResult
+  func discardPreparation()
+  /// Returns whether launch-time preparation was reused.
+  func start() async throws -> Bool
+  func cancelStart()
   func stop()
+}
+
+extension AudioCapturing {
+  func prepareWithDiagnostics() async -> DiagnosticPreparationResult {
+    await prepare()
+    return Task.isCancelled ? .cancelled : .unknown
+  }
 }
 
 @MainActor

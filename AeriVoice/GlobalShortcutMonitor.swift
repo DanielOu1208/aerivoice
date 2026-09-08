@@ -89,6 +89,7 @@ final class GlobalShortcutMonitor {
   var onHoldRelease: ((UUID) -> Void)?
   var onCancel: (() -> Void)?
   var shouldCancel: (() -> Bool)?
+  var onAvailabilityChange: ((Bool) -> Void)?
 
   private var tap: CFMachPort?
   private var source: CFRunLoopSource?
@@ -102,6 +103,7 @@ final class GlobalShortcutMonitor {
     if self.definition == definition, self.activationMode == activationMode, let tap,
       CFMachPortIsValid(tap)
     {
+      onAvailabilityChange?(CGEvent.tapIsEnabled(tap: tap))
       return
     }
     stop()
@@ -116,6 +118,7 @@ final class GlobalShortcutMonitor {
       if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         monitor.resetPressedState()
         if let tap = monitor.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+        monitor.onAvailabilityChange?(monitor.tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false)
         return Unmanaged.passUnretained(event)
       }
       if event.getIntegerValueField(.eventSourceUserData) == TargetedPasteEvent.marker {
@@ -127,19 +130,22 @@ final class GlobalShortcutMonitor {
       tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
       eventsOfInterest: CGEventMask(mask), callback: callback,
       userInfo: Unmanaged.passUnretained(self).toOpaque())
-    guard let tap else { return }
+    guard let tap else { onAvailabilityChange?(false); return }
     source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
     CGEvent.tapEnable(tap: tap, enable: true)
+    onAvailabilityChange?(CGEvent.tapIsEnabled(tap: tap))
   }
 
   func stop() {
+    let wasMonitoring = tap != nil
     if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
     if let tap { CFMachPortInvalidate(tap) }
     source = nil
     tap = nil
     definition = nil
     resetPressedState()
+    if wasMonitoring { onAvailabilityChange?(false) }
   }
 
   private func resetPressedState() {

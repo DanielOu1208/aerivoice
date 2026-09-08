@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import Combine
 import SwiftUI
@@ -7,25 +8,35 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   UNUserNotificationCenterDelegate
 {
-  let model = AppModel()
+  let model: AppModel
   private var statusItem: NSStatusItem?
   private var settingsWindow: NSWindow?
   private var cancellables = Set<AnyCancellable>()
+
+  init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
+    model = AppModel(launchStartedMS: launchStartedMS)
+    super.init()
+  }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     NSApp.mainMenu = Self.makeMainMenu()
     configureMenu()
+    model.runtimeDiagnostics.menuConfigured()
     configureNotifications()
     observeLifecycle()
-    RealtimeTranscriptionPrewarmer.prewarm(provider: model.preferences.transcriptionProvider)
+    model.coordinator.prepareForLaunch(
+      microphoneAuthorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
+    model.prewarmTranscription()
     if !model.setupComplete {
       openSettings()
     }
+    model.runtimeDiagnostics.finishInitialization()
   }
 
   func applicationWillTerminate(_ notification: Notification) {
     model.coordinator.cancel()
+    model.runtimeDiagnostics.terminate()
     model.benchmarkRecorder.flushBeforeTermination()
   }
 
@@ -79,12 +90,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   private func observeLifecycle() {
     let workspace = NSWorkspace.shared.notificationCenter
     workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) {
-      [weak self] _ in Task { @MainActor in self?.model.coordinator.cancel() }
+      [weak self] _ in Task { @MainActor in
+        self?.model.coordinator.cancel()
+        self?.model.runtimeDiagnostics.willSleep()
+      }
     }
     workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) {
       [weak self] _ in
-      guard let self else { return }
-      RealtimeTranscriptionPrewarmer.prewarm(provider: self.model.preferences.transcriptionProvider)
+      Task { @MainActor in
+        guard let self else { return }
+        self.model.runtimeDiagnostics.didWake()
+        self.model.prewarmTranscription()
+      }
     }
     DistributedNotificationCenter.default().addObserver(
       forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
@@ -129,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   }
 
   private func setSettingsWindowVisible(_ isVisible: Bool) {
+    model.runtimeDiagnostics.setSettingsVisible(isVisible)
     NSApp.setActivationPolicy(Self.activationPolicy(settingsWindowVisible: isVisible))
   }
 
@@ -156,7 +174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       keyEquivalent: "")
     applicationMenu.addItem(.separator())
     applicationMenu.addItem(
-      withTitle: "Quit AeriVoice", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+      withTitle: "Quit AeriVoice", action: #selector(NSApplication.terminate(_:)),
+      keyEquivalent: "q")
     mainMenu.addItem(applicationMenuItem)
     mainMenu.setSubmenu(applicationMenu, for: applicationMenuItem)
 

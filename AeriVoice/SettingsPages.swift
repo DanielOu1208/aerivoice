@@ -349,10 +349,10 @@ struct PrivacySettingsPage: View {
           Button("Open Privacy & Security…") { openPrivacySettings() }
         }
 
-        Section("Latency diagnostics") {
-          Toggle("Log privacy-safe latency measurements", isOn: $preferences.latencyLogging)
+        Section("Performance diagnostics") {
+          Toggle("Log privacy-safe performance measurements", isOn: $preferences.latencyLogging)
           Text(
-            "AeriVoice stores timings, workload sizes, provider routing, and outcomes for 90 days. Transcript text, vocabulary, credentials, clipboard contents, and raw errors are never written."
+            "AeriVoice stores timings, resource use, build and device context, workload sizes, provider routing, and outcomes for up to 365 days, within a 200 MB limit. Transcript text, vocabulary, credentials, clipboard contents, and raw errors are never written."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -367,13 +367,13 @@ struct PrivacySettingsPage: View {
       }
       .formStyle(.grouped)
     }
-    .alert("Clear completed latency history?", isPresented: $confirmsBenchmarkClear) {
+    .alert("Clear completed performance history?", isPresented: $confirmsBenchmarkClear) {
       Button("Cancel", role: .cancel) {}
       Button("Clear History", role: .destructive) {
         model.clearCompletedBenchmarkHistory()
       }
     } message: {
-      Text("This removes completed benchmark records. A dictation currently in progress is kept.")
+      Text("This removes completed interaction and runtime records, including archives. A dictation currently in progress is kept.")
     }
   }
 

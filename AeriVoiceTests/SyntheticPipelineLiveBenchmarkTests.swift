@@ -63,6 +63,8 @@ final class SyntheticPipelineLiveBenchmarkTests: XCTestCase {
   private struct Record: Encodable {
     let schemaVersion: Int
     let benchmarkKind: String
+    let environment: BenchmarkEnvironment
+    let measurementBoundary: String
     let fixtureID: String
     let sampleIndex: Int
     let startedAt: Date
@@ -256,7 +258,9 @@ final class SyntheticPipelineLiveBenchmarkTests: XCTestCase {
     }
 
     return Record(
-      schemaVersion: 1, benchmarkKind: "synthetic-soniox-cerebras", fixtureID: Self.fixtureID,
+      schemaVersion: 1, benchmarkKind: "synthetic-soniox-cerebras",
+      environment: .live, measurementBoundary: "generated-audio-to-cleaned-text-no-capture-or-insertion",
+      fixtureID: Self.fixtureID,
       sampleIndex: index, startedAt: startedAt, configuredIdleSeconds: configuredIdleSeconds,
       warmingEnabled: warmingEnabled, isolatedConnection: isolatedConnection,
       comparisonPair: comparisonPair,

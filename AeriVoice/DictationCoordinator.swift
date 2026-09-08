@@ -31,7 +31,9 @@ final class DictationCoordinator: ObservableObject {
     let configuration: CleanupConfiguration
   }
 
-  @Published private(set) var phase: DictationPhase = .idle
+  @Published private(set) var phase: DictationPhase = .idle {
+    didSet { runtimeDiagnostics?.phaseChanged(phase) }
+  }
 
   private let preferences: AppPreferences
   private let credentials: CredentialReading
@@ -44,6 +46,7 @@ final class DictationCoordinator: ObservableObject {
   private let benchmark: LatencyBenchmarkRecording
   private let readiness: DictationReadinessChecking
   private let cuePlayer: SoundCuePlaying
+  private let runtimeDiagnostics: RuntimeDiagnosticsRecorder?
 
   private var sessionID: DictationSessionID?
   private var activeTranscriptionConfiguration: TranscriptionConfiguration?
@@ -57,6 +60,9 @@ final class DictationCoordinator: ObservableObject {
   private var drainTask: Task<Void, Never>?
   private var limitTask: Task<Void, Never>?
   private var audioStopped = true
+  private var audioStarting = false
+  private var launchPreparationAttempted = false
+  private var launchPreparationTask: Task<Void, Never>?
   private var lifecycleGeneration = UUID()
   private var startTask: Task<Void, Never>?
   private var stopTask: Task<Void, Never>?
@@ -79,7 +85,8 @@ final class DictationCoordinator: ObservableObject {
     inserter: TextInserting = TextInsertionService(), notch: NotchPresenting = NotchPresenter(),
     benchmark: LatencyBenchmarkRecording = LatencyBenchmarkRecorder(),
     readiness: DictationReadinessChecking = SystemDictationReadiness(),
-    cuePlayer: SoundCuePlaying = SoundCuePlayer()
+    cuePlayer: SoundCuePlaying = SoundCuePlayer(),
+    runtimeDiagnostics: RuntimeDiagnosticsRecorder? = nil
   ) {
     self.preferences = preferences
     self.credentials = credentials
@@ -92,6 +99,7 @@ final class DictationCoordinator: ObservableObject {
     self.benchmark = benchmark
     self.readiness = readiness
     self.cuePlayer = cuePlayer
+    self.runtimeDiagnostics = runtimeDiagnostics
     audio.onAudio = { [weak self] data in
       DispatchQueue.main.async { self?.enqueue(data) }
     }
@@ -101,6 +109,28 @@ final class DictationCoordinator: ObservableObject {
       let stage: BenchmarkFailureStage =
         self.phase == .starting && self.audioStopped ? .sttSetup : .sttStream
       self.fail(error, id: id, stage: stage)
+    }
+  }
+
+  func prepareForLaunch(microphoneAuthorized: Bool) {
+    guard !launchPreparationAttempted, preferences.onboardingComplete,
+      microphoneAuthorized, phase == .idle
+    else { runtimeDiagnostics?.preparationSkipped(); return }
+    launchPreparationAttempted = true
+    let credentials = self.credentials
+    let audio = self.audio
+    let transcriptionKind = preferences.transcriptionProvider.credentialKind
+    let cleanupKind = preferences.cleanupProvider.credentialKind
+    let runtime = runtimeDiagnostics
+    let preparationToken = runtime?.beginPreparation()
+    launchPreparationTask = Task.detached(priority: .utility) {
+      async let audioPreparation = audio.prepareWithDiagnostics()
+      if !Task.isCancelled { _ = credentials.value(for: transcriptionKind) }
+      if !Task.isCancelled { _ = credentials.value(for: cleanupKind) }
+      let result = await audioPreparation
+      if let preparationToken {
+        await runtime?.finishPreparation(preparationToken, result: result)
+      }
     }
   }
 
@@ -167,6 +197,9 @@ final class DictationCoordinator: ObservableObject {
   }
 
   func cancel() {
+    launchPreparationTask?.cancel()
+    launchPreparationTask = nil
+    audio.discardPreparation()
     guard phase != .idle else {
       muter.restore()
       return
@@ -190,6 +223,7 @@ final class DictationCoordinator: ObservableObject {
     stopAudioIfNeeded(playCue: false)
     benchmark.finish(
       .cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    runtimeDiagnostics?.sessionCleanupFinished()
     activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
     phase = .error("Cancelled")
@@ -214,6 +248,7 @@ final class DictationCoordinator: ObservableObject {
       return
     }
     let transcriptionProvider = transcriptionConfiguration.provider
+    benchmark.mark(.credentialReadStarted)
     guard
       let transcriptionKey = credentials.value(for: transcriptionProvider.credentialKind),
       !transcriptionKey.isEmpty
@@ -235,6 +270,8 @@ final class DictationCoordinator: ObservableObject {
       showReadinessError(cleanupProvider.missingCredentialError, category: .missingCredential)
       return
     }
+    benchmark.mark(.credentialsReady)
+    benchmark.mark(.readinessCheckStarted)
     let microphoneReady = await readiness.requestMicrophone()
     guard lifecycleGeneration == generation, !Task.isCancelled else { return }
     guard microphoneReady else {
@@ -247,6 +284,8 @@ final class DictationCoordinator: ObservableObject {
         category: .accessibilityPermission)
       return
     }
+
+    benchmark.mark(.readinessChecksFinished)
 
     if cleanupProvider == .cerebras {
       let cleaner = self.cleaner
@@ -269,17 +308,28 @@ final class DictationCoordinator: ObservableObject {
         configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
     }
 
+    benchmark.mark(.startCuePlaybackStarted)
     play(.start)
+    benchmark.mark(.startCuePlaybackReturned)
     if preferences.soundCues { try? await Task.sleep(for: cuePlayer.startCaptureDelay) }
     guard phase == .starting, lifecycleGeneration == generation, !Task.isCancelled else { return }
 
+    benchmark.mark(.startCueDelayFinished)
+    benchmark.mark(.outputMuteStarted)
     state.warning = preferences.muteOutput && !muter.mute() ? "Output could not be muted" : nil
+    benchmark.mark(.outputMuteFinished)
     notch.present(state: state)
-    audioStopped = false
+    audioStarting = true
+    benchmark.mark(.audioEngineStartRequested)
     do {
-      try audio.start()
+      let usedPreparation = try await audio.start()
+      guard lifecycleGeneration == generation, sessionID == id, !Task.isCancelled else { return }
+      audioStarting = false
+      audioStopped = false
+      if usedPreparation { benchmark.mark(.preparedAudioEngineUsed) }
       benchmark.mark(.captureStarted)
     } catch {
+      guard lifecycleGeneration == generation, sessionID == id, !Task.isCancelled else { return }
       fail(error, id: id, stage: .audioCapture)
       return
     }
@@ -536,9 +586,15 @@ final class DictationCoordinator: ObservableObject {
   }
 
   private func stopAudioIfNeeded(playCue: Bool) {
-    guard !audioStopped else { return }
+    guard !audioStopped || audioStarting else { return }
     audioStopped = true
-    audio.stop()
+    if audioStarting {
+      startTask?.cancel()
+      audio.cancelStart()
+      audioStarting = false
+    } else {
+      audio.stop()
+    }
     muter.restore()
     if playCue { play(.stop) }
     limitTask?.cancel()
@@ -600,6 +656,7 @@ final class DictationCoordinator: ObservableObject {
     sessionID = nil
     activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
+    runtimeDiagnostics?.sessionCleanupFinished()
     let generation = lifecycleGeneration
     Task { @MainActor [weak self] in
       try? await Task.sleep(for: .seconds(2.1))
