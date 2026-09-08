@@ -97,7 +97,7 @@ final class RuntimeDiagnosticsTests: XCTestCase {
   }
 
   func testDisabledStartupCreatesNoFilesAndEnableDoesNotInventLaunch() async throws {
-    let harness = Harness(enabled: false)
+    let harness = Harness(enabled: nil)
     defer { harness.remove() }
     harness.runtime.finishInitialization()
     harness.begin()
@@ -234,10 +234,11 @@ private final class Harness {
   let benchmark: LatencyBenchmarkRecorder
   private let suite = "RuntimeDiagnosticsTests-\(UUID().uuidString)"
 
-  init(enabled: Bool = true, unavailable: Bool = false) {
+  init(enabled: Bool? = true, unavailable: Bool = false) {
     let defaults = UserDefaults(suiteName: suite)!
-    defaults.set(enabled, forKey: "latencyLogging")
+    if let enabled { defaults.set(enabled, forKey: "latencyLogging") }
     preferences = AppPreferences(defaults: defaults)
+    let enabled = preferences.latencyLogging
     sampler = DiagnosticTestSampler(clock: clock, unavailable: unavailable)
     let writer = DiagnosticsWriteQueue(directoryURL: directory)
     let preferences = preferences

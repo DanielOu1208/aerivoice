@@ -722,6 +722,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     defaults.removePersistentDomain(forName: suite)
     defaults.set(soundCues, forKey: "soundCues")
     defaults.set(false, forKey: "muteOutput")
+    defaults.set(true, forKey: "latencyLogging")
     let preferences = AppPreferences(defaults: defaults)
     preferences.transcriptionProvider = transcriptionProvider
     preferences.cleanupProvider = cleanupProvider

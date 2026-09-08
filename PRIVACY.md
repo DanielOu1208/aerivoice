@@ -58,7 +58,7 @@ Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for you
   consumption by another app. Detected secure fields and secure keyboard-input mode copy with a warning
   instead of receiving an automatic Paste. Copies you make after dictation stops
   are preserved; if the clipboard changed, the transcript is not copied over it.
-- Optional performance diagnostics are enabled by default and stored in
+- Optional performance diagnostics are disabled by default. When enabled, they are stored in
   `~/Library/Application Support/AeriVoice/Benchmarks` with user-only file
   permissions.
 

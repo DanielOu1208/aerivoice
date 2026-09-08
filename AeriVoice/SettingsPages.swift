@@ -352,7 +352,7 @@ struct PrivacySettingsPage: View {
         Section("Performance diagnostics") {
           Toggle("Log privacy-safe performance measurements", isOn: $preferences.latencyLogging)
           Text(
-            "AeriVoice stores timings, resource use, build and device context, workload sizes, provider routing, and outcomes for up to 365 days, within a 200 MB limit. Transcript text, vocabulary, credentials, clipboard contents, and raw errors are never written."
+            "When enabled, AeriVoice stores timings, resource use, build and device context, workload sizes, provider routing, and outcomes for up to 365 days, within a 200 MB limit. Transcript text, vocabulary, credentials, clipboard contents, and raw errors are never written."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

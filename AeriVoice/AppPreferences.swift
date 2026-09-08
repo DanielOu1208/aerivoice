@@ -189,7 +189,7 @@ final class AppPreferences: ObservableObject {
       ?? .hybrid
     onboardingComplete = defaults.bool(forKey: Key.onboardingComplete)
     launchAtLogin = defaults.object(forKey: Key.launchAtLogin) as? Bool ?? true
-    latencyLogging = defaults.object(forKey: Key.latencyLogging) as? Bool ?? true
+    latencyLogging = defaults.object(forKey: Key.latencyLogging) as? Bool ?? false
     if defaults.string(forKey: Key.diagnosticsGeneration).flatMap(UUID.init(uuidString:)) == nil {
       defaults.set(UUID().uuidString, forKey: Key.diagnosticsGeneration)
     }

@@ -1,6 +1,6 @@
 # Performance logging and collection
 
-AeriVoice records content-free diagnostics locally under the existing preference in **Settings → Privacy & Data → Performance diagnostics**. The preference is enabled by default. This is measurement infrastructure for a person or agent to analyze; it does not upload records or compare builds automatically.
+AeriVoice can record content-free diagnostics locally under **Settings → Privacy & Data → Performance diagnostics**. Logging is disabled by default; explicitly saved on/off choices are preserved. Enable it when investigating a problem or collecting measurements to share manually. This is measurement infrastructure for a person or agent to analyze; it does not upload records or compare builds automatically.
 
 ## Files and controls
 
