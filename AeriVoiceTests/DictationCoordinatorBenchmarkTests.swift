@@ -5,6 +5,50 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorBenchmarkTests: XCTestCase {
+  func testRestorationInvalidatesOnIdleCancelNewRecordingAndSettingOff() async throws {
+    let fixture = makeFixture()
+    fixture.coordinator.cancel()
+    XCTAssertEqual(fixture.inserter.invalidations, 1)
+    fixture.coordinator.toggle()
+    XCTAssertEqual(fixture.inserter.invalidations, 2)
+    fixture.preferences.restoreClipboard = false
+    XCTAssertEqual(fixture.inserter.invalidations, 3)
+    fixture.coordinator.cancel()
+  }
+
+  func testNoSpeechAndFinalizationFailureDiscardClipboardBackup() async throws {
+    for error in [AppError.emptyTranscript, AppError.connectionTimeout] {
+      let fixture = makeFixture()
+      fixture.transcriber.finishError = error
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.coordinator.phase == .recording }
+      let initial = fixture.inserter.invalidations
+      fixture.coordinator.toggle()
+      try await waitUntil {
+        if case .error = fixture.coordinator.phase { return true }
+        return false
+      }
+      XCTAssertEqual(fixture.inserter.invalidations, initial + 1)
+      XCTAssertEqual(fixture.inserter.captureCount, 1)
+      XCTAssertNil(fixture.inserter.insertedText)
+      fixture.coordinator.cancel()
+    }
+  }
+
+  func testTerminalFailureDiscardsClipboardBackupButPasteSentPreservesVerifier() async throws {
+    for result in [InsertionResult.pasteSent, .copied(.unsupportedField), .failed("fixture")] {
+      let fixture = makeFixture()
+      fixture.inserter.result = result
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.coordinator.phase == .recording }
+      let initial = fixture.inserter.invalidations
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.inserter.didReturn }
+      XCTAssertEqual(fixture.inserter.invalidations, initial + (result == .pasteSent ? 0 : 1))
+      fixture.coordinator.cancel()
+    }
+  }
+
   func testLaunchPreparationRequiresOnboardingAndExistingMicrophonePermission() async throws {
     let fixture = makeFixture()
     fixture.coordinator.prepareForLaunch(microphoneAuthorized: true)
@@ -946,7 +990,10 @@ private final class FakeTranscriber: RealtimeTranscribing {
         finalAudioProcessedMS: 0, totalAudioProcessedMS: 100))
   }
 
+  var finishError: AppError?
+
   func finish() async throws -> String {
+    if let finishError { throw finishError }
     onTranscript?(
       RealtimeTranscriptUpdate(
         snapshot: TranscriptSnapshot(confirmed: "Raw transcript"), hasFinalText: true,
@@ -1063,6 +1110,8 @@ private final class FakeCuePlayer: SoundCuePlaying {
 
 @MainActor
 private final class FakeInserter: TextInserting, @unchecked Sendable {
+  var invalidations = 0
+  func invalidatePendingRestoration() { invalidations += 1 }
   var insertedText: String?
   var suspendInsert = false
   var pendingInsert: CheckedContinuation<Void, Never>?

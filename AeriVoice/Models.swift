@@ -577,6 +577,11 @@ protocol TextInserting: Sendable {
   /// Begins acquisition immediately at stop; callers cancel this task with the session.
   func captureTarget() -> Task<TextInsertionTarget?, Never>
   func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult
+  func invalidatePendingRestoration()
+}
+
+extension TextInserting {
+  func invalidatePendingRestoration() {}
 }
 
 enum InsertionResult: Equatable, Sendable {

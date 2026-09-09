@@ -7,6 +7,25 @@ import XCTest
 
 @MainActor
 final class RuntimeDiagnosticsTests: XCTestCase {
+  func testRestorationOutcomeKeepsOriginalInteractionAndRespectsLoggingOff() async throws {
+    let harness = Harness()
+    defer { harness.remove() }
+    let original = harness.runtime.beginInteraction().0
+    harness.runtime.finishInteraction()
+    let next = harness.runtime.beginInteraction().0
+    harness.runtime.clipboardRestorationFinished(.restored, interactionID: original)
+    await harness.runtime.flushForTesting()
+    let records = try harness.records().filter { $0.event == .clipboardRestorationFinished }
+    XCTAssertEqual(records.count, 1)
+    XCTAssertEqual(records.first?.interactionID, original)
+    XCTAssertNotEqual(records.first?.interactionID, next)
+    XCTAssertEqual(records.first?.clipboardRestoration, .restored)
+    harness.preferences.latencyLogging = false
+    harness.runtime.clipboardRestorationFinished(.failed, interactionID: original)
+    await harness.runtime.flushForTesting()
+    XCTAssertEqual(try harness.records().filter { $0.event == .clipboardRestorationFinished }.count, 1)
+  }
+
   func testCPUUnitsAndCounterResetHandling() throws {
     XCTAssertEqual(DiagnosticsClock.milliseconds(24_000_000, numer: 125, denom: 3), 1_000)
     let before = snapshot(at: 100)

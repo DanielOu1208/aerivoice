@@ -47,6 +47,7 @@ final class AppPreferences: ObservableObject {
     static let vocabulary = "vocabulary"
     static let muteOutput = "muteOutput"
     static let soundCues = "soundCues"
+    static let restoreClipboard = "restoreClipboard"
     static let shortcut = "shortcut"
     static let shortcutActivationMode = "shortcutActivationMode"
     static let onboardingComplete = "onboardingComplete"
@@ -78,6 +79,12 @@ final class AppPreferences: ObservableObject {
   @Published var vocabulary: String { didSet { defaults.set(vocabulary, forKey: Key.vocabulary) } }
   @Published var muteOutput: Bool { didSet { defaults.set(muteOutput, forKey: Key.muteOutput) } }
   @Published var soundCues: Bool { didSet { defaults.set(soundCues, forKey: Key.soundCues) } }
+  @Published var restoreClipboard: Bool {
+    didSet {
+      defaults.set(restoreClipboard, forKey: Key.restoreClipboard)
+      onClipboardRestorationChange?(restoreClipboard)
+    }
+  }
   @Published var shortcut: ShortcutDefinition? { didSet { persistShortcut() } }
   @Published var shortcutActivationMode: ShortcutActivationMode {
     didSet { defaults.set(shortcutActivationMode.rawValue, forKey: Key.shortcutActivationMode) }
@@ -97,6 +104,7 @@ final class AppPreferences: ObservableObject {
     }
   }
 
+  var onClipboardRestorationChange: ((Bool) -> Void)?
   var onDiagnosticsLoggingChange: ((Bool) -> Void)?
   var onTranscriptionProviderChange: (() -> Void)?
   var diagnosticsGeneration: UUID? {
@@ -184,6 +192,7 @@ final class AppPreferences: ObservableObject {
     vocabulary = defaults.string(forKey: Key.vocabulary) ?? ""
     muteOutput = defaults.object(forKey: Key.muteOutput) as? Bool ?? true
     soundCues = defaults.object(forKey: Key.soundCues) as? Bool ?? true
+    restoreClipboard = defaults.object(forKey: Key.restoreClipboard) as? Bool ?? true
     shortcutActivationMode =
       ShortcutActivationMode(rawValue: defaults.string(forKey: Key.shortcutActivationMode) ?? "")
       ?? .hybrid

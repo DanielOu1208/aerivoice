@@ -6,6 +6,20 @@ import XCTest
 @testable import AeriVoice
 
 final class ModelTests: XCTestCase {
+  @MainActor
+  func testClipboardRestorationDefaultsOnAndPersistsExplicitOff() {
+    let suite = "AeriVoiceTests.RestoreClipboard.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let preferences = AppPreferences(defaults: defaults)
+    XCTAssertTrue(preferences.restoreClipboard)
+    var changes: [Bool] = []
+    preferences.onClipboardRestorationChange = { changes.append($0) }
+    preferences.restoreClipboard = false
+    XCTAssertEqual(changes, [false])
+    XCTAssertFalse(AppPreferences(defaults: defaults).restoreClipboard)
+  }
+
   func testTranscriptionProviderCatalogAndCapabilities() {
     XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta])
     XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v5")

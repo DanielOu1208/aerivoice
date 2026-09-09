@@ -45,6 +45,7 @@ enum RuntimeEvent: String, Codable, Sendable {
   case interactionBegan, interactionFinished, phaseChanged, sessionCleanupFinished
   case settingsOpened, settingsClosed, settingsChanged, sleep, wake, termination
   case loggingEnabled, loggingDisabled, resourceSample, resourceUnavailable
+  case clipboardRestorationFinished
 }
 
 enum DiagnosticPreparationResult: String, Codable, Sendable {
@@ -62,9 +63,10 @@ struct RuntimeDiagnosticRecord: Codable, Equatable, Sendable {
   let event: RuntimeEvent
   let activity: RuntimeActivity
   let activityGeneration: UUID
-  let interactionID: UUID?
+  var interactionID: UUID?
   let environment: BenchmarkEnvironment
   let settings: DiagnosticSettings
+  var clipboardRestoration: ClipboardRestorationOutcome?
   var result: DiagnosticPreparationResult?
   var resources: ProcessResourceSnapshot?
   var resourceInterval: ResourceInterval?
@@ -242,6 +244,14 @@ final class RuntimeDiagnosticsRecorder {
   }
 
   func sessionCleanupFinished() { emit(.sessionCleanupFinished) }
+
+  func clipboardRestorationFinished(_ outcome: ClipboardRestorationOutcome, interactionID: UUID?) {
+    guard enabled else { return }
+    var record = makeRecord(.clipboardRestorationFinished)
+    record.interactionID = interactionID
+    record.clipboardRestoration = outcome
+    persist(record)
+  }
 
   func setSettingsVisible(_ value: Bool) {
     guard settingsVisible != value else { return }

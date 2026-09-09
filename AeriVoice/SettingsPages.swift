@@ -37,6 +37,13 @@ struct GeneralSettingsPage: View {
           Toggle("Play start, stop, and error cues", isOn: $preferences.soundCues)
         }
 
+        Section("Clipboard") {
+          Toggle("Restore clipboard after dictation", isOn: $preferences.restoreClipboard)
+          Text("Restores your previous clipboard after insertion is confirmed. Otherwise, dictation stays copied.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
         Section("Startup") {
           Toggle(
             "Launch AeriVoice at login",

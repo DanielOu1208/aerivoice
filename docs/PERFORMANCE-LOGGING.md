@@ -121,3 +121,12 @@ Separate local activation/capture/insertion time from provider/network time. Kee
 Before a release, record an actual no-debugger Release acceptance session: fresh-launch/second-activation pairs, an idle run, guided dictations including cancellation, Settings activity, and sleep/wake. Confirm that diagnostics add no microphone activation or insertion changes. Measure logging on versus off on the same Mac with matching inputs and configuration; use an external Instruments/resource measurement while logging is off, since this runner intentionally refuses an unverifiable idle state. Automated counter, lifecycle, storage, and runner tests do not establish that real-device acceptance or quantify logging overhead.
 
 Implementation verification on 2026-09-07: the full Debug suite passed 283 tests with three opt-in live-provider benchmarks skipped. Subsequent focused runs passed all 12 runtime and nine storage tests after the final changes. Offline collector/archive-reader fixtures, Debug static analysis, and the unsigned optimized Release build passed; the Release executable and dSYM UUIDs match. No app was installed or restarted. Real-app launch pairs, guided dictation, idle/sleep-wake acceptance, and logging-on/off overhead measurement remain release acceptance work; no performance improvement or overhead figure is claimed here.
+
+### Clipboard restoration
+
+`stopToOutputMS` still ends at **Paste sent**. Optional clipboard restoration runs
+separately after dispatch and does not extend this measurement or confirm it
+retroactively. When diagnostics are already enabled, a
+`clipboardRestorationFinished` runtime record carries the originating interaction
+ID and an allowlisted `clipboardRestoration` outcome. No clipboard, transcript,
+or editor contents are logged; disabling diagnostics suppresses these records.

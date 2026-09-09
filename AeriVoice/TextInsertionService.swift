@@ -81,6 +81,8 @@ typealias PasteCommit =
 struct TextInsertionTarget: Sendable {
   let id = UUID()
   var clipboardChangeCount: Int?
+  var restorationID: UUID?
+  var verification: TextVerificationSource?
   let perform: @Sendable (@escaping PasteCommit) async -> TargetInsertionOutcome
 
   static func rejected(_ reason: PasteBlockReason) -> Self {
@@ -100,25 +102,44 @@ final class TextInsertionService: TextInserting {
   private static var activeBoards: Set<NSPasteboard.Name> = []
   private let pasteboard: NSPasteboard
   private let capture: @MainActor () -> Task<TextInsertionTarget?, Never>
+  private let restoration: ClipboardRestoration
+  private let restoreEnabled: @MainActor () -> Bool
+  private let makeRestorationReport: @MainActor () -> ClipboardRestoration.Report
 
   init(
     pasteboard: NSPasteboard = .general,
-    capture: @escaping @MainActor () -> Task<TextInsertionTarget?, Never> = captureSystemTarget
+    capture: @escaping @MainActor () -> Task<TextInsertionTarget?, Never> = captureSystemTarget,
+    restoration: ClipboardRestoration? = nil,
+    restoreEnabled: @escaping @MainActor () -> Bool = { true },
+    makeRestorationReport: @escaping @MainActor () -> ClipboardRestoration.Report = { { _ in } }
   ) {
     self.pasteboard = pasteboard
     self.capture = capture
+    self.restoration = restoration ?? ClipboardRestoration(board: pasteboard)
+    self.restoreEnabled = restoreEnabled
+    self.makeRestorationReport = makeRestorationReport
   }
 
+  func invalidatePendingRestoration() { restoration.invalidate() }
+
   func captureTarget() -> Task<TextInsertionTarget?, Never> {
+    restoration.invalidate()
     let changeCount = pasteboard.changeCount
+    let restorationID = restoration.beginCapture(
+      changeCount: changeCount, enabled: restoreEnabled())
     let acquisition = capture()
+    let restoration = restoration
     return Task {
       await withTaskCancellationHandler {
         var target = await acquisition.value ?? .rejected(.targetUnavailable)
         target.clipboardChangeCount = changeCount
+        target.restorationID = restorationID
         return target
       } onCancel: {
         acquisition.cancel()
+        if let restorationID {
+          Task { @MainActor in restoration.invalidate(ifCurrent: restorationID) }
+        }
       }
     }
   }
@@ -129,8 +150,17 @@ final class TextInsertionService: TextInserting {
       return .failed("Another paste is still finishing—nothing copied.")
     }
     defer { Self.activeBoards.remove(pasteboard.name) }
+    // Leave headroom for dispatch and its final safety checks on slower targets.
+    // This conservative budget only disables optional work; it never rejects Paste.
+    let optionalProbeDeadline = ContinuousClock.now.advanced(by: .milliseconds(550))
     let initialChangeCount = target?.clipboardChangeCount ?? pasteboard.changeCount
     let marker = UUID().uuidString
+    let restorationID = restoration.beginInsertion(captureID: target?.restorationID)
+    let report = makeRestorationReport()
+    var snapshot: ClipboardSnapshot?
+    var before: TextEditState?
+    var expected: TextEditState?
+    var attemptedProbe = false
     var ownedChangeCount: Int?
     var committedOutcome: TargetInsertionOutcome?
 
@@ -164,20 +194,55 @@ final class TextInsertionService: TextInserting {
         outcome = .blocked(.targetUnavailable)
       } else if let reason = validate() {
         outcome = .blocked(reason)
-      } else if !copyIfUnchanged() {
-        outcome = .blocked(.clipboardChanged)
       } else {
-        outcome = Task.isCancelled ? .blocked(.targetUnavailable) : dispatch()
+        snapshot = self.restoration.takeSnapshot(for: restorationID)
+        if self.restoreEnabled(), ContinuousClock.now < optionalProbeDeadline,
+          snapshot?.changeCount == initialChangeCount, let source = target?.verification
+        {
+          attemptedProbe = true
+          if let state = source.prepare(), let replacement = state.replacingSelection(with: text) {
+            before = state
+            expected = replacement
+          }
+        }
+        // The optional read may have taken time. Revalidate before touching the board.
+        if Task.isCancelled {
+          outcome = .blocked(.targetUnavailable)
+        } else if attemptedProbe, let reason = validate() {
+          outcome = .blocked(reason)
+        } else if !copyIfUnchanged() {
+          outcome = .blocked(.clipboardChanged)
+        } else {
+          outcome = Task.isCancelled ? .blocked(.targetUnavailable) : dispatch()
+        }
       }
       committedOutcome = outcome
       return outcome
     }
     let outcome = await target?.perform(commit) ?? .blocked(.targetUnavailable)
-    guard !Task.isCancelled else { return .cancelled }
+    guard !Task.isCancelled else {
+      restoration.invalidate()
+      return .cancelled
+    }
     switch outcome {
     case .pasteSent:
+      if restoreEnabled(), let snapshot, let before, let expected,
+        let source = target?.verification, let ownedChangeCount
+      {
+        restoration.verify(
+          id: restorationID, snapshot: snapshot, before: before, expected: expected,
+          source: source, markerType: Self.markerType, marker: marker,
+          ownedChangeCount: ownedChangeCount, dictation: text, report: report)
+      } else {
+        let reason: ClipboardRestorationOutcome
+        if !restoreEnabled() { reason = .disabled }
+        else if snapshot == nil { reason = .backupUnavailable }
+        else { reason = .unverified }
+        restoration.finishWithoutRestoring(reason, id: restorationID, report: report)
+      }
       return .pasteSent
     case .blocked(let reason):
+      restoration.finishWithoutRestoring(.unverified, id: restorationID, report: report)
       guard copyIfUnchanged() else {
         return .failed("Couldn’t paste or copy—clipboard changed or unavailable.")
       }
@@ -264,7 +329,7 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     case .failure(let reason): return .rejected(reason)
     case .success(let editor):
       let snapshot = Snapshot(identity: identity, editor: editor)
-      return TextInsertionTarget { commit in
+      return TextInsertionTarget(verification: Self.verificationSource(for: snapshot)) { commit in
         await withTaskGroup(of: TargetInsertionOutcome.self) { group in
           group.addTask(priority: .userInitiated) {
             await AccessibilityPasteWorker().paste(into: snapshot, commit: commit)
@@ -273,6 +338,62 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
         }
       }
     }
+  }
+
+  private static func verificationSource(for target: Snapshot) -> TextVerificationSource {
+    TextVerificationSource(
+      prepare: {
+        // Eligibility was checked immediately before this read by the paste worker.
+        AccessibilityPasteWorker(seconds: 0.1).textState(target.editor)
+      },
+      read: {
+        await withTaskGroup(of: TextEditState?.self) { group in
+          group.addTask {
+            let worker = AccessibilityPasteWorker(seconds: 0.1)
+            guard worker.verificationTargetIsCurrent(target) else { return nil }
+            return worker.textState(target.editor)
+          }
+          return await group.next() ?? nil
+        }
+      },
+      isCurrent: {
+        AXIsProcessTrusted() && !IsSecureEventInputEnabled()
+          && AccessibilityPasteWorker(seconds: 0.1).verificationTargetIsCurrent(target)
+          && !IsSecureEventInputEnabled()
+      })
+  }
+
+  private func verificationTargetIsCurrent(_ target: Snapshot) -> Bool {
+    guard AXIsProcessTrusted(), identityIsCurrent(target.identity),
+      case .success(let editor) = editorCandidate(target.identity),
+      CFEqual(editor, target.editor), identityIsCurrent(target.identity)
+    else { return false }
+    return !shouldStop
+  }
+
+  private func textState(_ editor: AXUIElement) -> TextEditState? {
+    if let length = copyAttribute(editor, kAXNumberOfCharactersAttribute as CFString) as? NSNumber,
+      length.int64Value > TextEditState.maximumUTF16Length
+    { return nil }
+    guard let selection = selectionRange(editor),
+      let value = stringAttribute(editor, kAXValueAttribute as CFString),
+      value.utf16.count <= TextEditState.maximumUTF16Length,
+      let finalSelection = selectionRange(editor), selection == finalSelection, !shouldStop
+    else { return nil }
+    let state = TextEditState(text: value, selection: selection)
+    return state.isValid ? state : nil
+  }
+
+  private func selectionRange(_ editor: AXUIElement) -> NSRange? {
+    guard let value = copyAttribute(editor, kAXSelectedTextRangeAttribute as CFString),
+      CFGetTypeID(value) == AXValueGetTypeID()
+    else { return nil }
+    let axValue = unsafeDowncast(value, to: AXValue.self)
+    var range = CFRange()
+    guard AXValueGetType(axValue) == .cfRange,
+      AXValueGetValue(axValue, .cfRange, &range), range.location >= 0, range.length >= 0
+    else { return nil }
+    return NSRange(location: range.location, length: range.length)
   }
 
   private func paste(into target: Snapshot, commit: @escaping PasteCommit) async
