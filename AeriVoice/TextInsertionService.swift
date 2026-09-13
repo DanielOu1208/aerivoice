@@ -123,7 +123,6 @@ final class TextInsertionService: TextInserting {
   func invalidatePendingRestoration() { restoration.invalidate() }
 
   func captureTarget() -> Task<TextInsertionTarget?, Never> {
-    restoration.invalidate()
     let changeCount = pasteboard.changeCount
     let restorationID = restoration.beginCapture(
       changeCount: changeCount, enabled: restoreEnabled())

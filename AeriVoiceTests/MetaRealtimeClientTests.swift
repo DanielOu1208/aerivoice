@@ -435,7 +435,7 @@ final class MetaRealtimeClientTests: XCTestCase {
 
     XCTAssertEqual(
       pacingClock.sleepDurations,
-      [.nanoseconds(74_074_074), .milliseconds(100), .milliseconds(100)])
+      [.nanoseconds(74_074_074), .nanoseconds(74_074_074), .milliseconds(100)])
     XCTAssertEqual(
       transport.sentMessages.compactMap { message -> Data? in
         if case .data(let data) = message { return data }
@@ -463,6 +463,59 @@ final class MetaRealtimeClientTests: XCTestCase {
       pacingClock.sleepDurations,
       [.milliseconds(80), .milliseconds(80), .milliseconds(80)])
     client.cancel()
+  }
+
+  func testCatchUpDrainsSmallTailWithoutChangingAudioThenResumesRealtime() async throws {
+    let transport = MetaTransportSpy(mode: .open)
+    let pacingClock = MetaPacingClockSpy()
+    let client = MetaRealtimeClient(
+      pacingClock: pacingClock, makeTransport: { _ in transport })
+    try await client.connect(
+      configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
+      vocabulary: [], sessionID: DictationSessionID())
+    let frames = [
+      RealtimeAudioFrame(audio: Data(repeating: 1, count: 640), queuedBytesAfterFrame: 642),
+      RealtimeAudioFrame(audio: Data(repeating: 2, count: 640), queuedBytesAfterFrame: 2),
+      RealtimeAudioFrame(audio: Data(repeating: 3, count: 2), queuedBytesAfterFrame: 0),
+      RealtimeAudioFrame(audio: Data(repeating: 4, count: 640), queuedBytesAfterFrame: 0),
+    ]
+    for frame in frames { try await client.send(frame) }
+
+    XCTAssertEqual(
+      pacingClock.sleepDurations,
+      [.nanoseconds(14_814_815), .nanoseconds(14_814_815), .nanoseconds(62_500)])
+    XCTAssertEqual(
+      transport.sentMessages.compactMap { message -> Data? in
+        if case .data(let data) = message { return data }
+        return nil
+      }, frames.map(\.audio))
+    client.cancel()
+  }
+
+  func testCatchUpRebasesAfterStallAndLateWakeWithoutBursting() async throws {
+    for lateWake in [false, true] {
+      let transport = MetaTransportSpy(mode: .open)
+      let pacingClock = MetaPacingClockSpy()
+      var sendDurations: [Duration] = [.milliseconds(250), .zero, .zero]
+      if lateWake {
+        pacingClock.sleepOvershoots = [.milliseconds(99), .zero]
+      } else {
+        transport.onDataSend = { pacingClock.advance(by: sendDurations.removeFirst()) }
+      }
+      let client = MetaRealtimeClient(
+        pacingClock: pacingClock, makeTransport: { _ in transport })
+      try await client.connect(
+        configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
+        vocabulary: [], sessionID: DictationSessionID())
+      for remaining in [6_400, 3_200, 0] {
+        try await client.send(
+          RealtimeAudioFrame(audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: remaining))
+      }
+      XCTAssertEqual(
+        pacingClock.sleepDurations,
+        Array(repeating: .nanoseconds(74_074_074), count: lateWake ? 2 : 1))
+      client.cancel()
+    }
   }
 
   func testPacingRebasesAfterStallInsteadOfBurstingToCatchUp() async throws {

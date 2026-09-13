@@ -315,10 +315,8 @@ final class DictationCoordinator: ObservableObject {
     bufferedBytes = 0
     connected = false
 
-    if transcriptionProvider == .meta {
-      beginTranscriberConnection(
-        configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
-    }
+    beginTranscriberConnection(
+      configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
 
     benchmark.mark(.startCuePlaybackStarted)
     play(.start)
@@ -346,13 +344,6 @@ final class DictationCoordinator: ObservableObject {
       return
     }
     beginLimitTimer(id: id)
-
-    if transcriptionProvider != .meta {
-      guard
-        await connectTranscriber(
-          configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
-      else { return }
-    }
 
     guard sessionID == id, phase == .starting || phase == .processing else { return }
     if phase == .starting {

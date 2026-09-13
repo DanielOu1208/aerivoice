@@ -262,7 +262,8 @@ final class MetaRealtimeClient: NSObject, RealtimeTranscribing {
       throw AppError.provider("Meta Model API has already ended audio input.")
     }
     let sendGeneration = generation
-    let speedMultiplier = frame.queuedBytesAfterFrame > 3_200 ? 1.35 : 1.0
+    // Keep bounded catch-up active until the buffered tail has drained.
+    let speedMultiplier = frame.queuedBytesAfterFrame > 0 ? 1.35 : 1.0
     let frameDuration = Self.pacingOffset(
       forByteCount: frame.audio.count, speedMultiplier: speedMultiplier)
     let frameStart: ContinuousClock.Instant

@@ -39,10 +39,13 @@ actor LatencyBenchmarkStore {
     try enforceCap()
   }
 
-  func discardActiveCheckpoint() throws {
+  /// Enforce retention after collection stops without recovering an unfinished interaction.
+  func discardCheckpointAndPrune(now: Date) throws {
     guard fileManager.fileExists(atPath: directoryURL.path) else { return }
     try prepareDirectory()
     try removeRegularFile(directoryURL.appending(path: Self.activeFilename))
+    try maintain(now: now)
+    try enforceCap()
   }
 
   func complete(_ record: LatencyBenchmarkRecord, now: Date) throws {
