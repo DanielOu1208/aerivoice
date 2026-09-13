@@ -119,17 +119,47 @@ enum CleanupMode: String, CaseIterable, Codable, Sendable {
   case polished = "Polished"
 }
 
-enum CleanupReasoningEffort: String, CaseIterable, Codable, Sendable {
-  case none
-  case minimal
-  case low
-  case medium
-  case high
-  case xhigh
-  case max
+struct CleanupReasoningEffort: RawRepresentable, Hashable, CaseIterable, Codable, Sendable {
+  let rawValue: String
+
+  static let automatic = Self("automatic")
+  static let none = Self("none")
+  static let minimal = Self("minimal")
+  static let low = Self("low")
+  static let medium = Self("medium")
+  static let high = Self("high")
+  static let xhigh = Self("xhigh")
+  static let max = Self("max")
+
+  static let allCases: [Self] = [.automatic, .none, .minimal, .low, .medium, .high, .xhigh, .max]
+  static let gatewayLevels: [Self] = [.none, .minimal, .low, .medium, .high, .xhigh, .max]
+
+  private init(_ value: String) { rawValue = value }
+
+  init?(rawValue: String) {
+    guard rawValue.range(of: #"^[a-z][a-z0-9_-]{0,63}\z"#, options: .regularExpression) != nil
+    else { return nil }
+    self.rawValue = rawValue
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    let value = try container.decode(String.self)
+    guard let effort = Self(rawValue: value) else {
+      throw DecodingError.dataCorruptedError(
+        in: container, debugDescription: "Invalid reasoning effort")
+    }
+    self = effort
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawValue)
+  }
 
   var displayName: String {
     switch self {
+    case .automatic: "Model default"
     case .none: "None"
     case .minimal: "Minimal"
     case .low: "Low"
@@ -137,6 +167,7 @@ enum CleanupReasoningEffort: String, CaseIterable, Codable, Sendable {
     case .high: "High"
     case .xhigh: "Extra High"
     case .max: "Max"
+    default: rawValue.replacingOccurrences(of: "_", with: " ").capitalized
     }
   }
 }
@@ -194,13 +225,83 @@ struct CleanupProviderRoute: Equatable, Sendable {
   var requestedProviderTag: String? { only?.first }
 }
 
-enum CleanupModel: String, CaseIterable, Codable, Sendable {
-  case gemini37Flash = "google/gemini-3.7-flash"
-  case gptOSS120BCerebras = "openai/gpt-oss-120b"
-  case gemini35FlashLite = "google/gemini-3.5-flash-lite"
-  case gpt56LunaFast = "openai/gpt-5.6-luna"
-  case qwen38_27BGroq = "qwen/qwen3.8-27b"
-  case qwen38_27BCerebras = "qwen-3.8-27b"
+struct CleanupModel: Hashable, CaseIterable, Codable, Sendable {
+  let rawValue: String
+  let provider: CleanupProvider
+
+  static let gemini37Flash = Self("google/gemini-3.7-flash")
+  static let gptOSS120BCerebras = Self("openai/gpt-oss-120b")
+  static let gemini35FlashLite = Self("google/gemini-3.5-flash-lite")
+  static let gpt56LunaFast = Self("openai/gpt-5.6-luna")
+  static let qwen38_27BGroq = Self("qwen/qwen3.8-27b", provider: .groq)
+  static let qwen38_27BCerebras = Self("qwen-3.8-27b", provider: .cerebras)
+
+  // These presets retain their existing routing and reasoning settings.
+  static let allCases: [Self] = [
+    .gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast,
+    .qwen38_27BGroq, .qwen38_27BCerebras,
+  ]
+
+  private init(_ rawValue: String, provider: CleanupProvider = .openRouter) {
+    self.rawValue = rawValue
+    self.provider = provider
+  }
+
+  init?(openRouterID: String) {
+    let id = openRouterID.lowercased()
+    let excludedFamilies = ["llama-guard", "gpt-oss-safeguard", "shieldgemma"]
+    guard Self(rawValue: openRouterID) != nil, openRouterID.contains("/"),
+      !id.hasPrefix("openrouter/"),
+      !excludedFamilies.contains(where: { id.contains($0) })
+    else { return nil }
+    self.init(openRouterID)
+  }
+
+  static func saved(_ rawValue: String, for provider: CleanupProvider) -> Self? {
+    let model = provider == .openRouter ? Self(openRouterID: rawValue) : Self(rawValue: rawValue)
+    return model?.provider == provider ? model : nil
+  }
+
+  init?(rawValue: String) {
+    if let preset = Self.allCases.first(where: { $0.rawValue == rawValue }) {
+      self = preset
+      return
+    }
+    // OpenRouter model IDs contain an author and a model, with optional variant suffixes.
+    guard rawValue.count <= 200,
+      rawValue.range(
+        of: #"^~?[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/-]*\z"#,
+        options: .regularExpression) != nil
+    else { return nil }
+    self.init(rawValue)
+  }
+
+  private enum CodingKeys: String, CodingKey { case rawValue, provider }
+
+  init(from decoder: Decoder) throws {
+    if let value = try? decoder.singleValueContainer().decode(String.self),
+      let model = Self(rawValue: value)
+    {
+      self = model
+      return
+    }
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let value = try container.decode(String.self, forKey: .rawValue)
+    let provider = try container.decode(CleanupProvider.self, forKey: .provider)
+    guard let model = Self.saved(value, for: provider) else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .rawValue, in: container, debugDescription: "Invalid cleanup model ID")
+    }
+    self = model
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(rawValue, forKey: .rawValue)
+    try container.encode(provider, forKey: .provider)
+  }
+
+  var isOpenRouterCatalogModel: Bool { !Self.allCases.contains(self) }
 
   static let defaultModel: CleanupModel = .gemini35FlashLite
 
@@ -212,17 +313,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     case .gpt56LunaFast: "GPT-5.6 Luna · Fast"
     case .qwen38_27BGroq: "Qwen 3.8 27B"
     case .qwen38_27BCerebras: "Qwen 3.8 27B"
-    }
-  }
-
-  var provider: CleanupProvider {
-    switch self {
-    case .gemini37Flash, .gptOSS120BCerebras, .gemini35FlashLite, .gpt56LunaFast:
-      .openRouter
-    case .qwen38_27BGroq:
-      .groq
-    case .qwen38_27BCerebras:
-      .cerebras
+    default: rawValue
     }
   }
 
@@ -238,6 +329,8 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
       [.none, .low]
     case .qwen38_27BCerebras:
       [.none, .low, .medium, .high]
+    default:
+      [.automatic]
     }
   }
 
@@ -245,7 +338,8 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     switch self {
     case .gemini35FlashLite: .minimal
     case .qwen38_27BGroq, .qwen38_27BCerebras: .none
-    default: .low
+    case .gemini37Flash, .gptOSS120BCerebras, .gpt56LunaFast: .low
+    default: .automatic
     }
   }
 
@@ -267,26 +361,49 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
       CleanupProviderRoute(
         only: nil, sort: nil, requiresZeroDataRetention: false,
         allowsFallbacks: false)
+    default:
+      CleanupProviderRoute(
+        only: nil, sort: "latency", requiresZeroDataRetention: true, allowsFallbacks: true)
     }
   }
 
-  func normalizedReasoningEffort(_ effort: CleanupReasoningEffort?) -> CleanupReasoningEffort {
-    guard let effort, supportedReasoningEfforts.contains(effort) else {
-      return defaultReasoningEffort
-    }
-    return effort
+  func normalizedReasoningEffort(
+    _ effort: CleanupReasoningEffort?, supportedEfforts: [CleanupReasoningEffort]? = nil
+  ) -> CleanupReasoningEffort {
+    if effort == .automatic && provider == .openRouter { return .automatic }
+    let available = supportedEfforts ?? supportedReasoningEfforts
+    if let effort, available.contains(effort) { return effort }
+    if available.contains(defaultReasoningEffort) { return defaultReasoningEffort }
+    return .automatic
   }
+
 }
 
 struct CleanupConfiguration: Equatable, Sendable {
   let model: CleanupModel
   let reasoningEffort: CleanupReasoningEffort
+  let catalogRequiresZeroDataRetention: Bool
 
   var provider: CleanupProvider { model.provider }
 
-  init(model: CleanupModel, reasoningEffort: CleanupReasoningEffort) {
+  var providerRoute: CleanupProviderRoute {
+    let route = model.providerRoute
+    guard model.isOpenRouterCatalogModel else { return route }
+    return CleanupProviderRoute(
+      only: route.only, sort: route.sort,
+      requiresZeroDataRetention: catalogRequiresZeroDataRetention,
+      allowsFallbacks: route.allowsFallbacks)
+  }
+
+  init(
+    model: CleanupModel, reasoningEffort: CleanupReasoningEffort,
+    catalogRequiresZeroDataRetention: Bool = true,
+    supportedReasoningEfforts: [CleanupReasoningEffort]? = nil
+  ) {
+    self.catalogRequiresZeroDataRetention = catalogRequiresZeroDataRetention
     self.model = model
-    self.reasoningEffort = model.normalizedReasoningEffort(reasoningEffort)
+    self.reasoningEffort = model.normalizedReasoningEffort(
+      reasoningEffort, supportedEfforts: supportedReasoningEfforts)
   }
 }
 

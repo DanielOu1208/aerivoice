@@ -67,7 +67,7 @@ Choose transcription and cleanup separately in Settings, using your own API keys
 | --- | --- | --- |
 | Live transcription | <img src="docs/images/providers/soniox.png" width="24" height="24" alt=""> **Soniox** — Default | Soniox Realtime |
 | Live transcription | <img src="docs/images/providers/meta.svg" width="24" height="24" alt=""> **Meta** | Muse Voice Transcribe 1.0 |
-| AI cleanup | <img src="docs/images/providers/openrouter.svg" width="24" height="24" alt=""> **OpenRouter** — Default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras |
+| AI cleanup | <img src="docs/images/providers/openrouter.svg" width="24" height="24" alt=""> **OpenRouter** — Default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras, plus a searchable catalog of compatible text models |
 | AI cleanup | <img src="docs/images/providers/cerebras.svg" width="24" height="24" alt=""> **Cerebras** — Experimental | Qwen 3.8 27B |
 | AI cleanup | <img src="docs/images/providers/groq.svg" width="24" height="24" alt=""> **Groq** — Experimental | Qwen 3.8 27B |
 
@@ -75,7 +75,27 @@ Choose transcription and cleanup separately in Settings, using your own API keys
 
 **Speed setup:** Soniox + Qwen 3.8 27B via direct Cerebras, with reasoning set to None.
 
-Switch providers, supported models, and reasoning effort in Settings.
+Switch providers, models, and reasoning effort in Settings. Under **AI Cleanup →
+Provider → Choose…**, OpenRouter shows recommended presets first. **All compatible
+models** opens a searchable catalog, excluding media-generation models, automatic
+routers, and known safety classifiers. You can also enter a text model ID manually.
+
+The Provider section also exposes reasoning levels from OpenRouter’s catalog,
+including newly advertised levels without an app update. “Model default” leaves
+reasoning settings to the provider. Models with mandatory reasoning do not offer
+“None”; models without advertised effort levels offer only the model default.
+Recommended presets keep their initial defaults and provider routing, using their
+built-in reasoning choices only when catalog metadata is unavailable.
+
+Models and reasoning metadata are cached on disk, refreshed when cleanup settings
+or the picker open after 24 hours, and can be refreshed manually. Failed refreshes
+keep the last successful cache. Choices are saved separately per provider and
+model; an unavailable saved level temporarily falls back to the model default.
+
+Additional models use plain-text cleanup and the provider’s output limit. Speed,
+cost, and cleanup quality vary; the ten-second cleanup deadline still applies.
+Zero data retention is required by default for these models and can be changed in
+the Provider section.
 
 ## Getting started
 

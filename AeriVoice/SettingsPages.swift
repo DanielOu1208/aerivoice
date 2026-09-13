@@ -39,9 +39,11 @@ struct GeneralSettingsPage: View {
 
         Section("Clipboard") {
           Toggle("Restore clipboard after dictation", isOn: $preferences.restoreClipboard)
-          Text("Restores your previous clipboard after insertion is confirmed. Otherwise, dictation stays copied.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          Text(
+            "Restores your previous clipboard after insertion is confirmed. Otherwise, dictation stays copied."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
         }
 
         Section("Startup") {
@@ -146,7 +148,7 @@ struct CleanupSettingsPage: View {
   @ObservedObject var model: AppModel
   @ObservedObject private var preferences: AppPreferences
   @Binding var selection: SettingsDestination
-  @State private var showsAdvanced = false
+  @State private var showsModelPicker = false
 
   init(model: AppModel, selection: Binding<SettingsDestination>) {
     self.model = model
@@ -207,10 +209,17 @@ struct CleanupSettingsPage: View {
               "Luna Fast may retain prompts at the provider. Choose another model when zero data retention is required."
             )
           }
-        }
 
-        Section {
-          DisclosureGroup(isExpanded: $showsAdvanced) {
+          if preferences.cleanupProvider == .openRouter {
+            HStack {
+              Text("Model")
+              Spacer()
+              Text(preferences.cleanupModel.displayName)
+                .foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+              Button("Choose…") { showsModelPicker = true }
+            }
+          } else {
             Picker(
               "Model",
               selection: Binding(
@@ -222,39 +231,32 @@ struct CleanupSettingsPage: View {
               }
             }
             .pickerStyle(.menu)
+          }
 
-            Picker(
-              "Reasoning",
-              selection: Binding(
-                get: { preferences.cleanupReasoningEffort },
-                set: { preferences.cleanupReasoningEffort = $0 })
-            ) {
-              ForEach(preferences.cleanupModel.supportedReasoningEfforts, id: \.self) { effort in
-                Text(effortDisplayName(for: effort, model: preferences.cleanupModel)).tag(effort)
-              }
-            }
-            .pickerStyle(.menu)
-          } label: {
-            VStack(alignment: .leading, spacing: 2) {
-              Text("Advanced")
-              Text(
-                "\(preferences.cleanupModel.displayName) · \(preferences.cleanupReasoningEffort.displayName) reasoning"
-              )
-              .font(.caption)
-              .foregroundStyle(.secondary)
+          CleanupReasoningPicker(preferences: preferences)
+          if preferences.cleanupModel.isOpenRouterCatalogModel {
+            Toggle(
+              "Require zero data retention", isOn: $preferences.catalogRequiresZeroDataRetention)
+            Text(
+              "Only providers that support zero data retention can serve this model when enabled."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+            if !preferences.catalogRequiresZeroDataRetention {
+              warning("The selected provider may retain your transcript and cleaned text.")
             }
           }
         }
       }
       .formStyle(.grouped)
+      .sheet(isPresented: $showsModelPicker) {
+        CleanupModelPicker(preferences: preferences)
+      }
+      .task(id: preferences.cleanupProvider) {
+        if preferences.cleanupProvider == .openRouter {
+          await preferences.openRouterCatalog.refresh()
+        }
+      }
     }
-  }
-
-  private func effortDisplayName(for effort: CleanupReasoningEffort, model: CleanupModel) -> String {
-    if model == .qwen38_27BCerebras && effort == .none {
-      return "None (Recommended)"
-    }
-    return effort.displayName
   }
 
   private var cleanupModeDescription: String {
@@ -380,7 +382,9 @@ struct PrivacySettingsPage: View {
         model.clearCompletedBenchmarkHistory()
       }
     } message: {
-      Text("This removes completed interaction and runtime records, including archives. A dictation currently in progress is kept.")
+      Text(
+        "This removes completed interaction and runtime records, including archives. A dictation currently in progress is kept."
+      )
     }
   }
 

@@ -1,18 +1,67 @@
 import Foundation
 
 @MainActor
+protocol SonioxWebSocketTransport: AnyObject, Sendable {
+  func resume()
+  func send(_ message: URLSessionWebSocketTask.Message) async throws
+  func receive() async throws -> URLSessionWebSocketTask.Message
+  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
+  func invalidate()
+}
+
+@MainActor
+private final class URLSessionSonioxTransport: SonioxWebSocketTransport {
+  private let session: URLSession
+  private var task: URLSessionWebSocketTask?
+
+  init(url: URL) {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 3
+    session = URLSession(configuration: configuration)
+    task = session.webSocketTask(with: url)
+  }
+
+  func resume() { task?.resume() }
+  func send(_ message: URLSessionWebSocketTask.Message) async throws {
+    guard let task else { throw CancellationError() }
+    try await task.send(message)
+  }
+  func receive() async throws -> URLSessionWebSocketTask.Message {
+    guard let task else { throw CancellationError() }
+    return try await task.receive()
+  }
+  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+    task?.cancel(with: closeCode, reason: reason)
+    // Retaining the session must not add a new strong reference to its closed socket.
+    task = nil
+  }
+  func invalidate() { session.invalidateAndCancel() }
+}
+
+@MainActor
 final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
 
-  private var session: URLSession?
-  private var task: URLSessionWebSocketTask?
+  private let makeTransport: (URL) -> SonioxWebSocketTransport
+  private var session: SonioxWebSocketTransport?
+  private var task: SonioxWebSocketTransport?
   private var receiveTask: Task<Void, Never>?
   private var assembler = TranscriptAssembler()
   private var snapshot = TranscriptSnapshot()
   private var finishContinuation: CheckedContinuation<String, Error>?
   private var finished = false
   private var generation = UUID()
+
+  init(makeTransport: @escaping (URL) -> SonioxWebSocketTransport = {
+    URLSessionSonioxTransport(url: $0)
+  }) {
+    self.makeTransport = makeTransport
+    super.init()
+  }
+
+  /// Successful finalization closes the socket but keeps its session until the next connection.
+  var retainsSession: Bool { session != nil }
 
   func connect(
     configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String],
@@ -24,12 +73,8 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
     }
     let connectionGeneration = UUID()
     generation = connectionGeneration
-    let urlSessionConfiguration = URLSessionConfiguration.ephemeral
-    urlSessionConfiguration.timeoutIntervalForRequest = 3
-    let session = URLSession(configuration: urlSessionConfiguration)
-    let task = session.webSocketTask(
-      with: URL(string: "wss://stt-rt.soniox.com/transcribe-websocket")!)
-    self.session = session
+    let task = makeTransport(URL(string: "wss://stt-rt.soniox.com/transcribe-websocket")!)
+    self.session = task
     self.task = task
     task.resume()
 
@@ -93,7 +138,7 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
     receiveTask = nil
     task?.cancel(with: .goingAway, reason: nil)
     task = nil
-    session?.invalidateAndCancel()
+    session?.invalidate()
     session = nil
     if let continuation = finishContinuation {
       continuation.resume(throwing: CancellationError())

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import ServiceManagement
 
@@ -41,6 +42,7 @@ final class AppPreferences: ObservableObject {
     static let transcriptionProvider = "transcriptionProvider"
     static let cleanupMode = "cleanupMode"
     static let cleanupProvider = "cleanupProvider"
+    static let catalogRequiresZeroDataRetention = "catalogRequiresZeroDataRetention"
     static let cleanupModel = "cleanupModel"
     static let cleanupModels = "cleanupModels"
     static let cleanupReasoningEfforts = "cleanupReasoningEfforts"
@@ -74,6 +76,11 @@ final class AppPreferences: ObservableObject {
       savedModels[cleanupProvider.rawValue] = model.rawValue
       defaults.set(model.rawValue, forKey: Key.cleanupModel)
       persistModels()
+    }
+  }
+  @Published var catalogRequiresZeroDataRetention: Bool {
+    didSet {
+      defaults.set(catalogRequiresZeroDataRetention, forKey: Key.catalogRequiresZeroDataRetention)
     }
   }
   @Published var vocabulary: String { didSet { defaults.set(vocabulary, forKey: Key.vocabulary) } }
@@ -112,6 +119,9 @@ final class AppPreferences: ObservableObject {
   }
   var acceptsLegacyDiagnosticCheckpoint: Bool { !defaults.bool(forKey: Key.diagnosticsRevoked) }
 
+  let openRouterCatalog: OpenRouterCatalogStore
+  private var catalogObservation: AnyCancellable?
+
   private let defaults: UserDefaults
   private let loginItemManager: LoginItemManaging
   private var savedModels: [String: String] = [:]
@@ -130,45 +140,97 @@ final class AppPreferences: ObservableObject {
     }
   }
 
+  var supportedCleanupReasoningEfforts: [CleanupReasoningEffort] {
+    supportedReasoningEfforts(for: cleanupModel)
+  }
+
   var cleanupReasoningEffort: CleanupReasoningEffort {
-    get {
-      let saved = savedReasoningEfforts[cleanupModel.rawValue].flatMap {
-        CleanupReasoningEffort(rawValue: $0)
-      }
-      return cleanupModel.normalizedReasoningEffort(saved)
-    }
+    get { effectiveReasoningEffort(for: cleanupModel) }
     set {
-      let normalized = cleanupModel.normalizedReasoningEffort(newValue)
-      guard cleanupReasoningEffort != normalized else { return }
+      let normalized = cleanupModel.normalizedReasoningEffort(
+        newValue, supportedEfforts: supportedCleanupReasoningEfforts)
+      // Allow an explicit Model default choice to replace a saved, unavailable level.
+      guard savedReasoningEffort(for: cleanupModel) != normalized else { return }
       objectWillChange.send()
-      savedReasoningEfforts[cleanupModel.rawValue] = normalized.rawValue
+      savedReasoningEfforts[reasoningKey(for: cleanupModel)] = normalized.rawValue
       persistReasoningEfforts()
     }
   }
 
+  var savedCleanupReasoningIsUnavailable: Bool {
+    guard let saved = savedReasoningEffort(for: cleanupModel) else { return false }
+    return !supportedCleanupReasoningEfforts.contains(saved)
+  }
+
   var cleanupConfiguration: CleanupConfiguration {
-    CleanupConfiguration(model: cleanupModel, reasoningEffort: cleanupReasoningEffort)
+    cleanupConfiguration(for: cleanupProvider)
   }
 
   func cleanupConfiguration(for provider: CleanupProvider) -> CleanupConfiguration {
     let model = selectedModel(for: provider)
-    let effort = savedReasoningEfforts[model.rawValue].flatMap(CleanupReasoningEffort.init)
     return CleanupConfiguration(
-      model: model, reasoningEffort: model.normalizedReasoningEffort(effort))
+      model: model, reasoningEffort: effectiveReasoningEffort(for: model),
+      catalogRequiresZeroDataRetention: catalogRequiresZeroDataRetention,
+      supportedReasoningEfforts: supportedReasoningEfforts(for: model))
+  }
+
+  private func reasoningKey(for model: CleanupModel) -> String {
+    "\(model.provider.rawValue):\(model.rawValue)"
+  }
+
+  private func savedReasoningEffort(for model: CleanupModel) -> CleanupReasoningEffort? {
+    if let value = savedReasoningEfforts[reasoningKey(for: model)] {
+      return CleanupReasoningEffort(rawValue: value)
+    }
+    // Legacy keys lacked a provider. Preserve their original route instead of
+    // inheriting a direct provider's choice for an OpenRouter model with the same ID.
+    guard CleanupModel(rawValue: model.rawValue)?.provider == model.provider else { return nil }
+    return savedReasoningEfforts[model.rawValue].flatMap(CleanupReasoningEffort.init(rawValue:))
+  }
+
+  private func supportedReasoningEfforts(for model: CleanupModel) -> [CleanupReasoningEffort] {
+    if let entry = openRouterCatalog.entry(for: model) {
+      return [.automatic] + (entry.reasoning?.selectableEfforts ?? [])
+    }
+    let fallback = model.supportedReasoningEfforts
+    if model.provider == .openRouter {
+      return [.automatic] + fallback.filter { $0 != .automatic }
+    }
+    return fallback
+  }
+
+  private func effectiveReasoningEffort(for model: CleanupModel) -> CleanupReasoningEffort {
+    let available = supportedReasoningEfforts(for: model)
+    if let saved = savedReasoningEffort(for: model), !available.contains(saved) {
+      // Retain the saved preference so a temporary catalog change does not erase it.
+      return available.contains(.automatic) ? .automatic : model.defaultReasoningEffort
+    }
+    return model.normalizedReasoningEffort(
+      savedReasoningEffort(for: model), supportedEfforts: available)
   }
 
   init(
     defaults: UserDefaults = .standard,
-    loginItemManager: LoginItemManaging = MainAppLoginItemManager()
+    loginItemManager: LoginItemManaging = MainAppLoginItemManager(),
+    openRouterCatalog: OpenRouterCatalogStore? = nil
   ) {
+    // Separate preference suites must explicitly opt into a shared disk cache.
+    self.openRouterCatalog =
+      openRouterCatalog
+      ?? OpenRouterCatalogStore(
+        cacheURL: defaults === UserDefaults.standard ? OpenRouterCatalogStore.defaultCacheURL : nil)
     self.defaults = defaults
     self.loginItemManager = loginItemManager
     transcriptionProvider =
       TranscriptionProvider(
         rawValue: defaults.string(forKey: Key.transcriptionProvider) ?? "") ?? .soniox
     cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .faithful
+    let savedProvider = CleanupProvider(
+      rawValue: defaults.string(forKey: Key.cleanupProvider) ?? "")
+    let legacyID = defaults.string(forKey: Key.cleanupModel) ?? ""
     let legacyModel =
-      CleanupModel(rawValue: defaults.string(forKey: Key.cleanupModel) ?? "") ?? .defaultModel
+      savedProvider.flatMap { CleanupModel.saved(legacyID, for: $0) }
+      ?? CleanupModel(rawValue: legacyID) ?? .defaultModel
     if let data = defaults.data(forKey: Key.cleanupModels),
       let saved = try? JSONDecoder().decode([String: String].self, from: data)
     {
@@ -179,8 +241,7 @@ final class AppPreferences: ObservableObject {
       CleanupProvider(rawValue: defaults.string(forKey: Key.cleanupProvider) ?? "")
       ?? legacyModel.provider
     let initialModel =
-      savedModels[initialProvider.rawValue].flatMap(CleanupModel.init)
-      .flatMap { $0.provider == initialProvider ? $0 : nil }
+      savedModels[initialProvider.rawValue].flatMap { CleanupModel.saved($0, for: initialProvider) }
       ?? initialProvider.defaultModel
     savedModels[initialProvider.rawValue] = initialModel.rawValue
     cleanupProvider = initialProvider
@@ -189,6 +250,8 @@ final class AppPreferences: ObservableObject {
     {
       savedReasoningEfforts = saved
     }
+    catalogRequiresZeroDataRetention =
+      defaults.object(forKey: Key.catalogRequiresZeroDataRetention) as? Bool ?? true
     vocabulary = defaults.string(forKey: Key.vocabulary) ?? ""
     muteOutput = defaults.object(forKey: Key.muteOutput) as? Bool ?? true
     soundCues = defaults.object(forKey: Key.soundCues) as? Bool ?? true
@@ -209,6 +272,9 @@ final class AppPreferences: ObservableObject {
     defaults.set(initialModel.rawValue, forKey: Key.cleanupModel)
     defaults.set(transcriptionProvider.rawValue, forKey: Key.transcriptionProvider)
     persistModels()
+    catalogObservation = self.openRouterCatalog.objectWillChange.sink { [weak self] _ in
+      self?.objectWillChange.send()
+    }
   }
 
   @discardableResult
@@ -240,8 +306,7 @@ final class AppPreferences: ObservableObject {
   }
 
   private func selectedModel(for provider: CleanupProvider) -> CleanupModel {
-    savedModels[provider.rawValue].flatMap(CleanupModel.init)
-      .flatMap { $0.provider == provider ? $0 : nil }
+    savedModels[provider.rawValue].flatMap { CleanupModel.saved($0, for: provider) }
       ?? provider.defaultModel
   }
 

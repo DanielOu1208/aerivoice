@@ -6,6 +6,27 @@ import XCTest
 
 @MainActor
 final class LatencyBenchmarkingTests: XCTestCase {
+  func testCatalogModelRecordsEffectivePrivacySetting() async throws {
+    let directory = makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = makeRecorder(
+      directory: directory, clock: TestClock(milliseconds: 0),
+      wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
+    await recorder.flushForTesting()
+    for requiresZDR in [true, false] {
+      recorder.begin(
+        enabled: true, cleanupMode: .faithful,
+        cleanupConfiguration: CleanupConfiguration(
+          model: try XCTUnwrap(CleanupModel(openRouterID: "vendor/chat")),
+          reasoningEffort: .automatic, catalogRequiresZeroDataRetention: requiresZDR))
+      recorder.finish(.cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    }
+    await recorder.flushForTesting()
+    let records = try decodeRecords(
+      at: directory.appending(path: LatencyBenchmarkStore.logFilename))
+    XCTAssertEqual(records.map { $0.cleanup.zeroDataRetentionRequired }, [true, false])
+  }
+
   func testUnconfirmedPastePersistsDistinctOutcomeAlongsideLegacyInserted() async throws {
     let directory = makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

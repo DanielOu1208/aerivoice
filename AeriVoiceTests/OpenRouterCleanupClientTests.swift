@@ -173,6 +173,92 @@ final class OpenRouterCleanupClientTests: XCTestCase {
     }
   }
 
+  func testCatalogModelUsesPlainTextWithoutPresetParameters() async throws {
+    for requiresZDR in [true, false] {
+      URLProtocolStub.handler = { request in
+        let body = try XCTUnwrap(request.bodyData)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "vendor/new-chat")
+        XCTAssertNil(json["max_tokens"])
+        XCTAssertNil(json["reasoning"])
+        XCTAssertNil(json["response_format"])
+        let provider = try XCTUnwrap(json["provider"] as? [String: Any])
+        XCTAssertNil(provider["only"])
+        XCTAssertEqual(provider["zdr"] as? Bool, requiresZDR)
+        let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+        XCTAssertTrue(messages[0]["content"]?.contains("plain text") == true)
+        XCTAssertFalse(messages[0]["content"]?.contains("JSON") == true)
+        let response = #"{"choices":[{"finish_reason":"stop","message":{"content":"你好，world."}}]}"#
+        return (
+          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+          Data(response.utf8)
+        )
+      }
+      let result = try await OpenRouterCleanupClient(session: makeSession()).clean(
+        "你好 world", mode: .faithful,
+        configuration: CleanupConfiguration(
+          model: try XCTUnwrap(CleanupModel(openRouterID: "vendor/new-chat")),
+          reasoningEffort: .automatic, catalogRequiresZeroDataRetention: requiresZDR),
+        apiKey: "test-key")
+      XCTAssertEqual(result.text, "你好，world.")
+    }
+  }
+
+  func testRejectsIncompleteRefusedAndEmptyCatalogResponses() async throws {
+    let responses = [
+      #"{"choices":[{"finish_reason":"length","message":{"content":"Incomplete"}}]}"#,
+      #"{"choices":[{"finish_reason":"content_filter","message":{"content":"Filtered"}}]}"#,
+      #"{"choices":[{"finish_reason":"stop","message":{"content":"Refused","refusal":"No"}}]}"#,
+      #"{"choices":[{"finish_reason":"stop","message":{"content":"  "}}]}"#,
+      #"{"choices":[{"finish_reason":"stop","message":{"content":null}}]}"#,
+    ]
+    for response in responses {
+      URLProtocolStub.handler = { request in
+        (
+          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+          Data(response.utf8)
+        )
+      }
+      do {
+        _ = try await OpenRouterCleanupClient(session: makeSession()).clean(
+          "Original transcript", mode: .faithful,
+          configuration: CleanupConfiguration(
+            model: try XCTUnwrap(CleanupModel(openRouterID: "vendor/new-chat")),
+            reasoningEffort: .automatic), apiKey: "test-key")
+        XCTFail("Should reject unusable cleanup")
+      } catch {
+        XCTAssertTrue(error is AppError)
+      }
+    }
+  }
+
+  func testExplicitCatalogReasoningIsSentAndAutomaticIsOmitted() async throws {
+    let future = try XCTUnwrap(CleanupReasoningEffort(rawValue: "future_level"))
+    for effort in [CleanupReasoningEffort.automatic, .none, .high, future] {
+      URLProtocolStub.handler = { request in
+        let json = try XCTUnwrap(
+          JSONSerialization.jsonObject(with: XCTUnwrap(request.bodyData)) as? [String: Any])
+        if effort == .automatic {
+          XCTAssertNil(json["reasoning"])
+        } else {
+          let reasoning = try XCTUnwrap(json["reasoning"] as? [String: Any])
+          XCTAssertEqual(reasoning["effort"] as? String, effort.rawValue)
+          XCTAssertEqual(reasoning["exclude"] as? Bool, true)
+        }
+        XCTAssertNil(json["response_format"])
+        return (
+          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+          Data(#"{"choices":[{"finish_reason":"stop","message":{"content":"Clean text."}}]}"#.utf8)
+        )
+      }
+      _ = try await OpenRouterCleanupClient(session: makeSession()).clean(
+        "Raw text", mode: .faithful,
+        configuration: CleanupConfiguration(
+          model: try XCTUnwrap(CleanupModel(openRouterID: "vendor/chat")), reasoningEffort: effort,
+          supportedReasoningEfforts: [.automatic, .none, .high, future]), apiKey: "test-key")
+    }
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [URLProtocolStub.self]

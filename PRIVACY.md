@@ -35,7 +35,12 @@ key.
 OpenRouter can route requests to an underlying model provider. AeriVoice asks
 OpenRouter for zero-data-retention routing for its Gemini and GPT-OSS choices,
 but provider behavior and terms remain controlled by OpenRouter and the
-underlying provider. Direct Groq and Cerebras cleanups are experimental and
+underlying provider. Additional OpenRouter catalog models also require zero data
+retention by default. Users can disable that requirement in AI Cleanup settings;
+when disabled, the provider may retain transcript inputs and cleaned outputs.
+Opening cleanup settings or the model picker refreshes OpenRouter’s public model
+and reasoning catalog when the saved copy is older than 24 hours. Manual refresh
+is also available. These requests include no API key, audio, or transcript. Direct Groq and Cerebras cleanups are experimental and
 send requests directly to their respective API endpoints; review their current
 data controls before enabling them.
 
@@ -50,8 +55,12 @@ Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for you
 
 - Provider API keys are stored in the macOS Keychain under the AeriVoice bundle
   identifier.
-- App preferences, including selected providers and models, are stored with
-  macOS preferences.
+- App preferences, including selected providers, models, and reasoning levels, are
+  stored with macOS preferences.
+- OpenRouter’s public model names, capabilities, reasoning options, and last
+  successful refresh time are cached in
+  `~/Library/Caches/com.danielou.AeriVoice/openrouter-catalog-v1.json`. This cache
+  contains no credentials or dictation content and remains usable while offline.
 - Insertion uses the normal Paste shortcut. The transcript stays on the clipboard
   until you replace it; AeriVoice does not restore an earlier clipboard on a timer.
   The green check mark means the Paste shortcut was sent; macOS cannot confirm

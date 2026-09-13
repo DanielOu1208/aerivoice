@@ -97,25 +97,28 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     fixture.audio.resolveStart(usedPreparation: true)
     try await waitUntil { fixture.audio.startReturned }
     await Task.yield()
-    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertTrue(fixture.transcriber.didCancel)
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
     XCTAssertFalse(fixture.benchmark.milestones.contains(.captureStarted))
     XCTAssertFalse(fixture.benchmark.milestones.contains(.preparedAudioEngineUsed))
     XCTAssertEqual(fixture.coordinator.phase, .error("Cancelled"))
   }
 
-  func testMetaFailureDuringAudioStartupCancelsTheStartupTask() async throws {
-    let fixture = makeFixture(
-      transcriptionProvider: .meta, audioStartWaitsForResolution: true)
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.audio.hasPendingStart && fixture.transcriber.didConnect }
-    fixture.transcriber.emitError(AppError.provider("Meta stream failed"))
-    XCTAssertEqual(fixture.benchmark.terminalResult, .failed)
-    XCTAssertTrue(fixture.audio.didStop)
-    fixture.audio.resolveStart(usedPreparation: true)
-    try await waitUntil { fixture.audio.startReturned }
-    XCTAssertTrue(fixture.audio.startWasCancelled)
-    XCTAssertFalse(fixture.benchmark.milestones.contains(.captureStarted))
-    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
+  func testProviderFailureDuringAudioStartupCancelsTheStartupTask() async throws {
+    for provider in TranscriptionProvider.allCases {
+      let fixture = makeFixture(
+        transcriptionProvider: provider, audioStartWaitsForResolution: true)
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.audio.hasPendingStart && fixture.transcriber.didConnect }
+      fixture.transcriber.emitError(AppError.provider("Meta stream failed"))
+      XCTAssertEqual(fixture.benchmark.terminalResult, .failed)
+      XCTAssertTrue(fixture.audio.didStop)
+      fixture.audio.resolveStart(usedPreparation: true)
+      try await waitUntil { fixture.audio.startReturned }
+      XCTAssertTrue(fixture.audio.startWasCancelled)
+      XCTAssertFalse(fixture.benchmark.milestones.contains(.captureStarted))
+      XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
+    }
   }
 
   func testHeldReleaseDuringAudioStartupCancelsInsteadOfFinishingUnstartedCapture() async throws {
@@ -141,9 +144,10 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
       .credentialReadStarted, .credentialsReady, .readinessCheckStarted,
       .readinessChecksFinished, .startCuePlaybackStarted, .startCuePlaybackReturned,
       .startCueDelayFinished, .outputMuteStarted, .outputMuteFinished,
-      .audioEngineStartRequested, .preparedAudioEngineUsed, .captureStarted, .sttConfigured,
+      .audioEngineStartRequested, .preparedAudioEngineUsed, .captureStarted,
     ]
     XCTAssertEqual(fixture.benchmark.orderedMilestones.filter { expected.contains($0) }, expected)
+    XCTAssertTrue(fixture.benchmark.milestones.contains(.sttConfigured))
     fixture.coordinator.cancel()
   }
 
@@ -387,24 +391,26 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     fixture.coordinator.cancel()
   }
 
-  func testMetaConnectsDuringCueWithoutDelayingCapture() async throws {
-    let fixture = makeFixture(
-      transcriptionProvider: .meta, soundCues: true, cueDelay: .milliseconds(20),
-      connectWaitsForResolution: true)
+  func testProvidersConnectDuringCueWithoutDelayingCapture() async throws {
+    for provider in TranscriptionProvider.allCases {
+      let fixture = makeFixture(
+        transcriptionProvider: provider, soundCues: true, cueDelay: .milliseconds(20),
+        connectWaitsForResolution: true)
 
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.transcriber.didConnect }
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.transcriber.didConnect }
 
-    XCTAssertEqual(fixture.cuePlayer.playedCues, [.start])
-    try await waitUntil { fixture.audio.didStart }
-    XCTAssertEqual(fixture.coordinator.phase, .recording)
-    XCTAssertEqual(fixture.benchmark.audioBytes, 3_200)
-    XCTAssertEqual(fixture.benchmark.audioBytesSent, 0)
+      XCTAssertEqual(fixture.cuePlayer.playedCues, [.start])
+      try await waitUntil { fixture.audio.didStart }
+      XCTAssertEqual(fixture.coordinator.phase, .recording)
+      XCTAssertEqual(fixture.benchmark.audioBytes, 3_200)
+      XCTAssertEqual(fixture.benchmark.audioBytesSent, 0)
 
-    fixture.transcriber.resolveConnect()
-    try await waitUntil { fixture.benchmark.audioBytesSent == 3_200 }
+      fixture.transcriber.resolveConnect()
+      try await waitUntil { fixture.benchmark.audioBytesSent == 3_200 }
 
-    fixture.coordinator.cancel()
+      fixture.coordinator.cancel()
+    }
   }
 
   func testMetaCatchUpReceivesRemainingQueueDepthForEveryBufferedFrame() async throws {
@@ -423,78 +429,86 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     fixture.coordinator.cancel()
   }
 
-  func testSonioxStillStartsCaptureBeforeConnecting() async throws {
-    let fixture = makeFixture(connectWaitsForResolution: true)
+  func testSonioxCanFinishConnectingBeforeCaptureStarts() async throws {
+    let fixture = makeFixture(soundCues: true, cueDelay: .milliseconds(80), connectWaitsForResolution: true)
 
     fixture.coordinator.toggle()
     try await waitUntil { fixture.transcriber.didConnect }
 
-    XCTAssertTrue(fixture.audio.didStart)
-    XCTAssertEqual(fixture.benchmark.audioBytes, 3_200)
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertEqual(fixture.benchmark.audioBytes, 0)
     XCTAssertEqual(fixture.benchmark.audioBytesSent, 0)
 
     fixture.transcriber.resolveConnect()
-    try await waitUntil { fixture.coordinator.phase == .recording }
+    try await waitUntil { fixture.benchmark.audioBytesSent == 3_200 }
     XCTAssertEqual(fixture.benchmark.audioBytesSent, 3_200)
     fixture.coordinator.cancel()
   }
 
-  func testCancellingWhileMetaConnectsNeverStartsCapture() async throws {
-    let fixture = makeFixture(
-      transcriptionProvider: .meta, soundCues: true, cueDelay: .milliseconds(80),
-      connectWaitsForResolution: true)
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.transcriber.didConnect }
+  func testCancellingWhileProviderConnectsNeverStartsCapture() async throws {
+    for provider in TranscriptionProvider.allCases {
+      let fixture = makeFixture(
+        transcriptionProvider: provider, soundCues: true, cueDelay: .milliseconds(80),
+        connectWaitsForResolution: true)
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.transcriber.didConnect }
 
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
 
-    XCTAssertFalse(fixture.audio.didStart)
-    XCTAssertFalse(fixture.muter.didMute)
-    XCTAssertTrue(fixture.transcriber.didCancel)
+      XCTAssertFalse(fixture.audio.didStart)
+      XCTAssertFalse(fixture.muter.didMute)
+      XCTAssertTrue(fixture.transcriber.didCancel)
+    }
   }
 
-  func testHeldReleaseWhileMetaConnectsNeverStartsCapture() async throws {
-    let fixture = makeFixture(
-      transcriptionProvider: .meta, soundCues: true, cueDelay: .milliseconds(80),
-      connectWaitsForResolution: true)
-    let lifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
-    try await waitUntil { fixture.transcriber.didConnect }
+  func testHeldReleaseWhileProviderConnectsNeverStartsCapture() async throws {
+    for provider in TranscriptionProvider.allCases {
+      let fixture = makeFixture(
+        transcriptionProvider: provider, soundCues: true, cueDelay: .milliseconds(80),
+        connectWaitsForResolution: true)
+      let lifecycleGeneration = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+      try await waitUntil { fixture.transcriber.didConnect }
 
-    fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
-    try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
+      fixture.coordinator.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
+      try await waitUntil { fixture.benchmark.terminalResult == .cancelled }
 
-    XCTAssertFalse(fixture.audio.didStart)
-    XCTAssertFalse(fixture.muter.didMute)
-    XCTAssertTrue(fixture.transcriber.didCancel)
+      XCTAssertFalse(fixture.audio.didStart)
+      XCTAssertFalse(fixture.muter.didMute)
+      XCTAssertTrue(fixture.transcriber.didCancel)
+    }
   }
 
-  func testMetaConnectionFailureNeverStartsCapture() async throws {
-    let fixture = makeFixture(
-      transcriptionProvider: .meta, soundCues: true, cueDelay: .milliseconds(80),
-      connectError: AppError.provider("Meta connection failed"))
+  func testProviderConnectionFailureNeverStartsCapture() async throws {
+    for provider in TranscriptionProvider.allCases {
+      let fixture = makeFixture(
+        transcriptionProvider: provider, soundCues: true, cueDelay: .milliseconds(80),
+        connectError: AppError.provider("Meta connection failed"))
 
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.benchmark.terminalResult == .failed }
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.benchmark.terminalResult == .failed }
 
-    XCTAssertEqual(fixture.benchmark.failureStage, .sttSetup)
-    XCTAssertFalse(fixture.audio.didStart)
-    XCTAssertFalse(fixture.muter.didMute)
+      XCTAssertEqual(fixture.benchmark.failureStage, .sttSetup)
+      XCTAssertFalse(fixture.audio.didStart)
+      XCTAssertFalse(fixture.muter.didMute)
+    }
   }
 
-  func testMetaProviderErrorDuringCueIsClassifiedAsSetupFailure() async throws {
-    let fixture = makeFixture(
-      transcriptionProvider: .meta, soundCues: true, cueDelay: .milliseconds(80))
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.cuePlayer.playedCues == [.start] }
+  func testProviderErrorDuringCueIsClassifiedAsSetupFailure() async throws {
+    for provider in TranscriptionProvider.allCases {
+      let fixture = makeFixture(
+        transcriptionProvider: provider, soundCues: true, cueDelay: .milliseconds(80))
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.cuePlayer.playedCues == [.start] }
 
-    fixture.transcriber.emitError(AppError.provider("Meta stream failed"))
-    try await waitUntil { fixture.benchmark.terminalResult == .failed }
-    try await Task.sleep(for: .milliseconds(100))
+      fixture.transcriber.emitError(AppError.provider("Meta stream failed"))
+      try await waitUntil { fixture.benchmark.terminalResult == .failed }
+      try await Task.sleep(for: .milliseconds(100))
 
-    XCTAssertEqual(fixture.benchmark.failureStage, .sttSetup)
-    XCTAssertFalse(fixture.audio.didStart)
-    XCTAssertFalse(fixture.muter.didMute)
+      XCTAssertEqual(fixture.benchmark.failureStage, .sttSetup)
+      XCTAssertFalse(fixture.audio.didStart)
+      XCTAssertFalse(fixture.muter.didMute)
+    }
   }
 
   func testCompletedMetaDictationRecordsStopDrainAndFinalizeMilestones() async throws {
@@ -512,20 +526,22 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
     XCTAssertEqual(fixture.benchmark.audioBytesSent, 3_200)
   }
 
-  func testStoppingWhileMetaConnectsWaitsThenDrainsAllCapturedAudio() async throws {
-    let fixture = makeFixture(
-      transcriptionProvider: .meta, connectWaitsForResolution: true, audioFrameCount: 3)
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.coordinator.phase == .recording }
+  func testStoppingWhileProviderConnectsWaitsThenDrainsAllCapturedAudio() async throws {
+    for provider in TranscriptionProvider.allCases {
+      let fixture = makeFixture(
+        transcriptionProvider: provider, connectWaitsForResolution: true, audioFrameCount: 3)
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.coordinator.phase == .recording }
 
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.audio.didStop }
-    fixture.transcriber.resolveConnect()
-    try await waitUntil { fixture.coordinator.phase == .success }
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.audio.didStop }
+      fixture.transcriber.resolveConnect()
+      try await waitUntil { fixture.coordinator.phase == .success }
 
-    XCTAssertEqual(fixture.transcriber.sentFrames.count, 3)
-    XCTAssertEqual(fixture.benchmark.audioBytesSent, 9_600)
-    XCTAssertTrue(fixture.benchmark.milestones.contains(.audioQueueDrained))
+      XCTAssertEqual(fixture.transcriber.sentFrames.count, 3)
+      XCTAssertEqual(fixture.benchmark.audioBytesSent, 9_600)
+      XCTAssertTrue(fixture.benchmark.milestones.contains(.audioQueueDrained))
+    }
   }
 
   func testMissingSelectedMetaCredentialDoesNotFallBackToSoniox() async throws {
@@ -583,7 +599,8 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
     XCTAssertFalse(fixture.audio.didStart)
     XCTAssertFalse(fixture.muter.didMute)
-    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertTrue(fixture.transcriber.didCancel)
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
   }
 
   func testHeldShortcutReleaseStopsSessionStartedByPress() async throws {
@@ -640,7 +657,8 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
     XCTAssertFalse(fixture.audio.didStart)
     XCTAssertFalse(fixture.muter.didMute)
-    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertTrue(fixture.transcriber.didCancel)
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
   }
 
   func testHeldReleaseAfterStartupFailureCannotRestart() async throws {
