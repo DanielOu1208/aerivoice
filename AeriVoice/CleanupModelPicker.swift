@@ -23,7 +23,12 @@ struct CleanupModelPicker: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
       HStack {
-        Text("Choose a cleanup model").font(.title2.bold())
+        Text("Cleanup Model").font(.headline)
+        SettingsInfoButton(
+          title: "Cleanup models",
+          message:
+            "Recommended presets have configured reasoning and provider settings. The full catalog contains compatible text models; speed, cost, and cleanup quality vary."
+        )
         Spacer()
         Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
       }
@@ -36,24 +41,10 @@ struct CleanupModelPicker: View {
       if showsAllModels {
         TextField("Search model names or IDs", text: $search)
           .textFieldStyle(.roundedBorder)
-        HStack {
-          Text("Text models only. Speed, cost, and cleanup quality vary.")
-            .font(.caption).foregroundStyle(.secondary)
-          Spacer()
-          if catalog.isRefreshing { ProgressView().controlSize(.small) }
-          Button("Refresh", systemImage: "arrow.clockwise") {
-            Task { await catalog.refresh(force: true) }
-          }
-          .labelStyle(.iconOnly)
-          .disabled(catalog.isRefreshing)
-        }
-        if let errorMessage = catalog.errorMessage {
-          Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-        }
-      } else {
-        Text("Presets with configured reasoning and provider settings.")
-          .font(.caption).foregroundStyle(.secondary)
+          .multilineTextAlignment(.leading)
       }
+
+      catalogStatus
 
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -88,16 +79,44 @@ struct CleanupModelPicker: View {
           Button("Use model") { selectCustomModel() }
             .disabled(customModel == nil)
         }
-        Text("For text models missing from the list. Availability is checked when cleanup runs.")
-          .font(.caption).foregroundStyle(.secondary)
       }
-      Text("Selected: \(preferences.cleanupModel.displayName)")
-        .font(.caption).foregroundStyle(.secondary)
-        .textSelection(.enabled)
+
+      Text(
+        "Selected: \(catalog.entry(for: preferences.cleanupModel)?.name ?? preferences.cleanupModel.displayName)"
+      )
+      .font(.caption).foregroundStyle(.secondary)
+      .textSelection(.enabled)
     }
     .padding(20)
     .frame(width: 580, height: 530)
     .task { await catalog.refresh() }
+  }
+
+  private var catalogStatus: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        if catalog.isRefreshing {
+          ProgressView().controlSize(.small)
+          Text("Refreshing catalog…")
+        } else if let fetchedAt = catalog.fetchedAt {
+          Text("Updated \(fetchedAt.formatted(date: .abbreviated, time: .shortened))")
+        } else {
+          Text("Catalog not downloaded")
+        }
+        Spacer()
+        Button("Refresh", systemImage: "arrow.clockwise") {
+          Task { await catalog.refresh(force: true) }
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .help("Refresh models and reasoning")
+        .disabled(catalog.isRefreshing)
+      }
+      if let errorMessage = catalog.errorMessage {
+        Text(errorMessage).fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .font(.caption).foregroundStyle(.secondary)
   }
 
   private func modelRow(_ model: CleanupModel, name: String) -> some View {

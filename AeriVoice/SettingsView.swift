@@ -29,6 +29,16 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     }
   }
 
+  var color: Color {
+    switch self {
+    case .general: .gray
+    case .dictation: .blue
+    case .cleanup: .purple
+    case .providers: .orange
+    case .privacy: .indigo
+    }
+  }
+
   @MainActor static func recommended(for model: AppModel) -> Self {
     if model.preferences.shortcut == nil { return .general }
     if !model.hasCredential(model.preferences.transcriptionProvider.credentialKind)
@@ -41,85 +51,96 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
   }
 }
 
-struct SettingsRootView: View {
-  @ObservedObject var model: AppModel
-  @ObservedObject private var preferences: AppPreferences
-  let onOnboardingFinished: () -> Void
+@MainActor
+final class SettingsNavigation: ObservableObject {
+  @Published var selection: SettingsDestination
 
-  init(model: AppModel, onOnboardingFinished: @escaping () -> Void) {
-    self.model = model
-    self.preferences = model.preferences
-    self.onOnboardingFinished = onOnboardingFinished
-  }
-
-  var body: some View {
-    if preferences.onboardingComplete {
-      SettingsView(model: model)
-    } else {
-      OnboardingView(model: model, onFinished: onOnboardingFinished)
-    }
+  init(model: AppModel) {
+    selection = SettingsDestination.recommended(for: model)
   }
 }
 
-struct SettingsView: View {
+struct SettingsSidebar: View {
   @ObservedObject var model: AppModel
-  @State private var selection: SettingsDestination
+  @ObservedObject var navigation: SettingsNavigation
+  @ObservedObject private var preferences: AppPreferences
 
-  init(model: AppModel) {
+  init(model: AppModel, navigation: SettingsNavigation) {
     self.model = model
-    _selection = State(initialValue: SettingsDestination.recommended(for: model))
+    self.navigation = navigation
+    preferences = model.preferences
   }
 
   var body: some View {
-    HStack(spacing: 0) {
-      ZStack(alignment: .bottom) {
-        List(SettingsDestination.allCases, selection: $selection) { destination in
-          Label(destination.title, systemImage: destination.systemImage)
-            .tag(destination)
-        }
-        .listStyle(.sidebar)
-        VStack(spacing: 0) {
-          Divider()
-          readinessFooter
-        }
+    List(SettingsDestination.allCases, selection: $navigation.selection) { destination in
+      Label {
+        Text(destination.title)
+      } icon: {
+        Image(systemName: destination.systemImage)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(.white)
+          .frame(width: 25, height: 25)
+          .background(destination.color.gradient, in: RoundedRectangle(cornerRadius: 6))
       }
-      .frame(width: 180)
-      .background(.bar)
-      Divider()
-      detail
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .padding(.vertical, 2)
+      .tag(destination)
     }
-    .frame(minWidth: 700, minHeight: 560)
-    .onReceive(model.$settingsDestinationRequest.compactMap { $0 }) { selection = $0 }
+    .listStyle(.sidebar)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      if !model.readinessComplete { readinessFooter }
+    }
+    .onReceive(model.$settingsDestinationRequest.compactMap { $0 }) {
+      navigation.selection = $0
+    }
   }
 
-  @ViewBuilder private var detail: some View {
-    switch selection {
+  private var readinessFooter: some View {
+    Button {
+      navigation.selection = SettingsDestination.recommended(for: model)
+    } label: {
+      Label("Setup needs attention", systemImage: "exclamationmark.circle.fill")
+        .font(.caption)
+        .foregroundStyle(.orange)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+struct SettingsDetail: View {
+  @ObservedObject var model: AppModel
+  @ObservedObject var navigation: SettingsNavigation
+
+  var body: some View {
+    page.frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  @ViewBuilder private var page: some View {
+    switch navigation.selection {
     case .general:
       GeneralSettingsPage(model: model)
     case .dictation:
-      DictationSettingsPage(model: model, selection: $selection)
+      DictationSettingsPage(model: model, selection: $navigation.selection)
     case .cleanup:
-      CleanupSettingsPage(model: model, selection: $selection)
+      CleanupSettingsPage(model: model)
     case .providers:
       ProviderSettingsPage(model: model)
     case .privacy:
       PrivacySettingsPage(model: model)
     }
   }
+}
 
-  private var readinessFooter: some View {
-    HStack(spacing: 7) {
-      Image(
-        systemName: model.readinessComplete
-          ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
-      )
-      .foregroundStyle(model.readinessComplete ? .green : .orange)
-      Text(model.readinessComplete ? "Ready for dictation" : "Setup needs attention")
-        .font(.caption)
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 10)
+struct SettingsToolbarTitle: View {
+  @ObservedObject var navigation: SettingsNavigation
+
+  var body: some View {
+    Text(navigation.selection.title)
+      .font(.system(size: 17, weight: .semibold))
+      .accessibilityAddTraits(.isHeader)
+      .fixedSize()
+      .frame(width: 160, alignment: .leading)
   }
 }

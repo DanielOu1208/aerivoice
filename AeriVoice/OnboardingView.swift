@@ -18,19 +18,34 @@ enum OnboardingStep: Int, CaseIterable {
 
 struct OnboardingReadiness: Equatable, Sendable {
   let hasTranscriptionCredential: Bool
-  let hasOpenRouterCredential: Bool
+  let hasCleanupCredential: Bool
   let hasPermissions: Bool
   let hasShortcut: Bool
 
+  @MainActor static func selectedProviders(
+    preferences: AppPreferences, hasCredential: (CredentialKind) -> Bool,
+    hasPermissions: Bool
+  ) -> OnboardingReadiness {
+    OnboardingReadiness(
+      hasTranscriptionCredential: hasCredential(preferences.transcriptionProvider.credentialKind),
+      hasCleanupCredential: hasCredential(preferences.cleanupProvider.credentialKind),
+      hasPermissions: hasPermissions,
+      hasShortcut: preferences.shortcut != nil)
+  }
+
+  var isComplete: Bool {
+    hasTranscriptionCredential && hasCleanupCredential && hasPermissions && hasShortcut
+  }
+
   var recommendedStep: OnboardingStep {
-    if !hasTranscriptionCredential || !hasOpenRouterCredential { return .providers }
+    if !hasTranscriptionCredential || !hasCleanupCredential { return .providers }
     if !hasPermissions { return .permissions }
     return .shortcut
   }
 
   func canAdvance(from step: OnboardingStep) -> Bool {
     switch step {
-    case .providers: hasTranscriptionCredential && hasOpenRouterCredential
+    case .providers: hasTranscriptionCredential && hasCleanupCredential
     case .permissions: hasPermissions
     case .shortcut: hasShortcut
     }
@@ -50,7 +65,7 @@ struct OnboardingView: View {
     self.model = model
     self.preferences = model.preferences
     self.onFinished = onFinished
-    _step = State(initialValue: Self.readiness(for: model).recommendedStep)
+    _step = State(initialValue: model.onboardingReadiness.recommendedStep)
     _launchAtLogin = State(initialValue: model.preferences.launchAtLogin)
   }
 
@@ -100,18 +115,14 @@ struct OnboardingView: View {
   private var onboardingHeader: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack {
-        Label("AeriVoice", systemImage: "waveform")
-          .font(.system(size: 24, weight: .semibold))
+        Text(step.title).font(.title3.weight(.semibold))
         Spacer()
         Text("Step \(step.rawValue + 1) of \(OnboardingStep.allCases.count)")
           .foregroundStyle(.secondary)
       }
       ProgressView(
         value: Double(step.rawValue + 1), total: Double(OnboardingStep.allCases.count))
-      VStack(alignment: .leading, spacing: 3) {
-        Text(step.title).font(.title3.weight(.semibold))
-        Text(stepSubtitle).foregroundStyle(.secondary)
-      }
+      Text(stepSubtitle).foregroundStyle(.secondary)
     }
     .padding(24)
   }
@@ -121,26 +132,31 @@ struct OnboardingView: View {
     case .providers:
       Form {
         Section("Transcription provider") {
-          Picker("Provider", selection: $preferences.transcriptionProvider) {
-            ForEach(TranscriptionProvider.allCases) { provider in
-              Text(provider.displayName).tag(provider)
+          ProviderSelectionRow(
+            model: model, kind: preferences.transcriptionProvider.credentialKind,
+            allowsRemoval: false
+          ) {
+            Picker("Provider", selection: $preferences.transcriptionProvider) {
+              ForEach(TranscriptionProvider.allCases) { provider in
+                Text(provider.displayName).tag(provider)
+              }
             }
           }
-          CredentialEditorView(
-            model: model, kind: preferences.transcriptionProvider.credentialKind,
-            allowsRemoval: false)
-            .id(preferences.transcriptionProvider)
+          .id(preferences.transcriptionProvider)
         }
         Section("AI cleanup") {
-          CredentialEditorView(model: model, kind: .openRouter, allowsRemoval: false)
-        }
-        Section {
-          Label(
-            "Additional and experimental cleanup providers can be configured later in Settings.",
-            systemImage: "info.circle"
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          ProviderSelectionRow(
+            model: model, kind: preferences.cleanupProvider.credentialKind,
+            allowsRemoval: false
+          ) {
+            Picker("Provider", selection: $preferences.cleanupProvider) {
+              ForEach(CleanupProvider.allCases, id: \.self) { provider in
+                Text(provider.displayName + (provider.isExperimental ? " (Experimental)" : ""))
+                  .tag(provider)
+              }
+            }
+          }
+          .id(preferences.cleanupProvider)
         }
       }
       .formStyle(.grouped)
@@ -235,7 +251,7 @@ struct OnboardingView: View {
   private var stepSubtitle: String {
     switch step {
     case .providers:
-      "Choose Soniox or Meta for transcription. OpenRouter provides stable AI cleanup."
+      "Choose and connect a service for transcription and one for AI cleanup."
     case .permissions:
       "You stay in control of when AeriVoice can listen and insert text."
     case .shortcut:
@@ -246,7 +262,7 @@ struct OnboardingView: View {
   }
 
   private var canAdvance: Bool {
-    Self.readiness(for: model).canAdvance(from: step)
+    model.onboardingReadiness.canAdvance(from: step)
   }
 
   private var finishButtonTitle: String {
@@ -270,12 +286,4 @@ struct OnboardingView: View {
     }
   }
 
-  @MainActor private static func readiness(for model: AppModel) -> OnboardingReadiness {
-    OnboardingReadiness(
-      hasTranscriptionCredential: model.hasCredential(
-        model.preferences.transcriptionProvider.credentialKind),
-      hasOpenRouterCredential: model.hasCredential(.openRouter),
-      hasPermissions: model.permissionsReady,
-      hasShortcut: model.preferences.shortcut != nil)
-  }
 }

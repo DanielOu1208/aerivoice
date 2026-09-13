@@ -39,8 +39,8 @@ AI, and keep writing without switching windows.
   Cerebras-powered AI cleanup for ready-to-use text with minimal waiting.
 - **Choose your providers and models.** Pick from supported transcription and
   cleanup options to tune your setup around speed, quality, and cost.
-- **Your words, your style.** Keep edits light with Faithful mode, or choose
-  Polished mode for more refined writing.
+- **Your words, your style.** Polished mode refines your writing by default.
+  Choose Faithful mode for lighter edits; existing style choices are preserved.
 - **Stay in your flow.** Tap or hold a global shortcut, follow the live transcript
   in a compact notch-style overlay, and send the finished text to your current app.
 - **Make it personal.** Add vocabulary hints for names and specialist terms,
@@ -68,7 +68,7 @@ Choose transcription and cleanup separately in Settings, using your own API keys
 | Live transcription | <img src="docs/images/providers/soniox.png" width="24" height="24" alt=""> **Soniox** — Default | Soniox Realtime |
 | Live transcription | <img src="docs/images/providers/meta.svg" width="24" height="24" alt=""> **Meta** | Muse Voice Transcribe 1.0 |
 | AI cleanup | <img src="docs/images/providers/openrouter.svg" width="24" height="24" alt=""> **OpenRouter** — Default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras, plus a searchable catalog of compatible text models |
-| AI cleanup | <img src="docs/images/providers/cerebras.svg" width="24" height="24" alt=""> **Cerebras** — Experimental | Qwen 3.8 27B |
+| AI cleanup | <img src="docs/images/providers/cerebras.svg" width="24" height="24" alt=""> **Cerebras** | Qwen 3.8 27B |
 | AI cleanup | <img src="docs/images/providers/groq.svg" width="24" height="24" alt=""> **Groq** — Experimental | Qwen 3.8 27B |
 
 **Default:** Soniox + Gemini 3.5 Flash Lite via OpenRouter, with Minimal reasoning.
@@ -76,7 +76,7 @@ Choose transcription and cleanup separately in Settings, using your own API keys
 **Speed setup:** Soniox + Qwen 3.8 27B via direct Cerebras, with reasoning set to None.
 
 Switch providers, models, and reasoning effort in Settings. Under **AI Cleanup →
-Provider → Choose…**, OpenRouter shows recommended presets first. **All compatible
+Provider → Model**, OpenRouter shows recommended presets first. **All compatible
 models** opens a searchable catalog, excluding media-generation models, automatic
 routers, and known safety classifiers. You can also enter a text model ID manually.
 
@@ -104,7 +104,7 @@ macOS 26 or newer**, plus your own provider accounts. Provider charges and usage
 limits may apply.
 
 1. **Install.** [Download the beta](https://github.com/DanielOu1208/aerivoice/releases/latest), open the DMG, and drag AeriVoice to Applications.
-2. **Set up.** Add your API keys and grant Microphone and Accessibility permission during onboarding.
+2. **Set up.** Connect one transcription provider and one cleanup provider, then grant Microphone and Accessibility permission. OpenRouter is optional; Cerebras and Groq can also be selected during onboarding.
 3. **Dictate.** Focus a text field and tap or hold your configured shortcut.
 
 For the default setup: [Soniox API key](https://console.soniox.com/) +

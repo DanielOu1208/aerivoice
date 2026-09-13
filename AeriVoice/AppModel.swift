@@ -49,6 +49,7 @@ final class AppModel: ObservableObject {
   @Published var shortcutConfirmation: ShortcutDefinition?
   @Published var permissionRefresh = 0
   @Published var settingsDestinationRequest: SettingsDestination?
+  let settingsWindowWillClose = PassthroughSubject<Void, Never>()
 
   private let shortcutMonitor = GlobalShortcutMonitor()
   private var cancellables = Set<AnyCancellable>()
@@ -82,7 +83,8 @@ final class AppModel: ObservableObject {
       preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder,
       runtimeDiagnostics: runtime)
     preferences.onDiagnosticsLoggingChange = { [weak benchmarkRecorder, weak preferences] enabled in
-      benchmarkRecorder?.setEnabled(enabled, recordingGeneration: preferences?.diagnosticsGeneration)
+      benchmarkRecorder?.setEnabled(
+        enabled, recordingGeneration: preferences?.diagnosticsGeneration)
     }
     preferences.onTranscriptionProviderChange = { [weak self] in self?.prewarmTranscription() }
     preferences.objectWillChange
@@ -122,11 +124,12 @@ final class AppModel: ObservableObject {
       .store(in: &cancellables)
   }
 
-  var readinessComplete: Bool {
-    preferences.shortcut != nil
-      && hasCredential(preferences.transcriptionProvider.credentialKind)
-      && hasCredential(preferences.cleanupProvider.credentialKind) && permissionsReady
+  var onboardingReadiness: OnboardingReadiness {
+    OnboardingReadiness.selectedProviders(
+      preferences: preferences, hasCredential: hasCredential, hasPermissions: permissionsReady)
   }
+
+  var readinessComplete: Bool { onboardingReadiness.isComplete }
 
   var setupComplete: Bool { preferences.onboardingComplete && readinessComplete }
 
@@ -180,12 +183,15 @@ final class AppModel: ObservableObject {
   }
 
   func finishOnboarding(launchAtLogin: Bool) -> OnboardingFinishResult {
-    guard preferences.shortcut != nil,
-      hasCredential(preferences.transcriptionProvider.credentialKind), hasCredential(.openRouter),
-      permissionsReady
-    else { return .incomplete }
+    Self.finishOnboarding(
+      preferences: preferences, readiness: onboardingReadiness, launchAtLogin: launchAtLogin)
+  }
+
+  static func finishOnboarding(
+    preferences: AppPreferences, readiness: OnboardingReadiness, launchAtLogin: Bool
+  ) -> OnboardingFinishResult {
+    guard readiness.isComplete else { return .incomplete }
     guard preferences.setLaunchAtLogin(launchAtLogin) else { return .loginItemFailed }
-    preferences.cleanupProvider = .openRouter
     preferences.onboardingComplete = true
     return .completed
   }

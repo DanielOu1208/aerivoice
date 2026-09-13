@@ -185,7 +185,7 @@ enum CleanupProvider: String, CaseIterable, Codable, Sendable {
     }
   }
 
-  var isExperimental: Bool { self == .groq || self == .cerebras }
+  var isExperimental: Bool { self == .groq }
 
   var credentialKind: CredentialKind {
     switch self {

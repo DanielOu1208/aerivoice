@@ -224,7 +224,7 @@ final class AppPreferences: ObservableObject {
     transcriptionProvider =
       TranscriptionProvider(
         rawValue: defaults.string(forKey: Key.transcriptionProvider) ?? "") ?? .soniox
-    cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .faithful
+    cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .polished
     let savedProvider = CleanupProvider(
       rawValue: defaults.string(forKey: Key.cleanupProvider) ?? "")
     let legacyID = defaults.string(forKey: Key.cleanupModel) ?? ""

@@ -14,52 +14,48 @@ struct CleanupReasoningPicker: View {
   }
 
   var body: some View {
-    Picker(
-      "Reasoning",
-      selection: Binding(
-        get: { preferences.cleanupReasoningEffort },
-        set: { preferences.cleanupReasoningEffort = $0 })
-    ) {
-      ForEach(preferences.supportedCleanupReasoningEfforts, id: \.self) { effort in
-        Text(effortLabel(effort)).tag(effort)
+    SettingsControlRow(title: "Reasoning", message: reasoningDescription) {
+      Picker(
+        "Reasoning",
+        selection: Binding(
+          get: { preferences.cleanupReasoningEffort },
+          set: { preferences.cleanupReasoningEffort = $0 })
+      ) {
+        ForEach(preferences.supportedCleanupReasoningEfforts, id: \.self) { effort in
+          Text(effortLabel(effort)).tag(effort)
+        }
       }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .disabled(preferences.supportedCleanupReasoningEfforts.count <= 1)
     }
-    .pickerStyle(.menu)
-    .disabled(preferences.supportedCleanupReasoningEfforts.count <= 1)
 
-    if preferences.cleanupProvider == .openRouter {
-      if preferences.savedCleanupReasoningIsUnavailable {
-        HStack {
-          Text("Your saved reasoning level isn’t currently available. Using the model default.")
-            .foregroundStyle(.secondary)
-          Button("Use model default") { preferences.cleanupReasoningEffort = .automatic }
-        }
-        .font(.caption)
-      } else if reasoning?.mandatory == true {
-        Text("This model requires reasoning.")
-          .font(.caption).foregroundStyle(.secondary)
-      } else if preferences.supportedCleanupReasoningEfforts.count <= 1 {
-        Text("No reasoning levels are advertised for this model. The model default will be used.")
-          .font(.caption).foregroundStyle(.secondary)
-      }
+    if preferences.cleanupProvider == .openRouter && preferences.savedCleanupReasoningIsUnavailable
+    {
       HStack {
-        if catalog.isRefreshing {
-          ProgressView().controlSize(.small)
-          Text("Refreshing models and reasoning…")
-        } else if let fetchedAt = catalog.fetchedAt {
-          Text("Catalog updated \(fetchedAt.formatted(date: .abbreviated, time: .shortened))")
-        } else {
-          Text("Model and reasoning catalog not downloaded")
-        }
+        Label(
+          "Saved level unavailable. Using model default.", systemImage: "exclamationmark.circle"
+        )
+        .foregroundStyle(.orange)
         Spacer()
-        Button("Refresh") { Task { await catalog.refresh(force: true) } }
-          .disabled(catalog.isRefreshing)
+        Button("Use model default") { preferences.cleanupReasoningEffort = .automatic }
       }
-      .font(.caption).foregroundStyle(.secondary)
-      if let errorMessage = catalog.errorMessage {
-        Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-      }
+      .font(.caption)
     }
+  }
+
+  private var reasoningDescription: String {
+    let explanation =
+      "Controls how much the model reasons before returning cleaned text. Higher levels can increase response time."
+    guard preferences.cleanupProvider == .openRouter else { return explanation }
+    if reasoning?.mandatory == true {
+      return explanation + " This model requires reasoning."
+    }
+    if preferences.supportedCleanupReasoningEfforts.count <= 1 {
+      return explanation
+        + " No reasoning levels are advertised for this model. The model default will be used."
+    }
+    return explanation + " Available levels are fetched with the model catalog."
   }
 
   private func effortLabel(_ effort: CleanupReasoningEffort) -> String {

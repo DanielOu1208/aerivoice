@@ -742,6 +742,7 @@ final class DictationCoordinatorBenchmarkTests: XCTestCase {
 
   func testCleanupSettingsAreSnapshottedForEachDictation() async throws {
     let fixture = makeFixture()
+    fixture.preferences.cleanupMode = .faithful
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .recording }
 

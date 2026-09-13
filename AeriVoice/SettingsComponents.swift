@@ -7,22 +7,6 @@ enum CredentialInput {
   }
 }
 
-struct SettingsPageHeader: View {
-  let title: String
-  let subtitle: String
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(title).font(.system(size: 24, weight: .semibold))
-      Text(subtitle).foregroundStyle(.secondary)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.horizontal, 22)
-    .padding(.top, 20)
-    .padding(.bottom, 14)
-  }
-}
-
 struct ExperimentalBadge: View {
   var body: some View {
     Text("Experimental")
@@ -50,6 +34,9 @@ struct VocabularyTagEditor: View {
       HStack(spacing: 8) {
         TextField("", text: $draft, prompt: Text("Add a name or phrase"))
           .textFieldStyle(.roundedBorder)
+          .labelsHidden()
+          .multilineTextAlignment(.leading)
+          .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityLabel("Add a name or phrase")
           .focused($isInputFocused)
           .onSubmit(addTerm)
@@ -89,9 +76,6 @@ struct VocabularyTagEditor: View {
         if let validationMessage {
           Label(validationMessage, systemImage: "exclamationmark.circle.fill")
             .foregroundStyle(.orange)
-        } else {
-          Text("Names and phrases are sent to your selected transcription provider as hints.")
-            .foregroundStyle(.secondary)
         }
         Spacer()
         Text("\(terms.count) \(terms.count == 1 ? "term" : "terms")")
@@ -99,6 +83,7 @@ struct VocabularyTagEditor: View {
       }
       .font(.caption)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func vocabularyTag(_ term: String) -> some View {
@@ -235,6 +220,7 @@ struct CredentialEditorView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 8) {
+        ProviderIcon(kind: kind)
         Text(kind.label).font(.headline)
         if kind == .groq { ExperimentalBadge() }
         Spacer()
@@ -416,10 +402,7 @@ struct PermissionStatusRow: View {
       Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
         .foregroundStyle(granted ? .green : .orange)
         .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-        Text(detail).font(.caption).foregroundStyle(.secondary)
-      }
+      SettingsHelpLabel(title: title, message: detail)
       Spacer()
       if granted {
         Text("Allowed").foregroundStyle(.secondary)

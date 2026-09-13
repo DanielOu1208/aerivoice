@@ -40,9 +40,9 @@ retention by default. Users can disable that requirement in AI Cleanup settings;
 when disabled, the provider may retain transcript inputs and cleaned outputs.
 Opening cleanup settings or the model picker refreshes OpenRouter’s public model
 and reasoning catalog when the saved copy is older than 24 hours. Manual refresh
-is also available. These requests include no API key, audio, or transcript. Direct Groq and Cerebras cleanups are experimental and
+is also available. These requests include no API key, audio, or transcript. Direct Groq and Cerebras cleanups
 send requests directly to their respective API endpoints; review their current
-data controls before enabling them.
+data controls before enabling them. Groq cleanup is experimental.
 
 When Cerebras is selected, AeriVoice may also send an authenticated connection
 warm-up request when dictation starts. That request contains no audio or
