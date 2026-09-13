@@ -111,3 +111,7 @@ system-wide shortcut and Accessibility-assisted insertion.
 
 AeriVoice does not upload its own crash reports. macOS or third-party providers
 may collect diagnostics under their own settings and policies.
+
+## Local transcription
+
+When Local is selected, downloaded Nemotron models transcribe audio on your Mac without a transcription account or API key. An explicit initial model download connects to Hugging Face. Dictionary hints are processed locally. Existing cleanup settings still apply and may send the transcript to your selected cloud cleanup provider. Local does not automatically send audio to a cloud transcription provider on failure.

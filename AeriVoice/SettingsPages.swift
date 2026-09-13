@@ -99,12 +99,17 @@ struct DictationSettingsPage: View {
           }
         }
       }
+      if preferences.transcriptionProvider == .local {
+        Section("Local model") { LocalModelSetupView(controller: model.localModel) }
+      }
       Section {
         VocabularyTagEditor(vocabulary: $preferences.vocabulary)
       } header: {
         SettingsHelpLabel(
           title: "Dictionary",
-          message: "Names and phrases are sent to your selected transcription provider as hints.")
+          message: preferences.transcriptionProvider == .local
+            ? "Local uses these words as recognition hints from the next recording. English hints need at least three characters; spelling is not guaranteed."
+            : "Names and phrases are sent to your selected transcription provider as hints.")
       }
       Section("Microphone") {
         HStack {

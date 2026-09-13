@@ -7,15 +7,19 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
 
   private let soniox: RealtimeTranscribing
   private let meta: RealtimeTranscribing
+  private let local: RealtimeTranscribing
   private var activeProvider: TranscriptionProvider?
   private var connectionGeneration = UUID()
 
   init(
     soniox: RealtimeTranscribing = SonioxRealtimeClient(),
-    meta: RealtimeTranscribing = MetaRealtimeClient()
+    meta: RealtimeTranscribing = MetaRealtimeClient(),
+    local: RealtimeTranscribing = LocalRealtimeClient()
   ) {
     self.soniox = soniox
     self.meta = meta
+    self.local = local
+    wire(local, provider: .local)
     wire(soniox, provider: .soniox)
     wire(meta, provider: .meta)
   }
@@ -57,6 +61,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     activeProvider = nil
     soniox.cancel()
     meta.cancel()
+    local.cancel()
   }
 
   private func wire(_ client: RealtimeTranscribing, provider: TranscriptionProvider) {
@@ -74,6 +79,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     switch provider {
     case .soniox: soniox
     case .meta: meta
+    case .local: local
     }
   }
 }
@@ -86,6 +92,8 @@ enum RealtimeTranscriptionPrewarmer {
       var succeeded = true
       let urls: [URL]
       switch provider {
+      case .local:
+        urls = []
       case .meta:
         urls = [URL(string: "https://api.meta.ai")].compactMap { $0 }
       case .soniox:

@@ -39,6 +39,7 @@ struct RealtimeAudioFrame: Equatable, Sendable {
 enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendable {
   case soniox
   case meta
+  case local
 
   var id: Self { self }
 
@@ -46,6 +47,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "Soniox"
     case .meta: "Meta"
+    case .local: "Local"
     }
   }
 
@@ -53,6 +55,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "Soniox Realtime"
     case .meta: "Muse Voice Transcribe 1.0"
+    case .local: "Nemotron 3.5 — English"
     }
   }
 
@@ -60,13 +63,15 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "stt-rt-v5"
     case .meta: "muse-voice-transcribe-1.0"
+    case .local: "nemotron-3.5-asr-0.6b-560ms"
     }
   }
 
-  var credentialKind: CredentialKind {
+  var credentialKind: CredentialKind? {
     switch self {
     case .soniox: .soniox
     case .meta: .metaModelAPI
+    case .local: nil
     }
   }
 
@@ -74,6 +79,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: .missingSonioxKey
     case .meta: .missingMetaModelAPIKey
+    case .local: .provider("Download the Local model in Dictation settings.")
     }
   }
 
@@ -81,6 +87,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: 512_000
     case .meta: 160_000
+    case .local: 160_000
     }
   }
 }

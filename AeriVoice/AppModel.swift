@@ -40,6 +40,7 @@ enum MicrophonePermissionAction: Equatable {
 
 @MainActor
 final class AppModel: ObservableObject {
+  let localModel = LocalModelController.shared
   let preferences: AppPreferences
   let coordinator: DictationCoordinator
   let credentialManager: CredentialManager
@@ -92,6 +93,7 @@ final class AppModel: ObservableObject {
       .sink { [weak runtime] in runtime?.settingsChanged() }
       .store(in: &cancellables)
     shortcutMonitor.onAvailabilityChange = { [weak runtime] in runtime?.shortcutAvailable($0) }
+    localModel.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
     credentialManager.objectWillChange.sink { [weak self] in
       self?.objectWillChange.send()
     }.store(in: &cancellables)
@@ -124,9 +126,15 @@ final class AppModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  var transcriptionReady: Bool {
+    if let kind = preferences.transcriptionProvider.credentialKind { return hasCredential(kind) }
+    return localModel.isReady
+  }
+
   var onboardingReadiness: OnboardingReadiness {
     OnboardingReadiness.selectedProviders(
-      preferences: preferences, hasCredential: hasCredential, hasPermissions: permissionsReady)
+      preferences: preferences, hasCredential: hasCredential, hasPermissions: permissionsReady,
+      localModelReady: localModel.isReady)
   }
 
   var readinessComplete: Bool { onboardingReadiness.isComplete }
@@ -231,6 +239,8 @@ final class AppModel: ObservableObject {
   }
 
   func prewarmTranscription() {
+    localModel.select(preferences.transcriptionProvider == .local)
+    guard preferences.transcriptionProvider != .local else { return }
     let runtime = runtimeDiagnostics
     let token = runtime.beginPreparation(network: true)
     RealtimeTranscriptionPrewarmer.prewarm(provider: preferences.transcriptionProvider) {

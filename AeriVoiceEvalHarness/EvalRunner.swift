@@ -77,7 +77,28 @@ final class EvalRunner {
       soniox = SonioxRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .soniox, script: script, text: text) })
       meta = MetaRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .meta, script: script, text: text) })
     }
-    let transcriber = EvalTranscriber(client: RealtimeTranscriptionRouter(soniox: soniox, meta: meta), events: events)
+    let localRuntime = LocalSpeechRuntime()
+    let localClient: RealtimeTranscribing
+    if scenario.provider == .local, scenario.live {
+      let started = events.elapsedMS
+      let directory: URL
+      if let path = scenario.localModelPath { directory = URL(fileURLWithPath: path) }
+      else { directory = try await LocalModelAssets().verifiedDirectory() }
+      try await LocalModelAssets(directory: directory).validateModelInventory()
+      var provenance = try EvalLocalModel.provenance(
+        directory: directory, variant: scenario.localModelVariant ?? "560ms")
+      provenance["external_model_path"] = scenario.localModelPath != nil
+      events.emit("local_preparation_started", provenance)
+      let engineStarted = events.elapsedMS
+      try await localRuntime.load(from: directory)
+      events.emit("local_preparation_finished", ["duration_ms": events.elapsedMS - started,
+        "engine_load_ms": events.elapsedMS - engineStarted])
+      localClient = LocalRealtimeClient(runtime: localRuntime)
+    } else {
+      localClient = EvalControlledLocalClient(text: scenario.scriptedTranscript)
+    }
+    let transcriber = EvalTranscriber(client: RealtimeTranscriptionRouter(
+      soniox: soniox, meta: meta, local: localClient), events: events)
     let cleaner = makeCleaner()
     let benchmark = EvalBenchmark(events: events)
     let lifecycle = EvalLifecycle(events: events)
@@ -104,6 +125,7 @@ final class EvalRunner {
       preferences: preferences, credentials: stageCredentials, audio: audio, transcriber: transcriber,
       cleaner: cleaner, muter: EvalMuter(), inserter: receiver, notch: EvalNotch(), benchmark: benchmark,
       readiness: EvalReadiness(), cuePlayer: EvalCues(), lifecycleObserver: lifecycle,
+      localReadiness: { !self.scenario.live || localRuntime.isReady },
       notifications: EvalNotifications(events: events))
     let observation = coordinator.$phase.removeDuplicates().sink { [events] phase in
       events.emit("phase", ["phase": evalPhase(phase)])
@@ -126,7 +148,9 @@ final class EvalRunner {
       var didStop = false
       do {
         try await waitUntil {
-          if let cancelMS = self.scenario.cancelAfterMs, self.events.elapsedMS - start >= cancelMS,
+          if let cancelMS = self.scenario.cancelAfterMs,
+            self.scenario.cancelSessions?.contains(index) ?? true,
+            self.events.elapsedMS - start >= cancelMS,
             benchmark.terminal == nil { coordinator.cancel() }
           if engine.finished, !didStop, benchmark.terminal == nil {
             didStop = true

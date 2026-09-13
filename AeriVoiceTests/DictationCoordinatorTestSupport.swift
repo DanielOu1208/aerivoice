@@ -14,7 +14,7 @@ extension DictationCoordinatorTests {
     soundCues: Bool = false, cueDelay: Duration = .zero,
     readiness: DictationReadinessChecking? = nil, connectWaitsForResolution: Bool = false,
     connectError: Error? = nil, audioFrameCount: Int = 1,
-    audioStartWaitsForResolution: Bool = false
+    audioStartWaitsForResolution: Bool = false, localReady: Bool = true
   ) -> CoordinatorFixture {
     let suite = "AeriVoiceTests.Coordinator.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -51,7 +51,7 @@ extension DictationCoordinatorTests {
       preferences: preferences, credentials: credentials, audio: audio,
       transcriber: transcriber, cleaner: cleaner, muter: muter, inserter: inserter,
       notch: notch, benchmark: benchmark, readiness: readiness ?? FakeReadiness(),
-      cuePlayer: cuePlayer)
+      cuePlayer: cuePlayer, localReadiness: { localReady })
     return CoordinatorFixture(
       preferences: preferences, coordinator: coordinator, audio: audio, transcriber: transcriber,
       inserter: inserter, cleaner: cleaner, muter: muter, notch: notch, benchmark: benchmark,

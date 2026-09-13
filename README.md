@@ -177,3 +177,7 @@ pull requests; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Source code and original AeriVoice artwork use the [MIT License](LICENSE).
 Provider logos belong to their respective owners; see [artwork credits](docs/ARTWORK.md).
+
+## Local transcription
+
+AeriVoice also supports downloadable, on-device English transcription with Nemotron 3.5 and the existing Dictionary. See [Local dictation](docs/LOCAL-DICTATION.md) for setup, model requirements, privacy boundaries, and validation.

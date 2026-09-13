@@ -17,35 +17,35 @@ enum OnboardingStep: Int, CaseIterable {
 }
 
 struct OnboardingReadiness: Equatable, Sendable {
-  let hasTranscriptionCredential: Bool
+  let isTranscriptionReady: Bool
   let hasCleanupCredential: Bool
   let hasPermissions: Bool
   let hasShortcut: Bool
 
   @MainActor static func selectedProviders(
     preferences: AppPreferences, hasCredential: (CredentialKind) -> Bool,
-    hasPermissions: Bool
+    hasPermissions: Bool, localModelReady: Bool = false
   ) -> OnboardingReadiness {
     OnboardingReadiness(
-      hasTranscriptionCredential: hasCredential(preferences.transcriptionProvider.credentialKind),
+      isTranscriptionReady: preferences.transcriptionProvider.credentialKind.map(hasCredential) ?? localModelReady,
       hasCleanupCredential: hasCredential(preferences.cleanupProvider.credentialKind),
       hasPermissions: hasPermissions,
       hasShortcut: preferences.shortcut != nil)
   }
 
   var isComplete: Bool {
-    hasTranscriptionCredential && hasCleanupCredential && hasPermissions && hasShortcut
+    isTranscriptionReady && hasCleanupCredential && hasPermissions && hasShortcut
   }
 
   var recommendedStep: OnboardingStep {
-    if !hasTranscriptionCredential || !hasCleanupCredential { return .providers }
+    if !isTranscriptionReady || !hasCleanupCredential { return .providers }
     if !hasPermissions { return .permissions }
     return .shortcut
   }
 
   func canAdvance(from step: OnboardingStep) -> Bool {
     switch step {
-    case .providers: hasTranscriptionCredential && hasCleanupCredential
+    case .providers: isTranscriptionReady && hasCleanupCredential
     case .permissions: hasPermissions
     case .shortcut: hasShortcut
     }
@@ -143,6 +143,9 @@ struct OnboardingView: View {
             }
           }
           .id(preferences.transcriptionProvider)
+          if preferences.transcriptionProvider == .local {
+            LocalModelSetupView(controller: model.localModel)
+          }
         }
         Section("AI cleanup") {
           ProviderSelectionRow(

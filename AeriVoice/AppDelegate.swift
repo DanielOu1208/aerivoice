@@ -29,7 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     model.coordinator.prepareForLaunch(
       microphoneAuthorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
     model.prewarmTranscription()
-    if !model.setupComplete {
+    if model.preferences.onboardingComplete, model.preferences.transcriptionProvider == .local {
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        await model.localModel.waitForPreparation()
+        if !model.setupComplete { openSettings() }
+      }
+    } else if !model.setupComplete {
       openSettings()
     }
     model.runtimeDiagnostics.finishInitialization()

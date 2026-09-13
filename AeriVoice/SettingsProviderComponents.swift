@@ -83,19 +83,24 @@ struct ProviderIcon: View {
 
 struct ProviderSelectionRow<Selection: View>: View {
   @ObservedObject var model: AppModel
-  let kind: CredentialKind
+  let kind: CredentialKind?
   var allowsRemoval = true
   @ViewBuilder var selection: () -> Selection
 
   var body: some View {
     HStack(spacing: 8) {
-      ProviderIcon(kind: kind)
+      if let kind { ProviderIcon(kind: kind) }
+      else { Image(systemName: "desktopcomputer").frame(width: 24, height: 24).accessibilityHidden(true) }
       selection()
         .labelsHidden()
         .pickerStyle(.menu)
         .fixedSize()
       Spacer(minLength: 8)
-      ProviderConnectionControls(model: model, kind: kind, allowsRemoval: allowsRemoval)
+      if let kind {
+        ProviderConnectionControls(model: model, kind: kind, allowsRemoval: allowsRemoval)
+      } else if model.localModel.isReady {
+        Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }

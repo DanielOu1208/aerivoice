@@ -89,8 +89,14 @@ final class DictationCoordinator: ObservableObject {
     cuePlayer: SoundCuePlaying = SoundCuePlayer(),
     runtimeDiagnostics: RuntimeDiagnosticsRecorder? = nil,
     lifecycleObserver: DictationLifecycleObserving? = nil,
+    localReadiness: @escaping () -> Bool = {
+      let model = LocalModelController.shared
+      if !model.isReady { model.prepareIfNeeded() }
+      return model.isReady
+    },
     notifications: DictationNotificationPosting = SystemDictationNotifications()
   ) {
+    self.localReadiness = localReadiness
     self.preferences = preferences
     self.credentials = credentials
     self.audio = audio
@@ -127,6 +133,9 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
+  private var sessionVocabulary: [String] = []
+  private let localReadiness: () -> Bool
+
   func prepareForLaunch(microphoneAuthorized: Bool) {
     guard !launchPreparationAttempted, preferences.onboardingComplete,
       microphoneAuthorized, phase == .idle
@@ -141,7 +150,7 @@ final class DictationCoordinator: ObservableObject {
     let work = observeWork("launchPreparation")
     launchPreparationTask = Task.detached(priority: .utility) {
       async let audioPreparation = audio.prepareWithDiagnostics()
-      if !Task.isCancelled { _ = credentials.value(for: transcriptionKind) }
+      if !Task.isCancelled, let transcriptionKind { _ = credentials.value(for: transcriptionKind) }
       if !Task.isCancelled { _ = credentials.value(for: cleanupKind) }
       let result = await audioPreparation
       if let preparationToken {
@@ -160,6 +169,7 @@ final class DictationCoordinator: ObservableObject {
         provider: preferences.transcriptionProvider)
       let cleanupConfiguration = preferences.cleanupConfiguration
       let cleanupMode = preferences.cleanupMode
+      sessionVocabulary = VocabularyNormalizer.normalize(preferences.vocabulary)
       activeTranscriptionConfiguration = transcriptionConfiguration
       activeCleanupSettings = ActiveCleanupSettings(
         mode: cleanupMode, configuration: cleanupConfiguration)
@@ -272,13 +282,19 @@ final class DictationCoordinator: ObservableObject {
     }
     let transcriptionProvider = transcriptionConfiguration.provider
     benchmark.mark(.credentialReadStarted)
-    guard
-      let transcriptionKey = credentials.value(for: transcriptionProvider.credentialKind),
-      !transcriptionKey.isEmpty
-    else {
-      showReadinessError(
-        transcriptionProvider.missingCredentialError, category: .missingCredential)
-      return
+    let transcriptionKey: String
+    if let kind = transcriptionProvider.credentialKind {
+      guard let key = credentials.value(for: kind), !key.isEmpty else {
+        showReadinessError(transcriptionProvider.missingCredentialError, category: .missingCredential)
+        return
+      }
+      transcriptionKey = key
+    } else {
+      guard localReadiness() else {
+        showReadinessError(AppError.provider("Preparing Local model. Open Dictation settings if a download is needed, then press the shortcut again when ready."), category: .unknown)
+        return
+      }
+      transcriptionKey = ""
     }
     guard let cleanupSettings = activeCleanupSettings else {
       showReadinessError(
@@ -390,7 +406,7 @@ final class DictationCoordinator: ObservableObject {
     do {
       try await transcriber.connect(
         configuration: configuration, apiKey: apiKey,
-        vocabulary: VocabularyNormalizer.normalize(preferences.vocabulary), sessionID: id)
+        vocabulary: sessionVocabulary, sessionID: id)
       guard sessionID == id,
         phase == .starting || phase == .recording || phase == .processing
       else { return false }

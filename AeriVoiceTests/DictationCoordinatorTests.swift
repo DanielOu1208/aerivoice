@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorTests: XCTestCase {
+  func testLocalPreparationDoesNotStartCaptureOrConnect() async throws {
+    let fixture = makeFixture(transcriptionProvider: .local, hasSonioxKey: false, hasMetaKey: false, localReady: false)
+    fixture.coordinator.toggle()
+    try await waitUntil { if case .error = fixture.coordinator.phase { return true }; return false }
+    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertNil(fixture.inserter.insertedText)
+  }
+
+  func testLocalStartsWithoutCloudTranscriptionCredentials() async throws {
+    let fixture = makeFixture(transcriptionProvider: .local, hasSonioxKey: false, hasMetaKey: false)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    XCTAssertTrue(fixture.transcriber.didConnect)
+    XCTAssertEqual(fixture.credentials.readKinds, [.openRouter])
+    fixture.coordinator.cancel()
+  }
+
+
   func testRestorationInvalidatesOnIdleCancelNewRecordingAndSettingOff() async throws {
     let fixture = makeFixture()
     fixture.coordinator.cancel()

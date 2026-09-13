@@ -12,6 +12,8 @@ struct EvalScenario: Decodable {
   let audioPath: String?
   let transcript: String?
   let transcriptionProvider: String?
+  let localModelPath: String?
+  let localModelVariant: String?
   let cleanupModel: String?
   let cleanupReasoning: String?
   let cleanupMode: String?
@@ -26,6 +28,7 @@ struct EvalScenario: Decodable {
   let channels: Int?
   let chunkFrames: Int?
   let cancelAfterMs: Double?
+  let cancelSessions: [Int]?
   let controlled: ControlledResponses?
 
   var live: Bool { mode == "live" }
@@ -56,10 +59,17 @@ struct EvalScenario: Decodable {
       CleanupModel(rawValue: cleanupModel ?? "qwen-3.8-27b") != nil,
       CleanupMode(rawValue: cleanupMode ?? "Faithful") != nil
     else { throw EvalError.invalidScenario }
+    if let localModelVariant, !["560ms", "1120ms"].contains(localModelVariant) { throw EvalError.invalidScenario }
+    if localModelVariant == "1120ms", localModelPath == nil { throw EvalError.invalidScenario }
     if let cleanupReasoning {
       guard let effort = CleanupReasoningEffort(rawValue: cleanupReasoning), model.supportedReasoningEfforts.contains(effort) else {
         throw EvalError.invalidScenario
       }
+    }
+    if let cancelSessions {
+      guard cancelAfterMs != nil, !cancelSessions.isEmpty,
+        Set(cancelSessions).count == cancelSessions.count,
+        cancelSessions.allSatisfy({ (1...count).contains($0) }) else { throw EvalError.invalidScenario }
     }
     if let cancelAfterMs, !cancelAfterMs.isFinite || cancelAfterMs < 0 { throw EvalError.invalidScenario }
     if kind != "cleanup", audioPath == nil { throw EvalError.invalidScenario }
