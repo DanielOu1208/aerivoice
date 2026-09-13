@@ -114,12 +114,12 @@ available in Settings.
 <details>
 <summary>Verify your download</summary>
 
-Download `AeriVoice-v0.1.0-beta.6-arm64.dmg` and its `.sha256` file from
+Download `AeriVoice-v0.1.0-beta.7-arm64.dmg` and its `.sha256` file from
 [GitHub Releases](https://github.com/DanielOu1208/aerivoice/releases), then run
 this in your download directory before opening the DMG:
 
 ```sh
-shasum -a 256 -c AeriVoice-v0.1.0-beta.6-arm64.dmg.sha256
+shasum -a 256 -c AeriVoice-v0.1.0-beta.7-arm64.dmg.sha256
 ```
 
 </details>
