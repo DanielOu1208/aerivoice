@@ -61,10 +61,14 @@ Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for you
   successful refresh time are cached in
   `~/Library/Caches/com.danielou.AeriVoice/openrouter-catalog-v1.json`. This cache
   contains no credentials or dictation content and remains usable while offline.
-- Insertion uses the normal Paste shortcut. The transcript stays on the clipboard
-  until you replace it; AeriVoice does not restore an earlier clipboard on a timer.
-  The green check mark means the Paste shortcut was sent; macOS cannot confirm
-  consumption by another app. Detected secure fields and secure keyboard-input mode copy with a warning
+- Insertion uses the normal Paste shortcut. With **Restore clipboard after dictation**
+  enabled (the default), AeriVoice temporarily holds an in-memory clipboard backup
+  and checks the destination's text and selection through Accessibility. It restores
+  the backup only after verifying the exact expected edit in the same field and
+  confirming the clipboard is still unchanged. If backup or verification is unavailable,
+  the dictation stays on the clipboard. These contents are never written to diagnostics.
+  The green check mark means the Paste shortcut was sent; it does not itself confirm
+  delivery or restoration. Detected secure fields and secure keyboard-input mode copy with a warning
   instead of receiving an automatic Paste. Copies you make after dictation stops
   are preserved; if the clipboard changed, the transcript is not copied over it.
 - Optional performance diagnostics are disabled by default. When enabled, they are stored in

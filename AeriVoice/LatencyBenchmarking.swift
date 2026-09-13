@@ -291,7 +291,9 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
           acceptLegacyCheckpoint: acceptLegacyCheckpoint)
       }
     } else {
-      self.writer.enqueue(control: true) { store in try await store.discardActiveCheckpoint() }
+      self.writer.enqueue(control: true) { store in
+        try await store.discardCheckpointAndPrune(now: recoveryNow)
+      }
     }
   }
 
@@ -302,7 +304,8 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     if !enabled {
       active = nil
       writer.revokePendingCollection()
-      writer.enqueue(control: true) { store in try await store.discardActiveCheckpoint() }
+      let now = wallNow()
+      writer.enqueue(control: true) { store in try await store.discardCheckpointAndPrune(now: now) }
     }
     runtime?.setEnabled(enabled)
   }
