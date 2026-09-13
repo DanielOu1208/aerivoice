@@ -1,6 +1,5 @@
 import AVFoundation
 import AppKit
-import UserNotifications
 
 @MainActor
 protocol DictationReadinessChecking: Sendable {
@@ -47,6 +46,8 @@ final class DictationCoordinator: ObservableObject {
   private let readiness: DictationReadinessChecking
   private let cuePlayer: SoundCuePlaying
   private let runtimeDiagnostics: RuntimeDiagnosticsRecorder?
+  private let lifecycleObserver: DictationLifecycleObserving?
+  private let notifications: DictationNotificationPosting
 
   private var sessionID: DictationSessionID?
   private var activeTranscriptionConfiguration: TranscriptionConfiguration?
@@ -86,7 +87,9 @@ final class DictationCoordinator: ObservableObject {
     benchmark: LatencyBenchmarkRecording = LatencyBenchmarkRecorder(),
     readiness: DictationReadinessChecking = SystemDictationReadiness(),
     cuePlayer: SoundCuePlaying = SoundCuePlayer(),
-    runtimeDiagnostics: RuntimeDiagnosticsRecorder? = nil
+    runtimeDiagnostics: RuntimeDiagnosticsRecorder? = nil,
+    lifecycleObserver: DictationLifecycleObserving? = nil,
+    notifications: DictationNotificationPosting = SystemDictationNotifications()
   ) {
     self.preferences = preferences
     self.credentials = credentials
@@ -107,6 +110,8 @@ final class DictationCoordinator: ObservableObject {
     self.readiness = readiness
     self.cuePlayer = cuePlayer
     self.runtimeDiagnostics = runtimeDiagnostics
+    self.lifecycleObserver = lifecycleObserver
+    self.notifications = notifications
     preferences.onClipboardRestorationChange = { [weak self] enabled in
       if !enabled { self?.inserter.invalidatePendingRestoration() }
     }
@@ -133,6 +138,7 @@ final class DictationCoordinator: ObservableObject {
     let cleanupKind = preferences.cleanupProvider.credentialKind
     let runtime = runtimeDiagnostics
     let preparationToken = runtime?.beginPreparation()
+    let work = observeWork("launchPreparation")
     launchPreparationTask = Task.detached(priority: .utility) {
       async let audioPreparation = audio.prepareWithDiagnostics()
       if !Task.isCancelled { _ = credentials.value(for: transcriptionKind) }
@@ -141,6 +147,7 @@ final class DictationCoordinator: ObservableObject {
       if let preparationToken {
         await runtime?.finishPreparation(preparationToken, result: result)
       }
+      if let work { await work.finish() }
     }
   }
 
@@ -163,7 +170,9 @@ final class DictationCoordinator: ObservableObject {
       let generation = UUID()
       lifecycleGeneration = generation
       phase = .starting
+      let work = observeWork("start")
       startTask = Task { @MainActor [weak self] in
+        defer { work?.finish() }
         await self?.start(generation: generation)
         if self?.lifecycleGeneration == generation { self?.startTask = nil }
       }
@@ -243,7 +252,9 @@ final class DictationCoordinator: ObservableObject {
     state.warning = nil
     notch.present(state: state)
     notch.hide(after: .milliseconds(600))
+    let work = observeWork("cancellationIdleDelay")
     Task { @MainActor [weak self] in
+      defer { work?.finish() }
       try? await Task.sleep(for: .milliseconds(650))
       guard let self, self.lifecycleGeneration == cancellationGeneration,
         self.sessionID == nil, self.phase == .error("Cancelled")
@@ -301,7 +312,9 @@ final class DictationCoordinator: ObservableObject {
 
     if cleanupProvider == .cerebras {
       let cleaner = self.cleaner
+      let work = observeWork("cleanupWarmUp")
       Task {
+        defer { work?.finish() }
         await cleaner.warmUp(
           configuration: cleanupSettings.configuration, apiKey: cleanupKey)
       }
@@ -360,7 +373,9 @@ final class DictationCoordinator: ObservableObject {
     guard connectionTask == nil else { return }
     let taskID = UUID()
     connectionTaskID = taskID
+    let work = observeWork("connection")
     connectionTask = Task { @MainActor [weak self] in
+      defer { work?.finish() }
       guard let self, !Task.isCancelled, self.sessionID == id else { return }
       _ = await self.connectTranscriber(configuration: configuration, apiKey: apiKey, id: id)
       guard self.connectionTaskID == taskID else { return }
@@ -524,7 +539,9 @@ final class DictationCoordinator: ObservableObject {
     guard drainTask == nil, let id = sessionID else { return }
     let taskID = UUID()
     drainTaskID = taskID
+    let work = observeWork("drain")
     drainTask = Task { @MainActor [weak self] in
+      defer { work?.finish() }
       guard let self else { return }
       while self.sessionID == id, self.connected, !self.bufferedAudio.isEmpty,
         !Task.isCancelled
@@ -564,7 +581,9 @@ final class DictationCoordinator: ObservableObject {
   }
 
   private func beginLimitTimer(id: DictationSessionID) {
+    let work = observeWork("limit")
     limitTask = Task { @MainActor [weak self] in
+      defer { work?.finish() }
       try? await Task.sleep(for: .seconds(600))
       guard let self else { return }
       guard self.sessionID == id else { return }
@@ -580,7 +599,9 @@ final class DictationCoordinator: ObservableObject {
     stopAudioIfNeeded(playCue: true)
     let targetCapture = inserter.captureTarget()
     targetCaptureTask = targetCapture
+    let work = observeWork("stop")
     stopTask = Task { @MainActor [weak self] in
+      defer { work?.finish() }
       await self?.stop(targetCapture: targetCapture)
       guard let self, self.stopTaskID == taskID else { return }
       self.stopTask = nil
@@ -662,7 +683,9 @@ final class DictationCoordinator: ObservableObject {
     activeCleanupSettings = nil
     runtimeDiagnostics?.sessionCleanupFinished()
     let generation = lifecycleGeneration
+    let work = observeWork("terminalIdleDelay")
     Task { @MainActor [weak self] in
+      defer { work?.finish() }
       try? await Task.sleep(for: .seconds(2.1))
       guard let self, self.lifecycleGeneration == generation, self.sessionID == nil else { return }
       self.phase = .idle
@@ -678,14 +701,10 @@ final class DictationCoordinator: ObservableObject {
     state = NotchState(phase: phase)
     notch.present(state: state)
     notch.hide(after: .seconds(2))
-    let notification = UNMutableNotificationContent()
-    notification.title = "AeriVoice needs attention"
-    notification.body = error.localizedDescription
-    notification.categoryIdentifier = "OPEN_SETTINGS"
-    let request = UNNotificationRequest(
-      identifier: UUID().uuidString, content: notification, trigger: nil)
-    UNUserNotificationCenter.current().add(request)
+    notifications.postReadinessError(error)
+    let work = observeWork("readinessIdleDelay")
     Task { @MainActor [weak self] in
+      defer { work?.finish() }
       try? await Task.sleep(for: .seconds(2.1))
       guard let self, self.lifecycleGeneration == generation, self.sessionID == nil else { return }
       self.phase = .idle
@@ -713,6 +732,11 @@ final class DictationCoordinator: ObservableObject {
       }
     }
     return (.unknown, nil)
+  }
+
+  private func observeWork(_ kind: String) -> DictationLifecycleWork? {
+    guard let lifecycleObserver else { return nil }
+    return DictationLifecycleWork(observer: lifecycleObserver, kind: kind)
   }
 
   private func play(_ cue: DictationCue) {

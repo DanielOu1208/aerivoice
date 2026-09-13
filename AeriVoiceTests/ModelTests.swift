@@ -122,25 +122,25 @@ final class ModelTests: XCTestCase {
     XCTAssertFalse(CleanupModel.gpt56LunaFast.providerRoute.requiresZeroDataRetention)
     XCTAssertFalse(CleanupProvider.openRouter.isExperimental)
     XCTAssertTrue(CleanupProvider.groq.isExperimental)
-    XCTAssertTrue(CleanupProvider.cerebras.isExperimental)
+    XCTAssertFalse(CleanupProvider.cerebras.isExperimental)
   }
 
   func testOnboardingReadinessRoutesToFirstIncompleteStep() {
     XCTAssertEqual(
       OnboardingReadiness(
-        hasTranscriptionCredential: false, hasOpenRouterCredential: false,
+        hasTranscriptionCredential: false, hasCleanupCredential: false,
         hasPermissions: false, hasShortcut: false
       ).recommendedStep,
       .providers)
     XCTAssertEqual(
       OnboardingReadiness(
-        hasTranscriptionCredential: true, hasOpenRouterCredential: true,
+        hasTranscriptionCredential: true, hasCleanupCredential: true,
         hasPermissions: false, hasShortcut: false
       ).recommendedStep,
       .permissions)
     XCTAssertEqual(
       OnboardingReadiness(
-        hasTranscriptionCredential: true, hasOpenRouterCredential: true,
+        hasTranscriptionCredential: true, hasCleanupCredential: true,
         hasPermissions: true, hasShortcut: false
       ).recommendedStep,
       .shortcut)
@@ -148,18 +148,130 @@ final class ModelTests: XCTestCase {
 
   func testOnboardingReadinessGatesEachStepIndependently() {
     let ready = OnboardingReadiness(
-      hasTranscriptionCredential: true, hasOpenRouterCredential: true,
+      hasTranscriptionCredential: true, hasCleanupCredential: true,
       hasPermissions: true, hasShortcut: true)
     for step in OnboardingStep.allCases {
       XCTAssertTrue(ready.canAdvance(from: step))
     }
 
     let missingShortcut = OnboardingReadiness(
-      hasTranscriptionCredential: true, hasOpenRouterCredential: true,
+      hasTranscriptionCredential: true, hasCleanupCredential: true,
       hasPermissions: true, hasShortcut: false)
     XCTAssertTrue(missingShortcut.canAdvance(from: .providers))
     XCTAssertTrue(missingShortcut.canAdvance(from: .permissions))
     XCTAssertFalse(missingShortcut.canAdvance(from: .shortcut))
+  }
+
+  @MainActor
+  func testCleanupStyleDefaultsToPolishedAndPreservesEverySavedStyle() {
+    let suite = "AeriVoiceTests.CleanupStyle.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    XCTAssertEqual(AppPreferences(defaults: defaults).cleanupMode, .polished)
+    defaults.set("removed-style", forKey: "cleanupMode")
+    XCTAssertEqual(AppPreferences(defaults: defaults).cleanupMode, .polished)
+    for mode in CleanupMode.allCases {
+      defaults.set(mode.rawValue, forKey: "cleanupMode")
+      XCTAssertEqual(AppPreferences(defaults: defaults).cleanupMode, mode)
+      XCTAssertEqual(defaults.string(forKey: "cleanupMode"), mode.rawValue)
+    }
+  }
+
+  @MainActor
+  func testOnboardingRequiresBothSelectedProviderCredentials() {
+    let suite = "AeriVoiceTests.SelectedProviderReadiness.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let preferences = AppPreferences(defaults: defaults)
+
+    for transcription in TranscriptionProvider.allCases {
+      preferences.transcriptionProvider = transcription
+      for cleanup in CleanupProvider.allCases {
+        preferences.cleanupProvider = cleanup
+        let selected: Set<CredentialKind> = [transcription.credentialKind, cleanup.credentialKind]
+        let ready = OnboardingReadiness.selectedProviders(
+          preferences: preferences, hasCredential: { selected.contains($0) }, hasPermissions: true)
+        XCTAssertTrue(ready.canAdvance(from: .providers))
+        for missing in selected {
+          let credentials = selected.subtracting([missing])
+          let incomplete = OnboardingReadiness.selectedProviders(
+            preferences: preferences, hasCredential: { credentials.contains($0) },
+            hasPermissions: true)
+          XCTAssertFalse(incomplete.canAdvance(from: .providers))
+          XCTAssertEqual(incomplete.recommendedStep, .providers)
+        }
+        if cleanup != .openRouter {
+          let wrongCleanup: Set<CredentialKind> = [transcription.credentialKind, .openRouter]
+          XCTAssertFalse(
+            OnboardingReadiness.selectedProviders(
+              preferences: preferences, hasCredential: { wrongCleanup.contains($0) },
+              hasPermissions: true
+            ).canAdvance(from: .providers))
+        }
+      }
+    }
+  }
+
+  @MainActor
+  func testOnboardingCompletionPreservesProviderModelsReasoningAndStyle() {
+    let suite = "AeriVoiceTests.OnboardingCompletion.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let loginItem = LoginItemManagerStub()
+    let preferences = AppPreferences(defaults: defaults, loginItemManager: loginItem)
+    preferences.cleanupMode = .faithful
+    preferences.cleanupModel = .gpt56LunaFast
+    preferences.cleanupReasoningEffort = .high
+    let openRouterConfiguration = preferences.cleanupConfiguration
+    let ready = OnboardingReadiness(
+      hasTranscriptionCredential: true, hasCleanupCredential: true,
+      hasPermissions: true, hasShortcut: true)
+
+    for cleanup in CleanupProvider.allCases {
+      preferences.cleanupProvider = cleanup
+      let configuration = preferences.cleanupConfiguration
+      XCTAssertEqual(
+        AppModel.finishOnboarding(
+          preferences: preferences, readiness: ready, launchAtLogin: false), .completed)
+      XCTAssertEqual(preferences.cleanupProvider, cleanup)
+      XCTAssertEqual(preferences.cleanupConfiguration, configuration)
+      XCTAssertEqual(preferences.cleanupMode, .faithful)
+      XCTAssertTrue(preferences.onboardingComplete)
+      XCTAssertEqual(AppPreferences(defaults: defaults).cleanupProvider, cleanup)
+    }
+    preferences.cleanupProvider = .openRouter
+    XCTAssertEqual(preferences.cleanupConfiguration, openRouterConfiguration)
+  }
+
+  @MainActor
+  func testOnboardingCompletionRetainsCredentialPermissionShortcutAndLoginGates() {
+    let suite = "AeriVoiceTests.OnboardingCompletionGates.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let loginItem = LoginItemManagerStub()
+    let preferences = AppPreferences(defaults: defaults, loginItemManager: loginItem)
+    for missing in 0..<4 {
+      let readiness = OnboardingReadiness(
+        hasTranscriptionCredential: missing != 0, hasCleanupCredential: missing != 1,
+        hasPermissions: missing != 2, hasShortcut: missing != 3)
+      XCTAssertEqual(
+        AppModel.finishOnboarding(
+          preferences: preferences, readiness: readiness, launchAtLogin: true), .incomplete)
+      XCTAssertFalse(preferences.onboardingComplete)
+      XCTAssertTrue(loginItem.updateRequests.isEmpty)
+    }
+    let ready = OnboardingReadiness(
+      hasTranscriptionCredential: true, hasCleanupCredential: true,
+      hasPermissions: true, hasShortcut: true)
+    loginItem.shouldFail = true
+    XCTAssertEqual(
+      AppModel.finishOnboarding(
+        preferences: preferences, readiness: ready, launchAtLogin: true), .loginItemFailed)
+    XCTAssertFalse(preferences.onboardingComplete)
+    preferences.onboardingComplete = true
+    let restored = AppPreferences(defaults: defaults, loginItemManager: loginItem)
+    XCTAssertTrue(restored.onboardingComplete)
   }
 
   func testDeniedMicrophonePermissionRoutesToSystemSettings() {

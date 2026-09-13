@@ -320,7 +320,7 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     let context = runtime?.beginInteraction()
     guard enabled, collectionEnabled else { return }
     let wallTime = wallNow()
-    let route = cleanupConfiguration.model.providerRoute
+    let route = cleanupConfiguration.providerRoute
     let requestedProviderTag: String? = {
       switch cleanupConfiguration.provider {
       case .groq: "groq-direct"

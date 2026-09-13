@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   let model: AppModel
   private var statusItem: NSStatusItem?
   private var settingsWindow: NSWindow?
+  private var settingsShowsOnboarding = false
   private var cancellables = Set<AnyCancellable>()
 
   init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
@@ -90,7 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   private func observeLifecycle() {
     let workspace = NSWorkspace.shared.notificationCenter
     workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) {
-      [weak self] _ in Task { @MainActor in
+      [weak self] _ in
+      Task { @MainActor in
         self?.model.coordinator.cancel()
         self?.model.runtimeDiagnostics.willSleep()
       }
@@ -123,18 +125,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     } else {
       window = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
-        styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered,
+        styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+        backing: .buffered,
         defer: false)
       window.title = "AeriVoice Settings"
+      window.titleVisibility = .hidden
+      window.titlebarAppearsTransparent = false
+      window.titlebarSeparatorStyle = .none
       window.contentMinSize = NSSize(width: 700, height: 560)
       window.isReleasedWhenClosed = false
       window.delegate = self
       settingsWindow = window
-      window.contentView = NSHostingView(
-        rootView: SettingsRootView(model: model) { [weak window] in
-          window?.close()
-        })
       window.center()
+    }
+    let needsOnboarding = !model.preferences.onboardingComplete
+    if window.contentViewController == nil || settingsShowsOnboarding != needsOnboarding {
+      settingsShowsOnboarding = needsOnboarding
+      if needsOnboarding {
+        window.toolbar = nil
+        window.contentViewController = NSHostingController(
+          rootView: OnboardingView(model: model) { [weak window] in window?.close() })
+      } else {
+        let navigation = SettingsNavigation(model: model)
+        let controller = SettingsSplitViewController(
+          sidebar: SettingsSidebar(model: model, navigation: navigation),
+          detail: SettingsDetail(model: model, navigation: navigation),
+          titleView: NSHostingView(rootView: SettingsToolbarTitle(navigation: navigation)))
+        window.contentViewController = controller
+        window.toolbar = controller.makeToolbar()
+        window.toolbarStyle = .unified
+      }
     }
     NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
@@ -142,6 +162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
   func windowWillClose(_ notification: Notification) {
     guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+    for kind in CredentialKind.allCases { model.cancelCredentialValidation(kind) }
+    model.settingsWindowWillClose.send()
+    if let sheet = window.attachedSheet { window.endSheet(sheet) }
     setSettingsWindowVisible(false)
   }
 
