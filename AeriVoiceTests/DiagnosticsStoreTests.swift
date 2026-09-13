@@ -75,8 +75,73 @@ final class DiagnosticsStoreTests: XCTestCase {
     try await store.recoverAndPrune(now: now, acceptLegacyCheckpoint: false)
     XCTAssertFalse(exists(directory, LatencyBenchmarkStore.logFilename))
     try await store.checkpoint(record)
-    try await store.discardActiveCheckpoint()
+    try await store.discardCheckpointAndPrune(now: now)
     XCTAssertFalse(exists(directory, LatencyBenchmarkStore.activeFilename))
+  }
+
+  @MainActor
+  func testDisabledStartupPrunesBothStreamsAndArchivesWithoutRecoveringCheckpoint() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = LatencyBenchmarkStore(directoryURL: directory)
+    try await store.checkpoint(storedRecord())
+    let oldDate = now.addingTimeInterval(-366 * 86_400)
+    let expired = storedRecord(startedAt: oldDate)
+    let fresh = storedRecord()
+    let encoder = DiagnosticsJSON.encoder()
+    let newline = Data([0x0A])
+    let freshInteraction = try encoder.encode(fresh) + newline
+    let mixedInteractions = try encoder.encode(expired) + newline + freshInteraction
+    let freshRuntime = runtime(now) + newline
+    let mixedRuntime = runtime(oldDate) + newline + freshRuntime
+    let interactionArchive = directory.appending(
+      path: "Archives/interactions-v1-1-\(UUID().uuidString).jsonl")
+    let runtimeArchive = directory.appending(
+      path: "Archives/runtime-v1-1-\(UUID().uuidString).jsonl")
+    let streams = [
+      (directory.appending(path: LatencyBenchmarkStore.logFilename), mixedInteractions, freshInteraction),
+      (directory.appending(path: LatencyBenchmarkStore.runtimeFilename), mixedRuntime, freshRuntime),
+      (interactionArchive, mixedInteractions, freshInteraction),
+      (runtimeArchive, mixedRuntime, freshRuntime),
+    ]
+    for (url, mixed, _) in streams { try mixed.write(to: url) }
+    let expiredArchive = directory.appending(
+      path: "Archives/runtime-v1-2-\(UUID().uuidString).jsonl")
+    try (runtime(oldDate) + newline).write(to: expiredArchive)
+
+    let recorder = LatencyBenchmarkRecorder(directoryURL: directory, wallNow: { self.now }, enabled: false)
+    await recorder.flushForTesting()
+
+    for (url, _, expected) in streams {
+      XCTAssertEqual(try Data(contentsOf: url), expected, url.lastPathComponent)
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: expiredArchive.path))
+    XCTAssertFalse(exists(directory, LatencyBenchmarkStore.activeFilename))
+    XCTAssertFalse(recorder.isRecording)
+  }
+
+  @MainActor
+  func testDisabledStartupDoesNotCreateDiagnosticsDirectory() async {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recorder = LatencyBenchmarkRecorder(directoryURL: directory, enabled: false)
+    await recorder.flushForTesting()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+  }
+
+  func testDiscardCheckpointAndPruneEnforcesStorageCap() async throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let seedStore = LatencyBenchmarkStore(directoryURL: directory)
+    try await seedStore.appendRuntime(runtime(now), now: now)
+    try await seedStore.checkpoint(storedRecord())
+    let store = LatencyBenchmarkStore(directoryURL: directory, maxTotalBytes: 1)
+
+    try await store.discardCheckpointAndPrune(now: now)
+
+    XCTAssertFalse(exists(directory, LatencyBenchmarkStore.runtimeFilename))
+    XCTAssertFalse(exists(directory, LatencyBenchmarkStore.activeFilename))
+    XCTAssertFalse(exists(directory, LatencyBenchmarkStore.logFilename))
   }
 
   func testRuntimeOnlyPrunesAgeAndCapsIncludingProtectedCheckpoint() async throws {
@@ -186,10 +251,11 @@ final class DiagnosticsStoreTests: XCTestCase {
     Data("{\"schemaVersion\":1,\"timestamp\":\"\(ISO8601DateFormatter().string(from: date))\",\"event\":\"runtime_started\"}".utf8)
   }
 
-  private func storedRecord() -> LatencyBenchmarkRecord {
-    LatencyBenchmarkRecord(
-      schemaVersion: 1, interactionID: UUID(), startedAt: now,
-      lastCheckpointAt: now, endedAt: now,
+  private func storedRecord(startedAt: Date? = nil) -> LatencyBenchmarkRecord {
+    let date = startedAt ?? now
+    return LatencyBenchmarkRecord(
+      schemaVersion: 1, interactionID: UUID(), startedAt: date,
+      lastCheckpointAt: date, endedAt: date,
       environment: BenchmarkEnvironment(appVersion: nil, appBuild: nil,
                                         macOSVersion: "TestOS", architecture: "arm64"),
       milestonesMS: [BenchmarkMilestone.terminal.rawValue: 1],

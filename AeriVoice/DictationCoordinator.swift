@@ -82,7 +82,7 @@ final class DictationCoordinator: ObservableObject {
     audio: AudioCapturing = AudioCaptureService(),
     transcriber: RealtimeTranscribing = RealtimeTranscriptionRouter(),
     cleaner: CleaningText = CleanupClientRouter(), muter: OutputMuting = OutputMuteController(),
-    inserter: TextInserting = TextInsertionService(), notch: NotchPresenting = NotchPresenter(),
+    inserter: TextInserting? = nil, notch: NotchPresenting = NotchPresenter(),
     benchmark: LatencyBenchmarkRecording = LatencyBenchmarkRecorder(),
     readiness: DictationReadinessChecking = SystemDictationReadiness(),
     cuePlayer: SoundCuePlaying = SoundCuePlayer(),
@@ -94,12 +94,22 @@ final class DictationCoordinator: ObservableObject {
     self.transcriber = transcriber
     self.cleaner = cleaner
     self.muter = muter
-    self.inserter = inserter
+    self.inserter = inserter ?? TextInsertionService(
+      restoreEnabled: { [weak preferences] in preferences?.restoreClipboard == true },
+      makeRestorationReport: { [weak runtimeDiagnostics] in
+        let interactionID = runtimeDiagnostics?.currentInteractionID
+        return { [weak runtimeDiagnostics] outcome in
+          runtimeDiagnostics?.clipboardRestorationFinished(outcome, interactionID: interactionID)
+        }
+      })
     self.notch = notch
     self.benchmark = benchmark
     self.readiness = readiness
     self.cuePlayer = cuePlayer
     self.runtimeDiagnostics = runtimeDiagnostics
+    preferences.onClipboardRestorationChange = { [weak self] enabled in
+      if !enabled { self?.inserter.invalidatePendingRestoration() }
+    }
     audio.onAudio = { [weak self] data in
       DispatchQueue.main.async { self?.enqueue(data) }
     }
@@ -138,6 +148,7 @@ final class DictationCoordinator: ObservableObject {
     switch phase {
     case .idle, .success, .error:
       guard startTask == nil else { return }
+      inserter.invalidatePendingRestoration()
       let transcriptionConfiguration = TranscriptionConfiguration(
         provider: preferences.transcriptionProvider)
       let cleanupConfiguration = preferences.cleanupConfiguration
@@ -197,6 +208,7 @@ final class DictationCoordinator: ObservableObject {
   }
 
   func cancel() {
+    inserter.invalidatePendingRestoration()
     launchPreparationTask?.cancel()
     launchPreparationTask = nil
     audio.discardPreparation()
@@ -303,10 +315,8 @@ final class DictationCoordinator: ObservableObject {
     bufferedBytes = 0
     connected = false
 
-    if transcriptionProvider == .meta {
-      beginTranscriberConnection(
-        configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
-    }
+    beginTranscriberConnection(
+      configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
 
     benchmark.mark(.startCuePlaybackStarted)
     play(.start)
@@ -334,13 +344,6 @@ final class DictationCoordinator: ObservableObject {
       return
     }
     beginLimitTimer(id: id)
-
-    if transcriptionProvider != .meta {
-      guard
-        await connectTranscriber(
-          configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
-      else { return }
-    }
 
     guard sessionID == id, phase == .starting || phase == .processing else { return }
     if phase == .starting {
@@ -484,7 +487,7 @@ final class DictationCoordinator: ObservableObject {
         notch.present(state: state)
         notch.hide(after: .seconds(2))
       }
-      finishSession(id: id)
+      finishSession(id: id, preserveRestoration: result == .pasteSent)
     } catch AppError.emptyTranscript {
       benchmark.finish(
         .emptyTranscript, stage: .sttFinalize, category: .emptyTranscript, httpStatus: nil)
@@ -643,8 +646,9 @@ final class DictationCoordinator: ObservableObject {
     finishSession(id: id)
   }
 
-  private func finishSession(id: DictationSessionID) {
+  private func finishSession(id: DictationSessionID, preserveRestoration: Bool = false) {
     guard sessionID == id else { return }
+    if !preserveRestoration { inserter.invalidatePendingRestoration() }
     targetCaptureTask?.cancel()
     targetCaptureTask = nil
     cancelConnection()

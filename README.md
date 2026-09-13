@@ -94,12 +94,12 @@ available in Settings.
 <details>
 <summary>Verify your download</summary>
 
-Download `AeriVoice-v0.1.0-beta.5-arm64.dmg` and its `.sha256` file from
+Download `AeriVoice-v0.1.0-beta.6-arm64.dmg` and its `.sha256` file from
 [GitHub Releases](https://github.com/DanielOu1208/aerivoice/releases), then run
 this in your download directory before opening the DMG:
 
 ```sh
-shasum -a 256 -c AeriVoice-v0.1.0-beta.5-arm64.dmg.sha256
+shasum -a 256 -c AeriVoice-v0.1.0-beta.6-arm64.dmg.sha256
 ```
 
 </details>
@@ -112,7 +112,8 @@ Updates are manual—check GitHub Releases for new versions.
   transcripts go to your cleanup provider. No AeriVoice account or first-party server.
 - **Keychain storage:** API keys stay in macOS Keychain and authenticate requests
   to your chosen providers.
-- **Local diagnostics:** timing logs stay on your Mac for 90 days, without
+- **Local diagnostics:** optional diagnostics are off by default. When enabled,
+  records stay on your Mac for up to 365 days within a 200 MB limit, without
   transcript text, audio, or credentials.
 
 [Privacy details](PRIVACY.md) · [Report a security issue privately](SECURITY.md)
