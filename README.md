@@ -126,6 +126,19 @@ engine when assets are unavailable.
 Local accuracy may be lower than cloud models. [Local dictation](docs/LOCAL-DICTATION.md)
 covers model requirements, shortcuts, privacy, and validation.
 
+## Custom cleanup instructions
+
+Under **AI Cleanup → Cleanup style**, add instructions for tone, spelling,
+terminology, translation, or formatting. The same instructions apply to both
+Faithful and Polished. Leave the field empty, or choose **Clear**, to use the
+built-in style alone.
+
+Instructions are saved locally and sent to your selected cleanup provider with
+each dictation. They are not included in routine diagnostic logs. The limit is
+2,000 characters; over-limit edits remain visible but are not saved. Changes made
+while recording apply to the next dictation. Offline mode disables AI cleanup
+and these controls.
+
 ## Getting started
 
 AeriVoice is currently in **beta**. You'll need an **Apple Silicon Mac running
