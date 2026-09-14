@@ -101,8 +101,8 @@ the Provider section.
 ## Getting started
 
 AeriVoice is currently in **beta**. You'll need an **Apple Silicon Mac running
-macOS 26 or newer**, plus your own provider accounts. Provider charges and usage
-limits may apply.
+macOS 26 or newer**. Cloud transcription and cleanup use your own provider
+accounts; Offline mode needs no API keys. Provider charges and usage limits may apply.
 
 1. **Install.** [Download the beta](https://github.com/DanielOu1208/aerivoice/releases/latest), open the DMG, and drag AeriVoice to Applications.
 2. **Set up.** Connect your cloud providers, or choose a local model and enable Offline mode to skip cloud cleanup and API keys. Apple Speech reuses installed language support or offers a download; Nemotron requires its own download. Grant Microphone and Accessibility permission.

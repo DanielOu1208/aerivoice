@@ -8,7 +8,7 @@ enum OnboardingStep: Int, CaseIterable {
 
   var title: String {
     switch self {
-    case .providers: "Connect your services"
+    case .providers: "Set up dictation"
     case .permissions: "Allow system access"
     case .shortcut: "Choose your shortcut"
     }
@@ -66,11 +66,11 @@ struct OnboardingView: View {
   @State private var failedLoginItemRequest: Bool?
   @State private var recoveryMessage: String?
 
-  init(model: AppModel, onFinished: @escaping () -> Void) {
+  init(model: AppModel, startAtBeginning: Bool = false, onFinished: @escaping () -> Void) {
     self.model = model
     self.preferences = model.preferences
     self.onFinished = onFinished
-    _step = State(initialValue: model.onboardingReadiness.recommendedStep)
+    _step = State(initialValue: startAtBeginning ? .providers : model.onboardingReadiness.recommendedStep)
     _launchAtLogin = State(initialValue: model.preferences.launchAtLogin)
   }
 
@@ -143,47 +143,7 @@ struct OnboardingView: View {
   @ViewBuilder private var stepContent: some View {
     switch step {
     case .providers:
-      Form {
-        Section("Transcription provider") {
-          ProviderSelectionRow(
-            model: model, kind: preferences.transcriptionProvider.credentialKind,
-            allowsRemoval: false, allowsLocalManagement: false
-          ) {
-            Picker("Provider", selection: $preferences.transcriptionProvider) {
-              ForEach(TranscriptionProvider.allCases) { provider in
-                Text(provider.displayName).tag(provider)
-              }
-            }
-          }
-          .id(preferences.transcriptionProvider)
-          .disabled(preferences.offlineMode || model.coordinator.canCancel)
-          if preferences.effectiveTranscriptionProvider == .local {
-            LocalTranscriptionSettings(model: model)
-            OfflineModeControl(model: model, offersLocalSetup: false)
-          } else {
-            Button("Try Apple Speech") {
-              preferences.localTranscriptionModel = .apple
-              preferences.transcriptionProvider = .local
-            }
-          }
-        }
-        Section("AI cleanup") {
-          ProviderSelectionRow(
-            model: model, kind: preferences.cleanupProvider.credentialKind,
-            allowsRemoval: false
-          ) {
-            Picker("Provider", selection: $preferences.cleanupProvider) {
-              ForEach(CleanupProvider.allCases, id: \.self) { provider in
-                Text(provider.displayName + (provider.isExperimental ? " (Experimental)" : ""))
-                  .tag(provider)
-              }
-            }
-          }
-          .id(preferences.cleanupProvider)
-          .disabled(preferences.offlineMode)
-        }
-      }
-      .formStyle(.grouped)
+      OnboardingProviderSetup(model: model)
     case .permissions:
       permissionStep
     case .shortcut:
@@ -196,12 +156,6 @@ struct OnboardingView: View {
     let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     let microphoneAction = MicrophonePermissionAction(status: microphoneStatus)
     return Form {
-      Section {
-        Text(
-          "AeriVoice asks only for the two permissions it needs. Neither permission gives AeriVoice access to stored recordings or passwords."
-        )
-        .foregroundStyle(.secondary)
-      }
       Section {
         PermissionStatusRow(
           title: "Microphone",
@@ -274,7 +228,7 @@ struct OnboardingView: View {
   private var stepSubtitle: String {
     switch step {
     case .providers:
-      "Connect cloud services, or set up a local model and enable Offline mode."
+      "Choose a cloud service or transcribe on this Mac with Apple Speech or NVIDIA Nemotron."
     case .permissions:
       "You stay in control of when AeriVoice can listen and insert text."
     case .shortcut:

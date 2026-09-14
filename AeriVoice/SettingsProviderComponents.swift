@@ -151,10 +151,12 @@ struct LocalProviderAccountRow: View {
     .sheet(isPresented: $showsSetup) {
       VStack(alignment: .leading, spacing: 0) {
         Form {
-          Section("Local transcription") {
-            Text("Transcribe on this Mac. No account or API key required.")
-              .font(.caption).foregroundStyle(.secondary)
+          Section {
             LocalTranscriptionSettings(model: model)
+          } header: {
+            Text("Local transcription")
+          } footer: {
+            Text("Local accuracy may be lower than cloud models.")
           }
         }
         .formStyle(.grouped)

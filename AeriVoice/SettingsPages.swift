@@ -78,21 +78,11 @@ struct DictationSettingsPage: View {
     Form {
       Section("Transcription") {
         ProviderSelectionRow(model: model, kind: preferences.effectiveTranscriptionProvider.credentialKind) {
-          Picker("Provider", selection: Binding(
-            get: { preferences.effectiveTranscriptionProvider },
-            set: { preferences.transcriptionProvider = $0 })
-          ) {
-            ForEach(TranscriptionProvider.allCases) { provider in
-              Text(provider.displayName).tag(provider)
-            }
-          }
-          .disabled(preferences.offlineMode)
+          TranscriptionModelPicker(model: model)
         }
         .id(preferences.effectiveTranscriptionProvider)
         .disabled(model.coordinator.canCancel || model.changingOfflineMode)
-        if preferences.effectiveTranscriptionProvider == .local {
-          LocalTranscriptionModelPicker(model: model, title: "Model")
-        } else {
+        if preferences.effectiveTranscriptionProvider != .local {
           LabeledContent {
             Text(preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
           } label: {

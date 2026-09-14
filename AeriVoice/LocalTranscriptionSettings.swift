@@ -58,23 +58,30 @@ struct LocalTranscriptionModelPicker: View {
 }
 
 struct LocalTranscriptionSettings: View {
+  enum Presentation { case management, onboarding }
   @ObservedObject var model: AppModel
   @ObservedObject private var preferences: AppPreferences
   @State private var installedAppleLocales: Set<String> = []
+  let presentation: Presentation
 
-  init(model: AppModel) {
+  init(model: AppModel, presentation: Presentation = .management) {
     self.model = model
     preferences = model.preferences
+    self.presentation = presentation
   }
 
   var body: some View {
-    LocalTranscriptionModelPicker(model: model)
-    Text("Accuracy may be lower than cloud models.")
-      .font(.caption).foregroundStyle(.secondary)
+    if presentation == .management {
+      HStack {
+        LocalTranscriptionModelPicker(model: model)
+        SettingsInfoButton(title: "Local transcription", message: preferences.localTranscriptionModel.setupDescription)
+      }
+    }
     if preferences.localTranscriptionModel == .nemotron {
       LocalModelSetupView(
         controller: model.localModel, offline: preferences.offlineMode,
-        allowsPreparation: preferences.effectiveTranscriptionProvider == .local
+        allowsPreparation: preferences.effectiveTranscriptionProvider == .local,
+        compact: true, showsInstalledRemoval: presentation == .management
       )
       .disabled(model.coordinator.canCancel || model.changingOfflineMode)
     } else {
@@ -116,10 +123,6 @@ struct LocalTranscriptionSettings: View {
         preferences.appleSpeechLocale = model.appleSpeech.localeIdentifier
       }
     }
-    Text(
-      "Transcribes on this Mac. No NVIDIA model download required. Apple may need to download language support."
-    )
-    .font(.caption).foregroundStyle(.secondary)
     switch model.appleSpeech.state {
     case .ready:
       Label("Ready · works offline", systemImage: "checkmark.circle.fill").foregroundStyle(.green)

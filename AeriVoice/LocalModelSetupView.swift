@@ -4,11 +4,15 @@ struct LocalModelSetupView: View {
   @ObservedObject var controller: LocalModelController
   var offline = false
   var allowsPreparation = true
+  var compact = false
+  var showsInstalledRemoval = true
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Nemotron 3.5 — English").font(.headline)
-      Text(offline ? "Transcribes audio on this Mac. AI cleanup is off." : "Transcribes audio on this Mac. No transcription API key needed. AI cleanup settings still apply unless Offline mode is enabled.")
-        .font(.caption).foregroundStyle(.secondary)
+      if !compact {
+        Text("Nemotron 3.5 — English").font(.headline)
+        Text(offline ? "Transcribes audio on this Mac. AI cleanup is off." : "Transcribes audio on this Mac. No transcription API key needed. AI cleanup settings still apply unless Offline mode is enabled.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
       switch controller.state {
       case .missing:
         Button("Download model · 611 MB") { controller.download() }.disabled(offline)
@@ -32,7 +36,7 @@ struct LocalModelSetupView: View {
         ProgressView("Removing downloaded files…")
       case .ready:
         Label("Ready · works offline", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-        removeButton
+        if showsInstalledRemoval { removeButton }
       case .downloading(let progress):
         ProgressView("Downloading model…", value: progress)
         Button("Cancel download") { controller.cancelDownload() }

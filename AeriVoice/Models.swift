@@ -103,6 +103,15 @@ enum LocalTranscriptionModel: String, CaseIterable, Codable, Identifiable, Senda
     case .apple: "Apple Speech"
     }
   }
+
+  var setupDescription: String {
+    switch self {
+    case .apple:
+      "Apple Speech transcribes on this Mac. Apple may need to download support for your chosen language. No NVIDIA weights or transcription account are needed."
+    case .nemotron:
+      "NVIDIA Nemotron is the recommended local model for English. It needs a 611 MB download and transcribes on this Mac without a transcription account."
+    }
+  }
 }
 
 struct TranscriptionConfiguration: Equatable, Sendable {

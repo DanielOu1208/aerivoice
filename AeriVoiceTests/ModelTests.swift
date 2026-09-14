@@ -186,6 +186,19 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(revoked.recoveryStep(from: .shortcut), .permissions)
   }
 
+  func testCombinedOnboardingChoicesPreserveCloudAndLocalEngineRouting() {
+    for choice in TranscriptionChoice.allCases {
+      let restored = TranscriptionChoice(
+        provider: choice.provider, localModel: choice.localModel ?? .nemotron)
+      XCTAssertEqual(restored, choice)
+    }
+    XCTAssertEqual(TranscriptionChoice.apple.provider, .local)
+    XCTAssertEqual(TranscriptionChoice.apple.localModel, .apple)
+    XCTAssertEqual(TranscriptionChoice.nemotron.localModel, .nemotron)
+    XCTAssertNil(TranscriptionChoice.soniox.localModel)
+    XCTAssertNil(TranscriptionChoice.meta.localModel)
+  }
+
   @MainActor
   func testCleanupStyleDefaultsToPolishedAndPreservesEverySavedStyle() {
     let suite = "AeriVoiceTests.CleanupStyle.\(UUID().uuidString)"

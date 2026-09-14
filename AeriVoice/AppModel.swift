@@ -178,7 +178,27 @@ final class AppModel: ObservableObject {
     AVCaptureDevice.authorizationStatus(for: .audio) == .authorized && AXIsProcessTrusted()
   }
 
-  func setOfflineMode(_ enabled: Bool) {
+  func selectTranscriptionProvider(_ provider: TranscriptionProvider) {
+    guard !coordinator.canCancel, !changingOfflineMode,
+      provider != preferences.effectiveTranscriptionProvider else { return }
+    if preferences.offlineMode, provider != .local {
+      setOfflineMode(false, selecting: provider)
+    } else {
+      preferences.transcriptionProvider = provider
+    }
+  }
+
+  func selectTranscriptionChoice(_ choice: TranscriptionChoice) {
+    guard !coordinator.canCancel, !changingOfflineMode, !appleSpeech.isDownloading else { return }
+    if let localModel = choice.localModel {
+      let installed = localModel == .apple ? appleSpeech.assetsInstalled : self.localModel.assetsInstalled
+      guard !preferences.offlineMode || installed else { return }
+      setLocalTranscriptionModel(localModel)
+    }
+    selectTranscriptionProvider(choice.provider)
+  }
+
+  func setOfflineMode(_ enabled: Bool, selecting provider: TranscriptionProvider? = nil) {
     guard enabled != preferences.offlineMode, canChangeOfflineMode else { return }
     changingOfflineMode = true
     shortcutMonitor.stop()
@@ -189,7 +209,12 @@ final class AppModel: ObservableObject {
     Task { @MainActor in
       await AppNetworkPolicy.shared.setOffline(enabled)
       if enabled { await localModel.cancelDownloadAndWait() }
-      else { preferences.setOfflineMode(false) }
+      else {
+        // Restore network access before selecting a cloud provider. Keep controls
+        // disabled until both preferences agree with the new mode.
+        if let provider { preferences.transcriptionProvider = provider }
+        preferences.setOfflineMode(false)
+      }
       changingOfflineMode = false
       prewarmTranscription()
       if !capturingShortcut, let shortcut = preferences.shortcut {

@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   private var statusItem: NSStatusItem?
   private var settingsWindow: NSWindow?
   private var settingsShowsOnboarding = false
+  private var onboardingRequested = ProcessInfo.processInfo.arguments.contains("--show-onboarding")
   private var cancellables = Set<AnyCancellable>()
 
   init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
@@ -29,7 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     model.coordinator.prepareForLaunch(
       microphoneAuthorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
     model.prewarmTranscription()
-    if model.preferences.onboardingComplete, model.preferences.effectiveTranscriptionProvider == .local {
+    if onboardingRequested {
+      openSettings()
+    } else if model.preferences.onboardingComplete, model.preferences.effectiveTranscriptionProvider == .local {
       Task { @MainActor [weak self] in
         guard let self else { return }
         await model.localModel.waitForPreparation()
@@ -167,13 +170,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       settingsWindow = window
       window.center()
     }
-    let needsOnboarding = !model.preferences.onboardingComplete
+    let needsOnboarding = onboardingRequested || !model.preferences.onboardingComplete
     if window.contentViewController == nil || settingsShowsOnboarding != needsOnboarding {
       settingsShowsOnboarding = needsOnboarding
       if needsOnboarding {
         window.toolbar = nil
         window.contentViewController = NSHostingController(
-          rootView: OnboardingView(model: model) { [weak window] in window?.close() })
+          rootView: OnboardingView(model: model, startAtBeginning: onboardingRequested) { [weak self, weak window] in
+            self?.onboardingRequested = false
+            window?.close()
+          })
       } else {
         let navigation = SettingsNavigation(model: model)
         let controller = SettingsSplitViewController(
