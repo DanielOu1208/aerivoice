@@ -37,8 +37,11 @@ AI, and keep writing without switching windows.
 
 - **Fast transcription. Fast cleanup.** Pair Soniox's live transcription with
   Cerebras-powered AI cleanup for ready-to-use text with minimal waiting.
-- **Choose your providers and models.** Pick from supported transcription and
-  cleanup options to tune your setup around speed, quality, and cost.
+- **Choose your providers and models.** Pick from cloud or on-device transcription
+  and cloud cleanup options to tune your setup around speed, quality, and cost.
+- **Dictate offline when you need to.** Apple Speech or a downloaded Nemotron model
+  transcribes on your Mac; Offline mode inserts the result with no AI cleanup and
+  no cloud keys.
 - **Your words, your style.** Polished mode refines your writing by default.
   Choose Faithful mode for lighter edits; existing style choices are preserved.
 - **Stay in your flow.** Tap or hold a global shortcut, follow the live transcript
@@ -67,10 +70,12 @@ Choose transcription and cleanup separately in Settings. Cloud providers use you
 | --- | --- | --- |
 | Live transcription | <img src="docs/images/providers/soniox.png" width="24" height="24" alt=""> **Soniox** — Default | Soniox Realtime |
 | Live transcription | <img src="docs/images/providers/meta.svg" width="24" height="24" alt=""> **Meta** | Muse Voice Transcribe 1.0 |
-| Live transcription | **Local** | Apple Speech (system-managed language support) or NVIDIA Nemotron 3.5 (English) — Recommended |
+| Live transcription | **Local** — On-device | **NVIDIA Nemotron 3.5** (English, ~611 MB) — Recommended, or **Apple Speech** (system-managed languages) |
 | AI cleanup | <img src="docs/images/providers/openrouter.svg" width="24" height="24" alt=""> **OpenRouter** — Default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras, plus a searchable catalog of compatible text models |
 | AI cleanup | <img src="docs/images/providers/cerebras.svg" width="24" height="24" alt=""> **Cerebras** | Qwen 3.8 27B |
 | AI cleanup | <img src="docs/images/providers/groq.svg" width="24" height="24" alt=""> **Groq** — Experimental | Qwen 3.8 27B |
+
+AI cleanup runs in the cloud; Offline mode skips it.
 
 **Default:** Soniox + Gemini 3.5 Flash Lite via OpenRouter, with Minimal reasoning.
 
@@ -98,6 +103,29 @@ cost, and cleanup quality vary; the ten-second cleanup deadline still applies.
 Zero data retention is required by default for these models and can be changed in
 the Provider section.
 
+## Local and offline dictation
+
+Choose **Local** in Dictation settings to transcribe on your Mac:
+
+| Engine | Notes |
+| --- | --- |
+| **NVIDIA Nemotron 3.5** — Recommended | English, via FluidAudio and Core ML. ~611 MB download; uses the Dictionary as recognition hints. |
+| **Apple Speech** | macOS 26 SpeechAnalyzer. Reuses installed language support; a missing language needs an Apple-managed download. |
+
+**Providers → Local models → Manage** owns downloads, language setup, status, and
+removal; interrupted Nemotron downloads can be resumed or removed. Selecting a
+local model does not disable cloud cleanup on its own — outside Offline mode, your
+cleanup provider still receives the transcript.
+
+**Offline mode** (General, the menu bar, or local onboarding) uses the selected
+on-device engine, skips AI cleanup, and needs no cloud keys. It blocks new
+AeriVoice-initiated network requests, is remembered across launches, and preserves
+your provider choices for when you switch back. Local never falls back to a cloud
+engine when assets are unavailable.
+
+Local accuracy may be lower than cloud models. [Local dictation](docs/LOCAL-DICTATION.md)
+covers model requirements, shortcuts, privacy, and validation.
+
 ## Getting started
 
 AeriVoice is currently in **beta**. You'll need an **Apple Silicon Mac running
@@ -105,8 +133,8 @@ macOS 26 or newer**. Cloud transcription and cleanup use your own provider
 accounts; Offline mode needs no API keys. Provider charges and usage limits may apply.
 
 1. **Install.** [Download the beta](https://github.com/DanielOu1208/aerivoice/releases/latest), open the DMG, and drag AeriVoice to Applications.
-2. **Set up.** Connect your cloud providers, or choose a local model and enable Offline mode to skip cloud cleanup and API keys. Apple Speech reuses installed language support or offers a download; Nemotron requires its own download. Grant Microphone and Accessibility permission.
-3. **Dictate.** Focus a text field and tap or hold your configured shortcut.
+2. **Set up.** Connect your cloud providers, or choose a local model and enable Offline mode to skip cloud cleanup and API keys. Apple Speech reuses installed language support; Nemotron needs a ~611 MB download. Manage either under **Providers → Local models**. Grant Microphone and Accessibility permission.
+3. **Dictate.** Focus a text field and use your shortcut — Hybrid by default: tap to toggle, or hold and release to finish. Toggle and Hold modes, plus exact left/right Command and Option keys, are in Settings.
 
 For the default setup: [Soniox API key](https://console.soniox.com/) +
 [OpenRouter API key](https://openrouter.ai/settings/keys). Other providers are
@@ -131,6 +159,9 @@ Updates are manual—check GitHub Releases for new versions.
 
 - **Cloud processing:** audio and vocabulary go to your transcription provider;
   transcripts go to your cleanup provider. No AeriVoice account or first-party server.
+- **On-device option:** Apple Speech or downloaded Nemotron weights transcribe on
+  your Mac; Offline mode skips cleanup and blocks new AeriVoice-initiated network
+  requests. Downloads connect to Apple or Hugging Face.
 - **Keychain storage:** API keys stay in macOS Keychain and authenticate requests
   to your chosen providers.
 - **Local diagnostics:** optional diagnostics are off by default. When enabled,
@@ -178,9 +209,3 @@ pull requests; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Source code and original AeriVoice artwork use the [MIT License](LICENSE).
 Provider logos belong to their respective owners; see [artwork credits](docs/ARTWORK.md).
-
-## Local transcription
-
-AeriVoice also supports downloadable, on-device English transcription with Nemotron 3.5 and the existing Dictionary. See [Local dictation](docs/LOCAL-DICTATION.md) for setup, model requirements, privacy boundaries, and validation.
-
-Local transcription accuracy may be lower than cloud models. [Local setup, Offline mode, and shortcut behavior](docs/LOCAL-DICTATION.md) describes model downloads and the Hybrid, Toggle, and Hold modes.
