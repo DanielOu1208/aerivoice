@@ -1,9 +1,82 @@
 import Foundation
+import Speech
 import XCTest
 @testable import AeriVoice
 
 @MainActor
 final class AppleSpeechTests: XCTestCase {
+  func testEquivalentReservationAtCapacityDoesNotReleaseAnyLanguage() async throws {
+    var attempts = 0
+    let reservations = AppleSpeechReservations(
+      reserveLocale: { locale in
+        XCTAssertEqual(locale.identifier, "en-CA")
+        attempts += 1
+        return false // Already reserved under Apple's backing locale variant.
+      },
+      reservedLocales: { [Locale(identifier: "fr-FR"), Locale(identifier: "en-US")] },
+      releaseLocale: { _ in XCTFail("Existing reservations must be retained"); return true })
+    try await reservations.reserve(Locale(identifier: "en-CA"))
+    XCTAssertEqual(attempts, 1)
+  }
+
+  func testReservationReleasesOneLanguageOnlyAfterCapacityError() async throws {
+    var events: [String] = []
+    let reservations = AppleSpeechReservations(
+      reserveLocale: { _ in
+        events.append("reserve")
+        if events.count == 1 { throw SFSpeechError(.tooManyAssetLocalesAllocated) }
+        return true
+      },
+      reservedLocales: { [Locale(identifier: "fr-FR"), Locale(identifier: "en-US")] },
+      releaseLocale: { locale in events.append("release \(locale.identifier)"); return true })
+    try await reservations.reserve(Locale(identifier: "de-DE"))
+    XCTAssertEqual(events, ["reserve", "release fr-FR", "reserve"])
+  }
+
+  func testReservationErrorsOtherThanCapacityPreserveLanguages() async {
+    let reservations = AppleSpeechReservations(
+      reserveLocale: { _ in throw SFSpeechError(.cannotAllocateUnsupportedLocale) },
+      reservedLocales: { XCTFail("Unrelated errors must not inspect eviction candidates"); return [] },
+      releaseLocale: { _ in XCTFail("Unrelated errors must not release languages"); return true })
+    do {
+      try await reservations.reserve(Locale(identifier: "xx-XX"))
+      XCTFail("The original error must propagate")
+    } catch let error as SFSpeechError {
+      XCTAssertEqual(error.code, .cannotAllocateUnsupportedLocale)
+    } catch { XCTFail("Unexpected error: \(error)") }
+  }
+
+  func testInstalledModuleRemainsReadyWhenLanguageListIsStale() async throws {
+    let assets = SystemAppleSpeechAssets(moduleStatus: { _ in .installed }, installedLocales: { [] })
+    let installed = try await assets.installed(Locale(identifier: "en_CA"))
+    XCTAssertTrue(installed)
+  }
+
+  func testMissingModuleAndMissingLanguageAreNotMarkedInstalled() async throws {
+    let assets = SystemAppleSpeechAssets(moduleStatus: { _ in .supported }, installedLocales: { [] })
+    let installed = try await assets.installed(Locale(identifier: "en_CA"))
+    XCTAssertFalse(installed)
+  }
+
+  func testCompletedDownloadWithoutReadyAssetsShowsFailureInsteadOfDownloadLoop() async {
+    let assets = FakeAppleSpeechAssets()
+    assets.downloadInstallsAssets = false
+    let controller = AppleSpeechController(assets: assets, preferredLanguages: ["en-US"])
+    controller.select(true, localeIdentifier: "en-US")
+    await controller.waitForPreparation()
+    controller.download()
+    await assets.waitUntilDownloadStarts()
+    assets.completeDownload()
+    for _ in 0..<100 where controller.isDownloading { await Task.yield() }
+    await controller.waitForPreparation()
+    guard case .failed(let message) = controller.state else {
+      return XCTFail("An incomplete installation must explain why the model is not ready")
+    }
+    XCTAssertTrue(message.contains("not ready yet"))
+    XCTAssertFalse(controller.isReady)
+    XCTAssertEqual(assets.downloadCount, 1)
+  }
+
   func testPreparationNeverDownloadsAssets() async {
     let assets = FakeAppleSpeechAssets()
     let controller = AppleSpeechController(assets: assets, preferredLanguages: ["en-US"])
@@ -116,6 +189,7 @@ private final class FakeAppleSpeechAssets: AppleSpeechAssetManaging {
   var installationCount = 0
   private var installation: CheckedContinuation<Bool, Never>?
   var downloadCount = 0
+  var downloadInstallsAssets = true
   private var started: CheckedContinuation<Void, Never>?
   private var completion: CheckedContinuation<Void, Never>?
   func supportedLocales() async -> [Locale] { [Locale(identifier: "en-US")] }
@@ -143,7 +217,7 @@ private final class FakeAppleSpeechAssets: AppleSpeechAssetManaging {
       started?.resume()
       started = nil
     }
-    hasAssets = true
+    hasAssets = downloadInstallsAssets
   }
   func waitUntilDownloadStarts() async {
     if completion != nil { return }

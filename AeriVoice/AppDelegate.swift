@@ -138,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   @objc private func openLocalSetup() {
     model.showLocalSetup()
     openSettings()
-    model.settingsDestinationRequest = .dictation
+    model.settingsDestinationRequest = .providers
   }
   @objc private func cancel() { model.coordinator.cancel() }
   @objc private func quit() { NSApp.terminate(nil) }

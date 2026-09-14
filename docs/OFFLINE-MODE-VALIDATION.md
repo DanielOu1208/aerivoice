@@ -38,3 +38,35 @@ Native automation could not inspect the installed app's Settings window; the vis
 ## Remaining device acceptance
 
 Physical shortcut presses, actual microphone dictation and insertion into other apps, menu-bar interaction, missing-language downloads, and system asset retry behavior still need manual device acceptance. Trackpad gestures are deferred. Offline mode does not control macOS-managed asset maintenance or automatic retries of an Apple download requested earlier.
+
+## September 14 follow-up: Apple setup and Providers
+
+- The model's actual installed status now takes precedence over Apple's shared language list. A completed request that still has no usable assets displays an explicit failure instead of silently returning to Download.
+- Providers includes Local models with a Manage sheet, shared setup controls, and a link to Dictation settings. Local management remains available offline while cloud account controls remain disabled.
+- Full app suite: 402 passed, 3 live-cloud tests skipped. Regression coverage includes an installed model with a stale language list and an incomplete installation request.
+- The production Apple installation request completed for English (Canada) and reported installed afterward. English assets were already present, so this does not establish a fresh missing-language transfer.
+- Isolated native QA confirmed English ready on launch and reopening, en_CA → en_US → en_CA switching, the Providers sheet, offline control availability, and navigation to Dictation. No Download button was shown because English was already ready.
+- Signed build `2026091401` was installed and relaunched with the existing identity and credential namespace. Installed signature, executable hash equality, and running path passed. Backup: `/Applications/.AeriVoice-before-apple-download-2026091401.app`.
+
+### Local management belongs in Providers
+
+Dictation now retains only provider/model selection and a Manage link alongside Dictionary and Microphone. Model downloads, language setup, status, and removal live in Providers. General and menu-bar setup links open that management sheet. Initial onboarding retains inline setup without links to unavailable Settings navigation.
+
+Native QA passed model switching, direct Manage navigation, sheet dismissal without replay, missing-language setup navigation, and Offline mode preserving/restoring the saved cloud provider. No downloads or permission changes were used. The final full suite passed (401 tests, 3 live-cloud skips); Release build passed. Signed build `2026091402` was installed and relaunched, with signature, executable hash equality, and running path verified. Backup: `/Applications/.AeriVoice-before-local-management-2026091402.app`.
+
+### Installed-app download incident and fresh-download check
+
+The user and native QA reproduced English (Canada) remaining unavailable after a successful request in installed build `2026091402`. Checking again and retrying immediately did not recover it. A signed build with opt-in asset-status tracing (`2026091403`) reported English installed after relaunch; both the user and native QA confirmed Ready. The exact cause was not established: relaunch timing, process/app state, and diagnostic code changes were not independently controlled.
+
+The prior optimized Release binary also reported English Ready under a fresh test-app identity. In a separate Developer ID-signed test copy, French (France) started missing, showed download progress after one click at 1.1 seconds, and was Ready at the 22.1-second observation, without errors or retries. English was restored and the test app quit; the shared French assets remain installed.
+
+Build `2026091403` passed Release compilation, signature/hash/path checks, and installed native readiness inspection. The app was finally relaunched without the temporary `AeriVoiceSpeechAssetTrace` argument. Tracing is off by default and records only asset status, language identifiers, and reservations when explicitly enabled. No keys, permission settings, or downloaded models were removed.
+
+### Final review: onboarding and download recovery
+
+- Onboarding returns to the relevant earlier step when model readiness or permissions are lost. The final Start button now requires complete readiness, and an incomplete finish attempt also routes to recovery instead of silently doing nothing.
+- Interrupted Nemotron downloads are discovered from staging on relaunch and offer Resume and Remove partial download. Cancellation preserves verified completed files; resuming does not fetch them again. Removal shows a busy state and blocks Resume until it completes, including during memory pressure.
+- Apple language reservation first asks the system to recognize existing backing assets. It releases another reservation and retries only for `tooManyAssetLocalesAllocated`; equivalent variants and unrelated failures retain existing reservations.
+- Full app suite: 410 passed, 3 live-cloud tests skipped. After a final manifest-validation guard, the 16 asset tests passed again. New regressions cover onboarding readiness loss, real task cancellation between files, partial-file removal after relaunch, removal/resume ordering, equivalent Apple reservations, capacity errors, and unrelated reservation errors.
+- Release app and Release evaluation harness builds passed. Controlled local harness regressions: 7 passed; Apple harness regressions: 4 passed; model provenance regressions: 2 passed. `git diff --check` passed. Follow-up code review found no remaining issues in these fixes.
+- This pass did not install or restart the production app, download real model weights, mutate Apple language assets, grant permissions, or repeat native UI/microphone acceptance. The earlier English (Canada) incident's exact cause remains unconfirmed.

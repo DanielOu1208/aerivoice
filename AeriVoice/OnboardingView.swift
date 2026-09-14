@@ -43,11 +43,15 @@ struct OnboardingReadiness: Equatable, Sendable {
     return .shortcut
   }
 
+  func recoveryStep(from step: OnboardingStep) -> OnboardingStep? {
+    recommendedStep.rawValue < step.rawValue ? recommendedStep : nil
+  }
+
   func canAdvance(from step: OnboardingStep) -> Bool {
     switch step {
     case .providers: isTranscriptionReady && hasCleanupCredential
     case .permissions: hasPermissions
-    case .shortcut: hasShortcut
+    case .shortcut: isComplete
     }
   }
 }
@@ -60,6 +64,7 @@ struct OnboardingView: View {
   @State private var step: OnboardingStep
   @State private var launchAtLogin: Bool
   @State private var failedLoginItemRequest: Bool?
+  @State private var recoveryMessage: String?
 
   init(model: AppModel, onFinished: @escaping () -> Void) {
     self.model = model
@@ -79,6 +84,11 @@ struct OnboardingView: View {
       navigation
     }
     .frame(minWidth: 700, minHeight: 560)
+    .onChange(of: model.onboardingReadiness) { _, readiness in
+      if let destination = readiness.recoveryStep(from: step) {
+        recover(to: destination)
+      }
+    }
     .alert(
       "Use this shortcut systemwide?",
       isPresented: Binding(
@@ -123,6 +133,9 @@ struct OnboardingView: View {
       ProgressView(
         value: Double(step.rawValue + 1), total: Double(OnboardingStep.allCases.count))
       Text(stepSubtitle).foregroundStyle(.secondary)
+      if let recoveryMessage {
+        Text(recoveryMessage).foregroundStyle(.secondary)
+      }
     }
     .padding(24)
   }
@@ -134,7 +147,7 @@ struct OnboardingView: View {
         Section("Transcription provider") {
           ProviderSelectionRow(
             model: model, kind: preferences.transcriptionProvider.credentialKind,
-            allowsRemoval: false
+            allowsRemoval: false, allowsLocalManagement: false
           ) {
             Picker("Provider", selection: $preferences.transcriptionProvider) {
               ForEach(TranscriptionProvider.allCases) { provider in
@@ -146,7 +159,7 @@ struct OnboardingView: View {
           .disabled(preferences.offlineMode || model.coordinator.canCancel)
           if preferences.effectiveTranscriptionProvider == .local {
             LocalTranscriptionSettings(model: model)
-            OfflineModeControl(model: model)
+            OfflineModeControl(model: model, offersLocalSetup: false)
           } else {
             Button("Try Apple Speech") {
               preferences.localTranscriptionModel = .apple
@@ -280,6 +293,7 @@ struct OnboardingView: View {
 
   private func move(by offset: Int) {
     guard let next = OnboardingStep(rawValue: step.rawValue + offset) else { return }
+    recoveryMessage = nil
     withAnimation(.easeInOut(duration: 0.2)) { step = next }
   }
 
@@ -288,10 +302,17 @@ struct OnboardingView: View {
     case .completed:
       onFinished()
     case .incomplete:
-      break
+      recover(to: model.onboardingReadiness.recommendedStep)
     case .loginItemFailed:
       failedLoginItemRequest = launchAtLogin
     }
+  }
+
+  private func recover(to destination: OnboardingStep) {
+    recoveryMessage = destination == .providers
+      ? "Your transcription setup is no longer ready. Check it before continuing."
+      : "System access changed. Check your permissions before continuing."
+    step = destination
   }
 
 }

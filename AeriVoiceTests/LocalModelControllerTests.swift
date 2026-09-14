@@ -4,8 +4,31 @@ import XCTest
 
 @MainActor
 final class LocalModelControllerTests: XCTestCase {
+  func testResumeCannotRaceRemovalEvenDuringMemoryPressure() async {
+    let assets = SuspendedRemovalAssets()
+    let controller = LocalModelController(assets: assets, observeMemoryPressure: false)
+    controller.select(false)
+    await controller.waitForPreparation()
+    XCTAssertEqual(controller.state, .partial)
+    controller.remove()
+    XCTAssertEqual(controller.state, .removing)
+    XCTAssertFalse(controller.canRemove)
+    controller.download()
+    await assets.waitUntilRemovalStarts()
+    controller.releaseForPressure()
+    controller.download()
+    XCTAssertEqual(controller.state, .removing)
+    let calls = await assets.downloadCalls
+    XCTAssertEqual(calls, 0)
+    await assets.finishRemoval()
+    await controller.waitForPreparation()
+    XCTAssertEqual(controller.state, .missing)
+    XCTAssertTrue(controller.canRemove)
+  }
+
   func testCancelledDownloadHandlesURLSessionCancellation() async {
-    let controller = LocalModelController(assets: SuspendedAvailabilityAssets(), observeMemoryPressure: false)
+    let controller = LocalModelController(
+      assets: SuspendedAvailabilityAssets(installed: false, suspendFirst: false), observeMemoryPressure: false)
     controller.download()
     controller.cancelDownload()
     for _ in 0..<100 { await Task.yield() }
@@ -38,6 +61,32 @@ final class LocalModelControllerTests: XCTestCase {
   }
 }
 
+private actor SuspendedRemovalAssets: LocalModelAssetManaging {
+  private var partial = true
+  private var removal: CheckedContinuation<Void, Never>?
+  private var started: CheckedContinuation<Void, Never>?
+  private(set) var downloadCalls = 0
+  func isInstalled() async -> Bool { false }
+  func hasPartialDownload() async -> Bool { partial }
+  func verifiedDirectory() async throws -> URL { URL(fileURLWithPath: "/unused") }
+  func download(progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+    downloadCalls += 1
+    return URL(fileURLWithPath: "/unused")
+  }
+  func remove() async throws {
+    await withCheckedContinuation {
+      removal = $0
+      started?.resume(); started = nil
+    }
+    partial = false
+  }
+  func waitUntilRemovalStarts() async {
+    if removal != nil { return }
+    await withCheckedContinuation { started = $0 }
+  }
+  func finishRemoval() { removal?.resume(); removal = nil }
+}
+
 private actor SuspendedAvailabilityAssets: LocalModelAssetManaging {
   var pending: CheckedContinuation<Bool, Never>?
   var waiting: CheckedContinuation<Void, Never>?
@@ -54,6 +103,7 @@ private actor SuspendedAvailabilityAssets: LocalModelAssetManaging {
       waiting?.resume(); waiting = nil
     }
   }
+  func hasPartialDownload() async -> Bool { false }
   func waitForCheck() async {
     if pending != nil { return }
     await withCheckedContinuation { waiting = $0 }

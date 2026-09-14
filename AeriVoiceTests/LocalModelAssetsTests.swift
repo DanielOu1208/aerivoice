@@ -5,6 +5,60 @@ import XCTest
 @testable import AeriVoice
 
 final class LocalModelAssetsTests: XCTestCase {
+  @MainActor
+  func testCancelledPartialDownloadCanResumeWithoutFetchingVerifiedFilesAgain() async throws {
+    let root = temporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = FixtureDownload(suspendCall: 2)
+    let assets = store(root, source)
+    let controller = LocalModelController(assets: assets, observeMemoryPressure: false)
+    controller.download()
+    let deadline = Date().addingTimeInterval(5)
+    while await source.calls < 2, Date() < deadline { await Task.yield() }
+    let startedCalls = await source.calls
+    XCTAssertEqual(startedCalls, 2)
+    await controller.cancelDownloadAndWait()
+    XCTAssertFalse(controller.isDownloading)
+    XCTAssertEqual(controller.state, .partial)
+    XCTAssertFalse(controller.assetsInstalled)
+    XCTAssertTrue(controller.canRemove)
+
+    controller.download()
+    while controller.isDownloading, Date() < deadline { await Task.yield() }
+    XCTAssertFalse(controller.isDownloading)
+    XCTAssertEqual(controller.state, .available)
+    let calls = await source.calls
+    XCTAssertEqual(calls, 3, "Resume must reuse the first verified file")
+    let partial = await assets.hasPartialDownload()
+    XCTAssertFalse(partial)
+  }
+
+  @MainActor
+  func testPartialDownloadIsRemovableAfterRelaunchWithoutFinishingDownload() async throws {
+    let root = temporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = FixtureDownload(failCall: 2)
+    do {
+      _ = try await store(root, source).download { _ in }
+      XCTFail("Expected interrupted download")
+    } catch FixtureDownload.Failure.interrupted {}
+
+    // New store and controller discover staging on disk, without in-memory download history.
+    let restoredAssets = store(root, source)
+    let controller = LocalModelController(assets: restoredAssets, observeMemoryPressure: false)
+    controller.select(true)
+    await controller.waitForPreparation()
+    XCTAssertEqual(controller.state, .partial)
+    XCTAssertFalse(controller.isReady)
+    controller.remove()
+    await controller.waitForPreparation()
+    XCTAssertEqual(controller.state, .missing)
+    let partial = await restoredAssets.hasPartialDownload()
+    XCTAssertFalse(partial)
+    let calls = await source.calls
+    XCTAssertEqual(calls, 2, "Removing staged files must not download anything")
+  }
+
   func testPinnedManifestHasEveryAssetAndExpectedSize() {
     let manifest = LocalModelAssets.manifest
     XCTAssertEqual(manifest.assets.count, 22)
@@ -307,14 +361,17 @@ private actor FixtureDownload {
   private(set) var calls = 0
   let failCall: Int?
   let corruptCall: Int?
+  let suspendCall: Int?
 
-  init(failCall: Int? = nil, corruptCall: Int? = nil) {
+  init(failCall: Int? = nil, corruptCall: Int? = nil, suspendCall: Int? = nil) {
     self.failCall = failCall
     self.corruptCall = corruptCall
+    self.suspendCall = suspendCall
   }
 
-  func fetch(_ url: URL, progress: @Sendable (Int64) -> Void) throws -> URL {
+  func fetch(_ url: URL, progress: @Sendable (Int64) -> Void) async throws -> URL {
     calls += 1
+    if calls == suspendCall { try await Task.sleep(for: .seconds(30)) }
     if calls == failCall { throw Failure.interrupted }
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try Data((calls == corruptCall ? "bad" : "abc").utf8).write(to: file)

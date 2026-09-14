@@ -71,6 +71,15 @@ actor LocalModelAssets {
     } catch { return false }
   }
 
+  /// Staged files survive cancellation and relaunch so users can resume or remove them.
+  func hasPartialDownload() async -> Bool {
+    do {
+      try validateManifest()
+      try checkNoSymlinks(staging)
+      return fileManager.fileExists(atPath: staging.path)
+    } catch { return false }
+  }
+
   /// External variants may use a different revision, but must have the same
   /// inventory. Only matching file hashes establish a verified revision.
   func verify(policy: VerificationPolicy = .installed) throws -> Verification {

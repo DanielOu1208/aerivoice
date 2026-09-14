@@ -77,35 +77,40 @@ struct DictationSettingsPage: View {
   var body: some View {
     Form {
       Section("Transcription") {
-        ProviderSelectionRow(model: model, kind: preferences.transcriptionProvider.credentialKind) {
-          Picker("Provider", selection: $preferences.transcriptionProvider) {
+        ProviderSelectionRow(model: model, kind: preferences.effectiveTranscriptionProvider.credentialKind) {
+          Picker("Provider", selection: Binding(
+            get: { preferences.effectiveTranscriptionProvider },
+            set: { preferences.transcriptionProvider = $0 })
+          ) {
             ForEach(TranscriptionProvider.allCases) { provider in
               Text(provider.displayName).tag(provider)
             }
           }
+          .disabled(preferences.offlineMode)
         }
-        .id(preferences.transcriptionProvider)
-        .disabled(preferences.offlineMode || model.coordinator.canCancel || model.changingOfflineMode)
-        LabeledContent {
-          Text(preferences.transcriptionProvider == .local ? preferences.localTranscriptionModel.title : preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
-        } label: {
-          if preferences.transcriptionProvider == .meta {
-            SettingsHelpLabel(
-              title: "Model",
-              message:
-                "Meta streams use Muse Voice Transcribe and request Zero Data Retention for every session."
-            )
-          } else {
-            Text("Model")
+        .id(preferences.effectiveTranscriptionProvider)
+        .disabled(model.coordinator.canCancel || model.changingOfflineMode)
+        if preferences.effectiveTranscriptionProvider == .local {
+          LocalTranscriptionModelPicker(model: model, title: "Model")
+        } else {
+          LabeledContent {
+            Text(preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
+          } label: {
+            if preferences.transcriptionProvider == .meta {
+              SettingsHelpLabel(
+                title: "Model",
+                message:
+                  "Meta streams use Muse Voice Transcribe and request Zero Data Retention for every session."
+              )
+            } else {
+              Text("Model")
+            }
           }
         }
       }
       if preferences.offlineMode {
         Text("Offline mode uses local transcription. AI cleanup is off.")
           .font(.caption).foregroundStyle(.secondary)
-      }
-      if preferences.effectiveTranscriptionProvider == .local || model.localSetupRequested {
-        Section("Local model") { LocalTranscriptionSettings(model: model) }
       }
       Section {
         VocabularyTagEditor(vocabulary: $preferences.vocabulary)
@@ -273,16 +278,20 @@ struct ProviderSettingsPage: View {
   var body: some View {
     Form {
       Section("Transcription") {
-        ProviderAccountRow(model: model, kind: .soniox)
-        ProviderAccountRow(model: model, kind: .metaModelAPI)
+        Group {
+          ProviderAccountRow(model: model, kind: .soniox)
+          ProviderAccountRow(model: model, kind: .metaModelAPI)
+        }
+        .disabled(model.preferences.offlineMode || model.changingOfflineMode)
+        LocalProviderAccountRow(model: model)
       }
       Section("AI Cleanup") {
         ProviderAccountRow(model: model, kind: .openRouter)
         ProviderAccountRow(model: model, kind: .cerebras)
         ProviderAccountRow(model: model, kind: .groq)
       }
+      .disabled(model.preferences.offlineMode || model.changingOfflineMode)
     }
-    .disabled(model.preferences.offlineMode || model.changingOfflineMode)
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)
   }

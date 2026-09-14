@@ -4,10 +4,12 @@ import SwiftUI
 struct OfflineModeControl: View {
   @ObservedObject var model: AppModel
   @ObservedObject private var preferences: AppPreferences
+  var offersLocalSetup: Bool
 
-  init(model: AppModel) {
+  init(model: AppModel, offersLocalSetup: Bool = true) {
     self.model = model
     preferences = model.preferences
+    self.offersLocalSetup = offersLocalSetup
   }
 
   var body: some View {
@@ -19,9 +21,39 @@ struct OfflineModeControl: View {
     )
     .disabled(!model.canChangeOfflineMode)
     Text(model.offlineModeExplanation).font(.caption).foregroundStyle(.secondary)
-    if !model.selectedLocalAssetsInstalled {
+    if offersLocalSetup && !model.selectedLocalAssetsInstalled {
       Button("Set up local model…") { model.showLocalSetup() }
     }
+  }
+}
+
+struct LocalTranscriptionModelPicker: View {
+  @ObservedObject var model: AppModel
+  @ObservedObject private var preferences: AppPreferences
+  var title: String
+
+  init(model: AppModel, title: String = "Local model") {
+    self.model = model
+    preferences = model.preferences
+    self.title = title
+  }
+
+  var body: some View {
+    Picker(
+      title,
+      selection: Binding(
+        get: { preferences.localTranscriptionModel }, set: { model.setLocalTranscriptionModel($0) })
+    ) {
+      ForEach(LocalTranscriptionModel.allCases) { choice in
+        Text(choice.title).tag(choice)
+          .disabled(preferences.offlineMode && !isInstalled(choice))
+      }
+    }
+    .disabled(model.coordinator.canCancel || model.changingOfflineMode)
+  }
+
+  private func isInstalled(_ choice: LocalTranscriptionModel) -> Bool {
+    choice == .apple ? model.appleSpeech.assetsInstalled : model.localModel.assetsInstalled
   }
 }
 
@@ -36,17 +68,7 @@ struct LocalTranscriptionSettings: View {
   }
 
   var body: some View {
-    Picker(
-      "Local model",
-      selection: Binding(
-        get: { preferences.localTranscriptionModel }, set: { model.setLocalTranscriptionModel($0) })
-    ) {
-      ForEach(LocalTranscriptionModel.allCases) { choice in
-        Text(choice.title).tag(choice)
-          .disabled(preferences.offlineMode && !isInstalled(choice))
-      }
-    }
-    .disabled(model.coordinator.canCancel || model.changingOfflineMode)
+    LocalTranscriptionModelPicker(model: model)
     Text("Accuracy may be lower than cloud models.")
       .font(.caption).foregroundStyle(.secondary)
     if preferences.localTranscriptionModel == .nemotron {
@@ -58,10 +80,6 @@ struct LocalTranscriptionSettings: View {
     } else {
       appleSetup
     }
-  }
-
-  private func isInstalled(_ choice: LocalTranscriptionModel) -> Bool {
-    choice == .apple ? model.appleSpeech.assetsInstalled : model.localModel.assetsInstalled
   }
 
   @ViewBuilder private var appleSetup: some View {
@@ -91,6 +109,9 @@ struct LocalTranscriptionSettings: View {
     )
     .task(id: model.appleSpeech.state) {
       installedAppleLocales = Set(await SpeechTranscriber.installedLocales.map(\.identifier))
+      if model.appleSpeech.assetsInstalled {
+        installedAppleLocales.insert(model.appleSpeech.localeIdentifier)
+      }
       if preferences.appleSpeechLocale.isEmpty, !model.appleSpeech.localeIdentifier.isEmpty {
         preferences.appleSpeechLocale = model.appleSpeech.localeIdentifier
       }
@@ -102,11 +123,15 @@ struct LocalTranscriptionSettings: View {
     switch model.appleSpeech.state {
     case .ready:
       Label("Ready · works offline", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+      if preferences.effectiveTranscriptionProvider != .local {
+        Text("Select Local as your transcription provider in Dictation settings to use this model.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
     case .preparing:
       ProgressView("Checking Apple Speech…")
     case .missing:
       Button("Download Apple language support") { model.appleSpeech.download() }
-        .disabled(preferences.offlineMode || model.changingOfflineMode)
+        .disabled(preferences.offlineMode || model.changingOfflineMode || model.coordinator.canCancel)
     case .downloading(let progress):
       ProgressView("Downloading Apple language support…", value: progress)
       Text("macOS manages this download and may retry it later if it fails.")
@@ -117,7 +142,7 @@ struct LocalTranscriptionSettings: View {
       Text(message).font(.caption).foregroundStyle(.red)
       Button("Check installed language support") { model.appleSpeech.prepareIfNeeded() }
       Button("Retry download") { model.appleSpeech.download() }
-        .disabled(preferences.offlineMode || model.changingOfflineMode)
+        .disabled(preferences.offlineMode || model.changingOfflineMode || model.coordinator.canCancel)
     }
     if preferences.offlineMode && !model.appleSpeech.assetsInstalled {
       Text("Turn off Offline mode before downloading language support.")

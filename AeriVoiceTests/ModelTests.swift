@@ -162,6 +162,30 @@ final class ModelTests: XCTestCase {
     XCTAssertFalse(missingShortcut.canAdvance(from: .shortcut))
   }
 
+  func testOnboardingReturnsToProvidersIfModelBecomesUnreadyBeforeFinishing() {
+    let unloaded = OnboardingReadiness(
+      isTranscriptionReady: false, hasCleanupCredential: true,
+      hasPermissions: true, hasShortcut: true)
+    XCTAssertFalse(unloaded.canAdvance(from: .shortcut))
+    XCTAssertEqual(unloaded.recoveryStep(from: .shortcut), .providers)
+    XCTAssertEqual(unloaded.recoveryStep(from: .permissions), .providers)
+    XCTAssertNil(unloaded.recoveryStep(from: .providers))
+
+    let restored = OnboardingReadiness(
+      isTranscriptionReady: true, hasCleanupCredential: true,
+      hasPermissions: true, hasShortcut: true)
+    XCTAssertTrue(restored.canAdvance(from: .shortcut))
+    XCTAssertNil(restored.recoveryStep(from: .providers), "Recovery must not skip forward automatically")
+  }
+
+  func testOnboardingRecoversFromRevokedPermissionAtFinalStep() {
+    let revoked = OnboardingReadiness(
+      isTranscriptionReady: true, hasCleanupCredential: true,
+      hasPermissions: false, hasShortcut: true)
+    XCTAssertFalse(revoked.canAdvance(from: .shortcut))
+    XCTAssertEqual(revoked.recoveryStep(from: .shortcut), .permissions)
+  }
+
   @MainActor
   func testCleanupStyleDefaultsToPolishedAndPreservesEverySavedStyle() {
     let suite = "AeriVoiceTests.CleanupStyle.\(UUID().uuidString)"

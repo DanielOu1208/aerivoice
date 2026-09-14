@@ -12,6 +12,11 @@ struct LocalModelSetupView: View {
       switch controller.state {
       case .missing:
         Button("Download model · 611 MB") { controller.download() }.disabled(offline)
+      case .partial:
+        Text("Download incomplete. Completed files are saved for your next attempt.")
+          .font(.caption).foregroundStyle(.secondary)
+        Button("Resume download") { controller.download() }.disabled(offline)
+        removeButton
       case .available:
         Label("Downloaded", systemImage: "internaldrive")
         if allowsPreparation {
@@ -23,6 +28,8 @@ struct LocalModelSetupView: View {
         removeButton
       case .preparing:
         ProgressView("Preparing Local model…")
+      case .removing:
+        ProgressView("Removing downloaded files…")
       case .ready:
         Label("Ready · works offline", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
         removeButton
@@ -38,7 +45,9 @@ struct LocalModelSetupView: View {
     }
   }
   private var removeButton: some View {
-    Button("Remove downloaded model", role: .destructive) { controller.remove() }
+    Button(controller.state == .partial ? "Remove partial download" : "Remove downloaded model", role: .destructive) {
+      controller.remove()
+    }
       .disabled(offline || !controller.canRemove)
   }
 }

@@ -26,7 +26,7 @@ extension AppModel {
 
   func showLocalSetup() {
     localSetupRequested = true
-    settingsDestinationRequest = .dictation
+    settingsDestinationRequest = .providers
   }
 
   func setLocalTranscriptionModel(_ value: LocalTranscriptionModel) {

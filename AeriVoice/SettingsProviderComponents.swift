@@ -85,6 +85,7 @@ struct ProviderSelectionRow<Selection: View>: View {
   @ObservedObject var model: AppModel
   let kind: CredentialKind?
   var allowsRemoval = true
+  var allowsLocalManagement = true
   @ViewBuilder var selection: () -> Selection
 
   var body: some View {
@@ -98,8 +99,17 @@ struct ProviderSelectionRow<Selection: View>: View {
       Spacer(minLength: 8)
       if let kind {
         ProviderConnectionControls(model: model, kind: kind, allowsRemoval: allowsRemoval)
-      } else if model.localModel.isReady {
-        Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+      } else {
+        if model.selectedLocalModelReady {
+          Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+        } else {
+          Text(model.selectedLocalAssetsInstalled ? "Preparing…" : "Setup required")
+            .foregroundStyle(.secondary)
+        }
+        if allowsLocalManagement {
+          Button("Manage…") { model.showLocalSetup() }
+            .accessibilityLabel("Manage Local models")
+        }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -119,6 +129,54 @@ struct ProviderAccountRow: View {
       ProviderConnectionControls(model: model, kind: kind)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+struct LocalProviderAccountRow: View {
+  @ObservedObject var model: AppModel
+  @State private var showsSetup = false
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "desktopcomputer")
+        .frame(width: 24, height: 24).accessibilityHidden(true)
+      Text("Local models")
+      Spacer(minLength: 8)
+      Text(model.selectedLocalAssetsInstalled ? "Installed" : "Setup required")
+        .foregroundStyle(.secondary)
+      Button("Manage…") { showsSetup = true }
+        .accessibilityLabel("Manage Local models")
+    }
+    .disabled(model.changingOfflineMode)
+    .sheet(isPresented: $showsSetup) {
+      VStack(alignment: .leading, spacing: 0) {
+        Form {
+          Section("Local transcription") {
+            Text("Transcribe on this Mac. No account or API key required.")
+              .font(.caption).foregroundStyle(.secondary)
+            LocalTranscriptionSettings(model: model)
+          }
+        }
+        .formStyle(.grouped)
+        HStack {
+          Button("Open Dictation settings…") {
+            showsSetup = false
+            model.settingsDestinationRequest = .dictation
+          }
+          Spacer()
+          Button("Done") { showsSetup = false }.keyboardShortcut(.cancelAction)
+        }
+        .padding(20)
+      }
+      .frame(width: 540, height: 480)
+    }
+    .task(id: model.localSetupRequested) {
+      if model.localSetupRequested {
+        showsSetup = true
+        model.localSetupRequested = false
+      }
+    }
+    .onReceive(model.settingsWindowWillClose) { showsSetup = false }
   }
 }
 
