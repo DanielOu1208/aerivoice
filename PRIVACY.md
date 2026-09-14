@@ -111,3 +111,11 @@ system-wide shortcut and Accessibility-assisted insertion.
 
 AeriVoice does not upload its own crash reports. macOS or third-party providers
 may collect diagnostics under their own settings and policies.
+
+## Local transcription
+
+When Local is selected, Apple Speech or downloaded NVIDIA Nemotron models transcribe audio on your Mac without a transcription account or API key. An explicit Nemotron model download connects to Hugging Face. Apple Speech uses system-managed language assets; if missing, an explicit setup download connects to Apple. Dictionary hints are processed locally. Existing cleanup settings still apply and may send the transcript to your selected cloud cleanup provider. Local does not automatically send audio to a cloud transcription provider on failure.
+
+### Offline mode
+
+Offline mode uses the selected local transcription engine and bypasses AI cleanup, so neither audio nor transcripts are sent to cloud providers. It also blocks new AeriVoice-initiated background connections, model catalog requests, credential validation, and downloads. Existing app requests are cancelled when entering the mode. The mode is remembered across launches, preserves normal provider settings, and never falls back to a cloud engine when local assets are unavailable. macOS controls shared Apple speech assets and may continue system updates or automatically retry an Apple language download requested before Offline mode was enabled.

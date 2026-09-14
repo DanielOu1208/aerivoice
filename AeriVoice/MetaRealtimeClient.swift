@@ -109,7 +109,7 @@ private final class URLSessionMetaWebSocketTransport: NSObject, MetaWebSocketTra
     task = session.webSocketTask(with: url)
   }
 
-  func resume() { task.resume() }
+  func resume() { AppNetworkPolicy.shared.resume(task) }
   func send(_ message: URLSessionWebSocketTask.Message) async throws {
     do {
       try await task.send(message)
@@ -129,6 +129,7 @@ private final class URLSessionMetaWebSocketTransport: NSObject, MetaWebSocketTra
     }
   }
   func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+    AppNetworkPolicy.shared.forget(task)
     task.cancel(with: closeCode, reason: reason)
     session.invalidateAndCancel()
   }
@@ -140,6 +141,7 @@ private final class URLSessionMetaWebSocketTransport: NSObject, MetaWebSocketTra
 
   private func recordTermination(closeCode: Int?, error: Error?) {
     guard termination == nil else { return }
+    AppNetworkPolicy.shared.forget(task)
     let termination = MetaWebSocketTermination(closeCode: closeCode, error: error)
     self.termination = termination
     let waiters = terminationWaiters

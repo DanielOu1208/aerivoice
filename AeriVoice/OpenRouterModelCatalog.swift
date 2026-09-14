@@ -42,7 +42,7 @@ struct OpenRouterModelCatalog {
     request.timeoutInterval = 15
     request.cachePolicy = .reloadIgnoringLocalCacheData
     // The public catalog needs no credential or transcript data.
-    let (data, response) = try await session.data(for: request)
+    let (data, response) = try await AppNetworkPolicy.shared.data(for: request, session: session)
     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
       throw AppError.provider("OpenRouter’s model list is unavailable.")
     }

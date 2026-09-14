@@ -17,6 +17,7 @@ final class EvalRunner {
   }
 
   func run() async throws {
+    if scenario.offlineMode == true { await AppNetworkPolicy.shared.setOffline(true) }
     deadline = events.elapsedMS + scenario.timeout * 1_000
     for signalNumber in [SIGINT, SIGTERM] {
       signal(signalNumber, SIG_IGN)
@@ -37,7 +38,8 @@ final class EvalRunner {
       "pid": getpid(), "environment": EvalEvents.object(BenchmarkEnvironment.live),
       "measurement_boundary": "production_pipeline_harness", "resource_sampling_interval_ms": 100,
       "instrumentation_cpu_included": true, "audio_hardware": false, "desktop_insertion": false,
-      "cleanup_bypassed": scenario.kind == "transcription",
+      "cleanup_bypassed": scenario.kind == "transcription" || scenario.offlineMode == true,
+      "offline_mode": scenario.offlineMode == true,
     ])
     if scenario.kind == "cleanup" { try await runCleanup(); return }
     guard let path = scenario.audioPath else { throw EvalError.invalidAudio }
@@ -77,7 +79,63 @@ final class EvalRunner {
       soniox = SonioxRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .soniox, script: script, text: text) })
       meta = MetaRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .meta, script: script, text: text) })
     }
-    let transcriber = EvalTranscriber(client: RealtimeTranscriptionRouter(soniox: soniox, meta: meta), events: events)
+    let localRuntime = LocalSpeechRuntime()
+    let appleController = AppleSpeechController()
+    let localClient: RealtimeTranscribing
+    let appleClient: RealtimeTranscribing
+    if scenario.provider == .local, scenario.live, scenario.localEngine == .nemotron {
+      let started = events.elapsedMS
+      let variant = scenario.localModelVariant ?? "560ms"
+      let verification: LocalModelAssets.Verification
+      if let path = scenario.localModelPath {
+        verification = try await LocalModelAssets(directory: URL(fileURLWithPath: path)).verify(
+          policy: variant == "560ms" ? .matchingManifest : .inventoryOnly)
+      } else {
+        verification = try await LocalModelAssets().verify()
+      }
+      var provenance = try EvalLocalModel.provenance(
+        verification: verification, variant: variant)
+      provenance["external_model_path"] = scenario.localModelPath != nil
+      provenance["engine"] = "nemotron"
+      events.emit("local_preparation_started", provenance)
+      let engineStarted = events.elapsedMS
+      try await localRuntime.load(from: verification.directory)
+      events.emit("local_preparation_finished", ["duration_ms": events.elapsedMS - started,
+        "engine_load_ms": events.elapsedMS - engineStarted])
+      localClient = LocalRealtimeClient(runtime: localRuntime)
+    } else {
+      localClient = EvalControlledLocalClient(text: scenario.scriptedTranscript, script: scenario.script)
+    }
+    if scenario.provider == .local, scenario.localEngine == .apple {
+      let started = events.elapsedMS
+      events.emit("local_preparation_started", [
+        "engine": "apple", "language": scenario.appleLocale as Any? ?? NSNull(),
+        "model_revision": NSNull(), "system_managed_assets": true, "live": scenario.live,
+      ])
+      if scenario.live {
+        appleController.select(true, localeIdentifier: scenario.appleLocale ?? "")
+        await appleController.waitForPreparation()
+        try checkDeadline()
+        guard appleController.isReady else {
+          events.emit("local_preparation_failed", ["engine": "apple",
+            "category": "apple_assets_or_language_unavailable", "downloads_attempted": false])
+          throw AppError.provider("Apple Speech requires an installed supported language. Prepare it in Settings before evaluation.")
+        }
+        appleClient = AppleRealtimeClient(controller: appleController)
+      } else {
+        appleClient = EvalControlledLocalClient(text: scenario.scriptedTranscript, script: scenario.script)
+      }
+      events.emit("local_preparation_finished", [
+        "engine": "apple", "language": scenario.live ? appleController.localeIdentifier : (scenario.appleLocale as Any? ?? NSNull()),
+        "model_revision": NSNull(), "system_managed_assets": true,
+        "duration_ms": events.elapsedMS - started, "runtime_prepared": false,
+        "downloads_attempted": false, "live": scenario.live,
+      ])
+    } else {
+      appleClient = EvalControlledLocalClient(text: scenario.scriptedTranscript, script: scenario.script)
+    }
+    let transcriber = EvalTranscriber(client: RealtimeTranscriptionRouter(
+      soniox: soniox, meta: meta, local: localClient, apple: appleClient), events: events)
     let cleaner = makeCleaner()
     let benchmark = EvalBenchmark(events: events)
     let lifecycle = EvalLifecycle(events: events)
@@ -88,6 +146,9 @@ final class EvalRunner {
     let preferences = AppPreferences(defaults: defaults, loginItemManager: EvalLoginItems())
     preferences.onTranscriptionProviderChange = {}
     preferences.transcriptionProvider = scenario.provider
+    preferences.localTranscriptionModel = scenario.localEngine
+    preferences.appleSpeechLocale = scenario.appleLocale ?? ""
+    preferences.setOfflineMode(scenario.offlineMode == true)
     preferences.cleanupProvider = scenario.model.provider
     preferences.cleanupModel = scenario.model
     preferences.cleanupReasoningEffort = scenario.configuration.reasoningEffort
@@ -104,6 +165,9 @@ final class EvalRunner {
       preferences: preferences, credentials: stageCredentials, audio: audio, transcriber: transcriber,
       cleaner: cleaner, muter: EvalMuter(), inserter: receiver, notch: EvalNotch(), benchmark: benchmark,
       readiness: EvalReadiness(), cuePlayer: EvalCues(), lifecycleObserver: lifecycle,
+      localReadiness: {
+        !self.scenario.live || (self.scenario.localEngine == .apple ? appleController.isReady : localRuntime.isReady)
+      },
       notifications: EvalNotifications(events: events))
     let observation = coordinator.$phase.removeDuplicates().sink { [events] phase in
       events.emit("phase", ["phase": evalPhase(phase)])
@@ -126,7 +190,7 @@ final class EvalRunner {
       var didStop = false
       do {
         try await waitUntil {
-          if let cancelMS = self.scenario.cancelAfterMs, self.events.elapsedMS - start >= cancelMS,
+          if self.scenario.shouldCancel(session: index, elapsedMS: self.events.elapsedMS - start),
             benchmark.terminal == nil { coordinator.cancel() }
           if engine.finished, !didStop, benchmark.terminal == nil {
             didStop = true
@@ -151,7 +215,8 @@ final class EvalRunner {
         "milestones_ms": benchmark.milestones, "captured_bytes": benchmark.capturedBytes,
         "sent_bytes": benchmark.sentBytes, "max_buffered_bytes": benchmark.maxBufferedBytes,
         "audio_feed": engine.feedSummary, "failure": benchmark.failure,
-        "cleanup_bypassed": scenario.kind == "transcription",
+        "cleanup_bypassed": scenario.kind == "transcription" || scenario.offlineMode == true,
+      "offline_mode": scenario.offlineMode == true,
       ]
       payload["output_text"] = receiver.output
       events.emit("result", payload)
@@ -200,7 +265,7 @@ final class EvalRunner {
       while operation.result == nil {
         if interrupted { cancellation = "interrupted" }
         else if events.elapsedMS >= deadline { cancellation = "deadline" }
-        else if let cancelMS = scenario.cancelAfterMs, events.elapsedMS - start >= cancelMS { cancellation = "cancelled" }
+        else if scenario.shouldCancel(session: index, elapsedMS: events.elapsedMS - start) { cancellation = "cancelled" }
         if cancellation != nil {
           task.cancel()
           break

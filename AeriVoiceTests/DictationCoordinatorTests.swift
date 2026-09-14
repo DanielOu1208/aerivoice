@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorTests: XCTestCase {
+  func testLocalPreparationDoesNotStartCaptureOrConnect() async throws {
+    let fixture = makeFixture(transcriptionProvider: .local, hasSonioxKey: false, hasMetaKey: false, localReady: false)
+    fixture.coordinator.toggle()
+    try await waitUntil { if case .error = fixture.coordinator.phase { return true }; return false }
+    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertNil(fixture.inserter.insertedText)
+  }
+
+  func testLocalStartsWithoutCloudTranscriptionCredentials() async throws {
+    let fixture = makeFixture(transcriptionProvider: .local, hasSonioxKey: false, hasMetaKey: false)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    XCTAssertTrue(fixture.transcriber.didConnect)
+    XCTAssertEqual(fixture.credentials.readKinds, [.openRouter])
+    fixture.coordinator.cancel()
+  }
+
+
   func testRestorationInvalidatesOnIdleCancelNewRecordingAndSettingOff() async throws {
     let fixture = makeFixture()
     fixture.coordinator.cancel()
@@ -401,7 +419,7 @@ final class DictationCoordinatorTests: XCTestCase {
       try await waitUntil { fixture.transcriber.didConnect }
 
       XCTAssertEqual(fixture.cuePlayer.playedCues, [.start])
-      try await waitUntil { fixture.audio.didStart }
+      try await waitUntil { fixture.audio.didStart && fixture.coordinator.phase == .recording }
       XCTAssertEqual(fixture.coordinator.phase, .recording)
       XCTAssertEqual(fixture.benchmark.audioBytes, 3_200)
       XCTAssertEqual(fixture.benchmark.audioBytesSent, 0)

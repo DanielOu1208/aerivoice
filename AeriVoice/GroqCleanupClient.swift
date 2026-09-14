@@ -49,7 +49,7 @@ struct GroqCleanupClient: CleaningText {
     let preparedRequest = request
     let urlSession = session
     let (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
-      group.addTask { try await urlSession.data(for: preparedRequest) }
+      group.addTask { try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession) }
       group.addTask {
         try await Task.sleep(for: .seconds(10))
         throw URLError(.timedOut)
@@ -101,7 +101,7 @@ struct GroqCleanupClient: CleaningText {
     request.timeoutInterval = 10
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    let (data, response) = try await session.data(for: request)
+    let (data, response) = try await AppNetworkPolicy.shared.data(for: request, session: session)
     guard let http = response as? HTTPURLResponse else {
       throw AppError.provider("Groq returned an invalid response.")
     }

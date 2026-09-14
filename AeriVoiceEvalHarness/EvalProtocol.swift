@@ -12,6 +12,11 @@ struct EvalScenario: Decodable {
   let audioPath: String?
   let transcript: String?
   let transcriptionProvider: String?
+  let offlineMode: Bool?
+  let localModel: String?
+  let appleLocale: String?
+  let localModelPath: String?
+  let localModelVariant: String?
   let cleanupModel: String?
   let cleanupReasoning: String?
   let cleanupMode: String?
@@ -26,10 +31,12 @@ struct EvalScenario: Decodable {
   let channels: Int?
   let chunkFrames: Int?
   let cancelAfterMs: Double?
+  let cancelSessions: [Int]?
   let controlled: ControlledResponses?
 
   var live: Bool { mode == "live" }
   var provider: TranscriptionProvider { TranscriptionProvider(rawValue: transcriptionProvider ?? "soniox")! }
+  var localEngine: LocalTranscriptionModel { LocalTranscriptionModel(rawValue: localModel ?? "nemotron")! }
   var model: CleanupModel { CleanupModel(rawValue: cleanupModel ?? "qwen-3.8-27b")! }
   var configuration: CleanupConfiguration {
     CleanupConfiguration(model: model, reasoningEffort: cleanupReasoning.flatMap(CleanupReasoningEffort.init) ?? model.defaultReasoningEffort)
@@ -44,6 +51,11 @@ struct EvalScenario: Decodable {
   var script: ControlledResponses { controlled ?? ControlledResponses() }
   var scriptedTranscript: String { script.transcript ?? transcript ?? "Hello, world." }
 
+  func shouldCancel(session: Int, elapsedMS: Double) -> Bool {
+    guard let cancelAfterMs, elapsedMS >= cancelAfterMs else { return false }
+    return cancelSessions?.contains(session) ?? true
+  }
+
   func validate() throws {
     guard protocolVersion == 1, ["pipeline", "transcription", "cleanup", "conversion", "stability"].contains(kind),
       ["live", "controlled"].contains(mode), count > 0, count <= 10_000,
@@ -56,15 +68,36 @@ struct EvalScenario: Decodable {
       CleanupModel(rawValue: cleanupModel ?? "qwen-3.8-27b") != nil,
       CleanupMode(rawValue: cleanupMode ?? "Faithful") != nil
     else { throw EvalError.invalidScenario }
+    guard LocalTranscriptionModel(rawValue: localModel ?? "nemotron") != nil else { throw EvalError.invalidScenario }
+    if provider != .local,
+       localModel != nil || appleLocale != nil || localModelPath != nil || localModelVariant != nil {
+      throw EvalError.invalidScenario
+    }
+    if localEngine == .apple, localModelPath != nil || localModelVariant != nil { throw EvalError.invalidScenario }
+    if localEngine != .apple, appleLocale != nil { throw EvalError.invalidScenario }
+    if let appleLocale {
+      guard !appleLocale.isEmpty, appleLocale.utf8.count <= 100,
+            appleLocale.range(of: "^[A-Za-z]{2,8}([_-][A-Za-z0-9]{1,8})*$", options: .regularExpression) != nil
+      else { throw EvalError.invalidScenario }
+    }
+    if offlineMode == true, provider != .local || kind == "cleanup" || kind == "conversion" { throw EvalError.invalidScenario }
+    if let localModelVariant, !["560ms", "1120ms"].contains(localModelVariant) { throw EvalError.invalidScenario }
+    if localModelVariant == "1120ms", localModelPath == nil { throw EvalError.invalidScenario }
     if let cleanupReasoning {
       guard let effort = CleanupReasoningEffort(rawValue: cleanupReasoning), model.supportedReasoningEfforts.contains(effort) else {
         throw EvalError.invalidScenario
       }
     }
+    if let cancelSessions {
+      guard kind != "conversion", cancelAfterMs != nil, !cancelSessions.isEmpty,
+        Set(cancelSessions).count == cancelSessions.count,
+        cancelSessions.allSatisfy({ (1...count).contains($0) }) else { throw EvalError.invalidScenario }
+    }
     if let cancelAfterMs, !cancelAfterMs.isFinite || cancelAfterMs < 0 { throw EvalError.invalidScenario }
     if kind != "cleanup", audioPath == nil { throw EvalError.invalidScenario }
     if kind == "cleanup", transcript == nil { throw EvalError.invalidScenario }
     try script.validate()
+    if provider == .local, script.fault == "malformed_stt" { throw EvalError.invalidScenario }
   }
 }
 

@@ -21,7 +21,7 @@ final class ModelTests: XCTestCase {
   }
 
   func testTranscriptionProviderCatalogAndCapabilities() {
-    XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta])
+    XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta, .local])
     XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v5")
     XCTAssertEqual(TranscriptionProvider.meta.modelID, "muse-voice-transcribe-1.0")
     XCTAssertEqual(TranscriptionProvider.soniox.credentialKind, .soniox)
@@ -128,19 +128,19 @@ final class ModelTests: XCTestCase {
   func testOnboardingReadinessRoutesToFirstIncompleteStep() {
     XCTAssertEqual(
       OnboardingReadiness(
-        hasTranscriptionCredential: false, hasCleanupCredential: false,
+        isTranscriptionReady: false, hasCleanupCredential: false,
         hasPermissions: false, hasShortcut: false
       ).recommendedStep,
       .providers)
     XCTAssertEqual(
       OnboardingReadiness(
-        hasTranscriptionCredential: true, hasCleanupCredential: true,
+        isTranscriptionReady: true, hasCleanupCredential: true,
         hasPermissions: false, hasShortcut: false
       ).recommendedStep,
       .permissions)
     XCTAssertEqual(
       OnboardingReadiness(
-        hasTranscriptionCredential: true, hasCleanupCredential: true,
+        isTranscriptionReady: true, hasCleanupCredential: true,
         hasPermissions: true, hasShortcut: false
       ).recommendedStep,
       .shortcut)
@@ -148,18 +148,55 @@ final class ModelTests: XCTestCase {
 
   func testOnboardingReadinessGatesEachStepIndependently() {
     let ready = OnboardingReadiness(
-      hasTranscriptionCredential: true, hasCleanupCredential: true,
+      isTranscriptionReady: true, hasCleanupCredential: true,
       hasPermissions: true, hasShortcut: true)
     for step in OnboardingStep.allCases {
       XCTAssertTrue(ready.canAdvance(from: step))
     }
 
     let missingShortcut = OnboardingReadiness(
-      hasTranscriptionCredential: true, hasCleanupCredential: true,
+      isTranscriptionReady: true, hasCleanupCredential: true,
       hasPermissions: true, hasShortcut: false)
     XCTAssertTrue(missingShortcut.canAdvance(from: .providers))
     XCTAssertTrue(missingShortcut.canAdvance(from: .permissions))
     XCTAssertFalse(missingShortcut.canAdvance(from: .shortcut))
+  }
+
+  func testOnboardingReturnsToProvidersIfModelBecomesUnreadyBeforeFinishing() {
+    let unloaded = OnboardingReadiness(
+      isTranscriptionReady: false, hasCleanupCredential: true,
+      hasPermissions: true, hasShortcut: true)
+    XCTAssertFalse(unloaded.canAdvance(from: .shortcut))
+    XCTAssertEqual(unloaded.recoveryStep(from: .shortcut), .providers)
+    XCTAssertEqual(unloaded.recoveryStep(from: .permissions), .providers)
+    XCTAssertNil(unloaded.recoveryStep(from: .providers))
+
+    let restored = OnboardingReadiness(
+      isTranscriptionReady: true, hasCleanupCredential: true,
+      hasPermissions: true, hasShortcut: true)
+    XCTAssertTrue(restored.canAdvance(from: .shortcut))
+    XCTAssertNil(restored.recoveryStep(from: .providers), "Recovery must not skip forward automatically")
+  }
+
+  func testOnboardingRecoversFromRevokedPermissionAtFinalStep() {
+    let revoked = OnboardingReadiness(
+      isTranscriptionReady: true, hasCleanupCredential: true,
+      hasPermissions: false, hasShortcut: true)
+    XCTAssertFalse(revoked.canAdvance(from: .shortcut))
+    XCTAssertEqual(revoked.recoveryStep(from: .shortcut), .permissions)
+  }
+
+  func testCombinedOnboardingChoicesPreserveCloudAndLocalEngineRouting() {
+    for choice in TranscriptionChoice.allCases {
+      let restored = TranscriptionChoice(
+        provider: choice.provider, localModel: choice.localModel ?? .nemotron)
+      XCTAssertEqual(restored, choice)
+    }
+    XCTAssertEqual(TranscriptionChoice.apple.provider, .local)
+    XCTAssertEqual(TranscriptionChoice.apple.localModel, .apple)
+    XCTAssertEqual(TranscriptionChoice.nemotron.localModel, .nemotron)
+    XCTAssertNil(TranscriptionChoice.soniox.localModel)
+    XCTAssertNil(TranscriptionChoice.meta.localModel)
   }
 
   @MainActor
@@ -179,6 +216,29 @@ final class ModelTests: XCTestCase {
   }
 
   @MainActor
+  func testLocalOnboardingRequiresReadyModelAndSelectedCleanup() {
+    let suite = "AeriVoiceTests.LocalReadiness.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let preferences = AppPreferences(defaults: defaults)
+    preferences.transcriptionProvider = .local
+    preferences.cleanupProvider = .cerebras
+    let cold = OnboardingReadiness.selectedProviders(preferences: preferences,
+      hasCredential: { $0 == .cerebras }, hasPermissions: true, localModelReady: false)
+    XCTAssertFalse(cold.canAdvance(from: .providers))
+    let ready = OnboardingReadiness.selectedProviders(preferences: preferences,
+      hasCredential: { $0 == .cerebras }, hasPermissions: true, localModelReady: true)
+    XCTAssertTrue(ready.canAdvance(from: .providers))
+    let missingCleanup = OnboardingReadiness.selectedProviders(preferences: preferences,
+      hasCredential: { $0 == .openRouter }, hasPermissions: true, localModelReady: true)
+    XCTAssertFalse(missingCleanup.canAdvance(from: .providers))
+    preferences.transcriptionProvider = .meta
+    XCTAssertTrue(OnboardingReadiness.selectedProviders(preferences: preferences,
+      hasCredential: { $0 == .metaModelAPI || $0 == .cerebras }, hasPermissions: true,
+      localModelReady: false).canAdvance(from: .providers))
+  }
+
+  @MainActor
   func testOnboardingRequiresBothSelectedProviderCredentials() {
     let suite = "AeriVoiceTests.SelectedProviderReadiness.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -189,24 +249,24 @@ final class ModelTests: XCTestCase {
       preferences.transcriptionProvider = transcription
       for cleanup in CleanupProvider.allCases {
         preferences.cleanupProvider = cleanup
-        let selected: Set<CredentialKind> = [transcription.credentialKind, cleanup.credentialKind]
+        let selected = Set([transcription.credentialKind, cleanup.credentialKind].compactMap { $0 })
         let ready = OnboardingReadiness.selectedProviders(
-          preferences: preferences, hasCredential: { selected.contains($0) }, hasPermissions: true)
+          preferences: preferences, hasCredential: { selected.contains($0) }, hasPermissions: true, localModelReady: true)
         XCTAssertTrue(ready.canAdvance(from: .providers))
         for missing in selected {
           let credentials = selected.subtracting([missing])
           let incomplete = OnboardingReadiness.selectedProviders(
             preferences: preferences, hasCredential: { credentials.contains($0) },
-            hasPermissions: true)
+            hasPermissions: true, localModelReady: true)
           XCTAssertFalse(incomplete.canAdvance(from: .providers))
           XCTAssertEqual(incomplete.recommendedStep, .providers)
         }
         if cleanup != .openRouter {
-          let wrongCleanup: Set<CredentialKind> = [transcription.credentialKind, .openRouter]
+          let wrongCleanup = Set([transcription.credentialKind, CredentialKind.openRouter].compactMap { $0 })
           XCTAssertFalse(
             OnboardingReadiness.selectedProviders(
               preferences: preferences, hasCredential: { wrongCleanup.contains($0) },
-              hasPermissions: true
+              hasPermissions: true, localModelReady: true
             ).canAdvance(from: .providers))
         }
       }
@@ -225,7 +285,7 @@ final class ModelTests: XCTestCase {
     preferences.cleanupReasoningEffort = .high
     let openRouterConfiguration = preferences.cleanupConfiguration
     let ready = OnboardingReadiness(
-      hasTranscriptionCredential: true, hasCleanupCredential: true,
+      isTranscriptionReady: true, hasCleanupCredential: true,
       hasPermissions: true, hasShortcut: true)
 
     for cleanup in CleanupProvider.allCases {
@@ -253,7 +313,7 @@ final class ModelTests: XCTestCase {
     let preferences = AppPreferences(defaults: defaults, loginItemManager: loginItem)
     for missing in 0..<4 {
       let readiness = OnboardingReadiness(
-        hasTranscriptionCredential: missing != 0, hasCleanupCredential: missing != 1,
+        isTranscriptionReady: missing != 0, hasCleanupCredential: missing != 1,
         hasPermissions: missing != 2, hasShortcut: missing != 3)
       XCTAssertEqual(
         AppModel.finishOnboarding(
@@ -262,7 +322,7 @@ final class ModelTests: XCTestCase {
       XCTAssertTrue(loginItem.updateRequests.isEmpty)
     }
     let ready = OnboardingReadiness(
-      hasTranscriptionCredential: true, hasCleanupCredential: true,
+      isTranscriptionReady: true, hasCleanupCredential: true,
       hasPermissions: true, hasShortcut: true)
     loginItem.shouldFail = true
     XCTAssertEqual(

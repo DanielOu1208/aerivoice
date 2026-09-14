@@ -39,6 +39,7 @@ struct RealtimeAudioFrame: Equatable, Sendable {
 enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendable {
   case soniox
   case meta
+  case local
 
   var id: Self { self }
 
@@ -46,6 +47,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "Soniox"
     case .meta: "Meta"
+    case .local: "Local"
     }
   }
 
@@ -53,6 +55,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "Soniox Realtime"
     case .meta: "Muse Voice Transcribe 1.0"
+    case .local: "Nemotron 3.5 — English"
     }
   }
 
@@ -60,13 +63,15 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "stt-rt-v5"
     case .meta: "muse-voice-transcribe-1.0"
+    case .local: "nemotron-3.5-asr-0.6b-560ms"
     }
   }
 
-  var credentialKind: CredentialKind {
+  var credentialKind: CredentialKind? {
     switch self {
     case .soniox: .soniox
     case .meta: .metaModelAPI
+    case .local: nil
     }
   }
 
@@ -74,6 +79,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: .missingSonioxKey
     case .meta: .missingMetaModelAPIKey
+    case .local: .provider("Download the Local model in Dictation settings.")
     }
   }
 
@@ -81,14 +87,41 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: 512_000
     case .meta: 160_000
+    case .local: 160_000
+    }
+  }
+}
+
+enum LocalTranscriptionModel: String, CaseIterable, Codable, Identifiable, Sendable {
+  case nemotron
+  case apple
+
+  var id: Self { self }
+  var title: String {
+    switch self {
+    case .nemotron: "NVIDIA Nemotron — Recommended"
+    case .apple: "Apple Speech"
+    }
+  }
+
+  var setupDescription: String {
+    switch self {
+    case .apple:
+      "Apple Speech transcribes on this Mac. Apple may need to download support for your chosen language. No NVIDIA weights or transcription account are needed."
+    case .nemotron:
+      "NVIDIA Nemotron is the recommended local model for English. It needs a 611 MB download and transcribes on this Mac without a transcription account."
     }
   }
 }
 
 struct TranscriptionConfiguration: Equatable, Sendable {
   let provider: TranscriptionProvider
+  var localModel: LocalTranscriptionModel = .nemotron
+  var appleLocaleIdentifier: String = ""
 
-  var modelID: String { provider.modelID }
+  var modelID: String {
+    provider == .local && localModel == .apple ? "apple-speech-transcriber" : provider.modelID
+  }
   var audioEncoding: String { "pcm_s16le_16000" }
   var zeroDataRetentionRequired: Bool? { provider == .meta ? true : nil }
 }
@@ -405,57 +438,6 @@ struct CleanupConfiguration: Equatable, Sendable {
     self.reasoningEffort = model.normalizedReasoningEffort(
       reasoningEffort, supportedEfforts: supportedReasoningEfforts)
   }
-}
-
-enum ShortcutActivationMode: String, CaseIterable, Equatable, Identifiable, Sendable {
-  case toggle
-  case hybrid
-
-  var id: Self { self }
-
-  var title: String {
-    switch self {
-    case .toggle: "Toggle"
-    case .hybrid: "Hybrid"
-    }
-  }
-
-  var instructions: String {
-    switch self {
-    case .toggle:
-      "Press the shortcut once to start dictation and again to finish."
-    case .hybrid:
-      "Tap once to start and again to finish, or hold the shortcut and release to finish."
-    }
-  }
-}
-
-struct ShortcutDefinition: Codable, Equatable, Sendable {
-  let keyCode: UInt16
-  let modifiers: UInt
-  let displayName: String
-  let isModifierOnly: Bool
-
-  init(keyCode: UInt16, modifiers: UInt, displayName: String, isModifierOnly: Bool = false) {
-    self.keyCode = keyCode
-    self.modifiers = modifiers
-    self.displayName = displayName
-    self.isModifierOnly = isModifierOnly
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case keyCode, modifiers, displayName, isModifierOnly
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    keyCode = try container.decode(UInt16.self, forKey: .keyCode)
-    modifiers = try container.decode(UInt.self, forKey: .modifiers)
-    displayName = try container.decode(String.self, forKey: .displayName)
-    isModifierOnly = try container.decodeIfPresent(Bool.self, forKey: .isModifierOnly) ?? false
-  }
-
-  var cgFlags: CGEventFlags { CGEventFlags(rawValue: UInt64(modifiers)) }
 }
 
 struct NotchGeometry: Equatable, Sendable {

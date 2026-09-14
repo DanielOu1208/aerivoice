@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   private var statusItem: NSStatusItem?
   private var settingsWindow: NSWindow?
   private var settingsShowsOnboarding = false
+  private var onboardingRequested = ProcessInfo.processInfo.arguments.contains("--show-onboarding")
   private var cancellables = Set<AnyCancellable>()
 
   init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
@@ -29,7 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     model.coordinator.prepareForLaunch(
       microphoneAuthorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
     model.prewarmTranscription()
-    if !model.setupComplete {
+    if onboardingRequested {
+      openSettings()
+    } else if model.preferences.onboardingComplete, model.preferences.effectiveTranscriptionProvider == .local {
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        await model.localModel.waitForPreparation()
+        await model.appleSpeech.waitForPreparation()
+        if !model.setupComplete { openSettings() }
+      }
+    } else if !model.setupComplete {
       openSettings()
     }
     model.runtimeDiagnostics.finishInitialization()
@@ -47,11 +57,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       systemSymbolName: "waveform", accessibilityDescription: "AeriVoice")
     statusItem = item
     rebuildMenu()
-    model.coordinator.$phase.sink { [weak self] _ in self?.rebuildMenu() }.store(in: &cancellables)
+    model.objectWillChange.receive(on: RunLoop.main)
+      .sink { [weak self] _ in self?.rebuildMenu() }.store(in: &cancellables)
+    model.preferences.objectWillChange.receive(on: RunLoop.main)
+      .sink { [weak self] _ in self?.rebuildMenu() }.store(in: &cancellables)
   }
 
   private func rebuildMenu() {
     let menu = NSMenu()
+    menu.autoenablesItems = false
     let phase = model.coordinator.phase
     let title: String
     let action: Selector
@@ -66,7 +80,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       title = "Start Dictation"
       action = #selector(toggle)
     }
-    menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+    let dictationItem = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+    dictationItem.isEnabled = !model.changingOfflineMode
+    let offlineItem = menu.addItem(withTitle: "Offline mode", action: #selector(toggleOfflineMode), keyEquivalent: "")
+    offlineItem.state = model.preferences.offlineMode && !model.changingOfflineMode ? .on : .off
+    offlineItem.isEnabled = model.canChangeOfflineMode
+    offlineItem.toolTip = model.offlineModeExplanation
+    if !model.selectedLocalAssetsInstalled {
+      let setupItem = menu.addItem(withTitle: "Set up local model…", action: #selector(openLocalSetup), keyEquivalent: "")
+      setupItem.toolTip = "Requires local model setup"
+    }
     menu.addItem(.separator())
     menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
     menu.addItem(.separator())
@@ -110,7 +133,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     ) { [weak self] _ in Task { @MainActor in self?.model.coordinator.cancel() } }
   }
 
-  @objc private func toggle() { model.coordinator.toggle() }
+  @objc private func toggle() {
+    guard !model.changingOfflineMode else { return }
+    model.coordinator.toggle()
+  }
+  @objc private func toggleOfflineMode() { model.setOfflineMode(!model.preferences.offlineMode) }
+  @objc private func openLocalSetup() {
+    model.showLocalSetup()
+    openSettings()
+    model.settingsDestinationRequest = .providers
+  }
   @objc private func cancel() { model.coordinator.cancel() }
   @objc private func quit() { NSApp.terminate(nil) }
 
@@ -124,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       window = settingsWindow
     } else {
       window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
+        contentRect: NSRect(x: 0, y: 0, width: 780, height: 720),
         styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
         backing: .buffered,
         defer: false)
@@ -132,19 +164,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       window.titleVisibility = .hidden
       window.titlebarAppearsTransparent = false
       window.titlebarSeparatorStyle = .none
-      window.contentMinSize = NSSize(width: 700, height: 560)
+      window.contentMinSize = NSSize(width: 780, height: 720)
       window.isReleasedWhenClosed = false
       window.delegate = self
       settingsWindow = window
       window.center()
     }
-    let needsOnboarding = !model.preferences.onboardingComplete
+    let needsOnboarding = onboardingRequested || !model.preferences.onboardingComplete
     if window.contentViewController == nil || settingsShowsOnboarding != needsOnboarding {
       settingsShowsOnboarding = needsOnboarding
       if needsOnboarding {
         window.toolbar = nil
         window.contentViewController = NSHostingController(
-          rootView: OnboardingView(model: model) { [weak window] in window?.close() })
+          rootView: OnboardingView(model: model, startAtBeginning: onboardingRequested) { [weak self, weak window] in
+            self?.onboardingRequested = false
+            window?.close()
+          })
       } else {
         let navigation = SettingsNavigation(model: model)
         let controller = SettingsSplitViewController(

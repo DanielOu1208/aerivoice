@@ -51,7 +51,10 @@ final class OpenRouterCatalogStore: ObservableObject {
 
   // One request serves both the settings page and model picker. Closing a view
   // does not cancel a refresh that is still useful to the other view or next launch.
+  func cancelRefresh() { refreshTask?.cancel() }
+
   func refresh(force: Bool = false) async {
+    guard !AppNetworkPolicy.shared.isOffline else { return }
     if let refreshTask {
       await refreshTask.value
       return
@@ -66,6 +69,8 @@ final class OpenRouterCatalogStore: ObservableObject {
       }
       do {
         let loaded = try await self.fetch()
+        try Task.checkCancellation()
+        try AppNetworkPolicy.shared.checkAllowed()
         guard !loaded.isEmpty else {
           throw AppError.provider("OpenRouter returned an empty model catalog.")
         }
@@ -78,6 +83,7 @@ final class OpenRouterCatalogStore: ObservableObject {
             "Models refreshed, but the cache couldn’t be saved for the next launch."
         }
       } catch {
+        guard !Task.isCancelled, !AppNetworkPolicy.shared.isOffline else { return }
         self.errorMessage =
           self.entries.isEmpty
           ? "Couldn’t load OpenRouter’s catalog. Presets and custom model IDs are still available."

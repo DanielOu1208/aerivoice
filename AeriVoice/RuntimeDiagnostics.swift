@@ -2,6 +2,9 @@ import Foundation
 
 struct DiagnosticSettings: Codable, Equatable, Sendable {
   let transcriptionProvider: String
+  let localModel: String?
+  let appleLanguage: String?
+  let offlineMode: Bool?
   let cleanupProvider: String
   let cleanupModel: String
   let cleanupMode: String
@@ -12,7 +15,10 @@ struct DiagnosticSettings: Codable, Equatable, Sendable {
   let onboardingComplete: Bool
 
   @MainActor init(_ preferences: AppPreferences) {
-    transcriptionProvider = preferences.transcriptionProvider.rawValue
+    transcriptionProvider = preferences.effectiveTranscriptionProvider.rawValue
+    offlineMode = preferences.offlineMode
+    localModel = preferences.effectiveTranscriptionProvider == .local ? preferences.localTranscriptionModel.rawValue : nil
+    appleLanguage = preferences.effectiveTranscriptionProvider == .local && preferences.localTranscriptionModel == .apple ? preferences.appleSpeechLocale : nil
     cleanupProvider = preferences.cleanupProvider.rawValue
     cleanupModel = preferences.cleanupModel.rawValue
     cleanupMode = preferences.cleanupMode.rawValue

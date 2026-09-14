@@ -7,11 +7,26 @@ struct HarnessMain {
     let events = EvalEvents()
     do {
       let arguments = CommandLine.arguments
+      if arguments.count == 2, arguments[1] == "download-local-model" {
+        let assets = LocalModelAssets()
+        let directory = try await assets.download { progress in
+          events.emit("model_download", ["progress": progress])
+        }
+        events.emit("model_installed", ["path": directory.path])
+        return
+      }
       if arguments.count == 2, arguments[1] == "capabilities" {
         let object: [String: Any] = [
           "protocol_version": 1,
           "transcription_providers": TranscriptionProvider.allCases.map {
-            ["id": $0.rawValue, "model": $0.modelID, "credential_key": $0.credentialKind.rawValue]
+            var entry: [String: Any] = ["id": $0.rawValue, "model": $0.modelID,
+              "requires_credentials": $0.credentialKind != nil]
+            if let kind = $0.credentialKind { entry["credential_key"] = kind.rawValue }
+            if $0 == .local {
+              entry["local_models"] = ["nemotron", "apple"]
+              entry["apple_locale_selection"] = true
+            }
+            return entry
           },
           "cleanup_models": CleanupModel.allCases.map {
             ["id": $0.rawValue, "provider": $0.provider.rawValue,
@@ -31,7 +46,12 @@ struct HarnessMain {
       decoder.keyDecodingStrategy = .convertFromSnakeCase
       let scenario = try decoder.decode(EvalScenario.self, from: Data(contentsOf: URL(fileURLWithPath: arguments[2])))
       try scenario.validate()
-      let credentials = try EvalCredentials.read(controlled: !scenario.live || scenario.kind == "conversion")
+      let credentials: EvalCredentials
+      if scenario.live, scenario.provider == .local, scenario.kind == "transcription" || scenario.offlineMode == true {
+        credentials = EvalCredentials(values: [:], controlled: false)
+      } else {
+        credentials = try EvalCredentials.read(controlled: !scenario.live || scenario.kind == "conversion")
+      }
       try await EvalRunner(scenario: scenario, events: events, credentials: credentials).run()
     } catch {
       events.emit("run_failed", ["category": evalFailure(error)])

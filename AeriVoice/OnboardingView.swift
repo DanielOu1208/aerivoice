@@ -8,7 +8,7 @@ enum OnboardingStep: Int, CaseIterable {
 
   var title: String {
     switch self {
-    case .providers: "Connect your services"
+    case .providers: "Set up dictation"
     case .permissions: "Allow system access"
     case .shortcut: "Choose your shortcut"
     }
@@ -17,37 +17,41 @@ enum OnboardingStep: Int, CaseIterable {
 }
 
 struct OnboardingReadiness: Equatable, Sendable {
-  let hasTranscriptionCredential: Bool
+  let isTranscriptionReady: Bool
   let hasCleanupCredential: Bool
   let hasPermissions: Bool
   let hasShortcut: Bool
 
   @MainActor static func selectedProviders(
     preferences: AppPreferences, hasCredential: (CredentialKind) -> Bool,
-    hasPermissions: Bool
+    hasPermissions: Bool, localModelReady: Bool = false
   ) -> OnboardingReadiness {
     OnboardingReadiness(
-      hasTranscriptionCredential: hasCredential(preferences.transcriptionProvider.credentialKind),
-      hasCleanupCredential: hasCredential(preferences.cleanupProvider.credentialKind),
+      isTranscriptionReady: preferences.effectiveTranscriptionProvider.credentialKind.map(hasCredential) ?? localModelReady,
+      hasCleanupCredential: preferences.offlineMode || hasCredential(preferences.cleanupProvider.credentialKind),
       hasPermissions: hasPermissions,
       hasShortcut: preferences.shortcut != nil)
   }
 
   var isComplete: Bool {
-    hasTranscriptionCredential && hasCleanupCredential && hasPermissions && hasShortcut
+    isTranscriptionReady && hasCleanupCredential && hasPermissions && hasShortcut
   }
 
   var recommendedStep: OnboardingStep {
-    if !hasTranscriptionCredential || !hasCleanupCredential { return .providers }
+    if !isTranscriptionReady || !hasCleanupCredential { return .providers }
     if !hasPermissions { return .permissions }
     return .shortcut
   }
 
+  func recoveryStep(from step: OnboardingStep) -> OnboardingStep? {
+    recommendedStep.rawValue < step.rawValue ? recommendedStep : nil
+  }
+
   func canAdvance(from step: OnboardingStep) -> Bool {
     switch step {
-    case .providers: hasTranscriptionCredential && hasCleanupCredential
+    case .providers: isTranscriptionReady && hasCleanupCredential
     case .permissions: hasPermissions
-    case .shortcut: hasShortcut
+    case .shortcut: isComplete
     }
   }
 }
@@ -60,12 +64,13 @@ struct OnboardingView: View {
   @State private var step: OnboardingStep
   @State private var launchAtLogin: Bool
   @State private var failedLoginItemRequest: Bool?
+  @State private var recoveryMessage: String?
 
-  init(model: AppModel, onFinished: @escaping () -> Void) {
+  init(model: AppModel, startAtBeginning: Bool = false, onFinished: @escaping () -> Void) {
     self.model = model
     self.preferences = model.preferences
     self.onFinished = onFinished
-    _step = State(initialValue: model.onboardingReadiness.recommendedStep)
+    _step = State(initialValue: startAtBeginning ? .providers : model.onboardingReadiness.recommendedStep)
     _launchAtLogin = State(initialValue: model.preferences.launchAtLogin)
   }
 
@@ -79,6 +84,11 @@ struct OnboardingView: View {
       navigation
     }
     .frame(minWidth: 700, minHeight: 560)
+    .onChange(of: model.onboardingReadiness) { _, readiness in
+      if let destination = readiness.recoveryStep(from: step) {
+        recover(to: destination)
+      }
+    }
     .alert(
       "Use this shortcut systemwide?",
       isPresented: Binding(
@@ -123,6 +133,9 @@ struct OnboardingView: View {
       ProgressView(
         value: Double(step.rawValue + 1), total: Double(OnboardingStep.allCases.count))
       Text(stepSubtitle).foregroundStyle(.secondary)
+      if let recoveryMessage {
+        Text(recoveryMessage).foregroundStyle(.secondary)
+      }
     }
     .padding(24)
   }
@@ -130,36 +143,7 @@ struct OnboardingView: View {
   @ViewBuilder private var stepContent: some View {
     switch step {
     case .providers:
-      Form {
-        Section("Transcription provider") {
-          ProviderSelectionRow(
-            model: model, kind: preferences.transcriptionProvider.credentialKind,
-            allowsRemoval: false
-          ) {
-            Picker("Provider", selection: $preferences.transcriptionProvider) {
-              ForEach(TranscriptionProvider.allCases) { provider in
-                Text(provider.displayName).tag(provider)
-              }
-            }
-          }
-          .id(preferences.transcriptionProvider)
-        }
-        Section("AI cleanup") {
-          ProviderSelectionRow(
-            model: model, kind: preferences.cleanupProvider.credentialKind,
-            allowsRemoval: false
-          ) {
-            Picker("Provider", selection: $preferences.cleanupProvider) {
-              ForEach(CleanupProvider.allCases, id: \.self) { provider in
-                Text(provider.displayName + (provider.isExperimental ? " (Experimental)" : ""))
-                  .tag(provider)
-              }
-            }
-          }
-          .id(preferences.cleanupProvider)
-        }
-      }
-      .formStyle(.grouped)
+      OnboardingProviderSetup(model: model)
     case .permissions:
       permissionStep
     case .shortcut:
@@ -172,12 +156,6 @@ struct OnboardingView: View {
     let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
     let microphoneAction = MicrophonePermissionAction(status: microphoneStatus)
     return Form {
-      Section {
-        Text(
-          "AeriVoice asks only for the two permissions it needs. Neither permission gives AeriVoice access to stored recordings or passwords."
-        )
-        .foregroundStyle(.secondary)
-      }
       Section {
         PermissionStatusRow(
           title: "Microphone",
@@ -207,8 +185,7 @@ struct OnboardingView: View {
   private var shortcutStep: some View {
     Form {
       Section("Activation shortcut") {
-        ShortcutRecorder(current: preferences.shortcut, onCapture: model.acceptShortcut)
-          .frame(maxWidth: .infinity)
+        ActivationShortcutRecorder(model: model)
         Picker("Shortcut behavior", selection: $preferences.shortcutActivationMode) {
           ForEach(ShortcutActivationMode.allCases) { mode in
             Text(mode.title).tag(mode)
@@ -251,13 +228,11 @@ struct OnboardingView: View {
   private var stepSubtitle: String {
     switch step {
     case .providers:
-      "Choose and connect a service for transcription and one for AI cleanup."
+      "Choose a cloud service or transcribe on this Mac with Apple Speech or NVIDIA Nemotron."
     case .permissions:
       "You stay in control of when AeriVoice can listen and insert text."
     case .shortcut:
-      preferences.shortcutActivationMode == .hybrid
-        ? "Tap or hold one shortcut to dictate from any app."
-        : "One shortcut starts and stops dictation from any app."
+      preferences.shortcutActivationMode.instructions
     }
   }
 
@@ -272,6 +247,7 @@ struct OnboardingView: View {
 
   private func move(by offset: Int) {
     guard let next = OnboardingStep(rawValue: step.rawValue + offset) else { return }
+    recoveryMessage = nil
     withAnimation(.easeInOut(duration: 0.2)) { step = next }
   }
 
@@ -280,10 +256,17 @@ struct OnboardingView: View {
     case .completed:
       onFinished()
     case .incomplete:
-      break
+      recover(to: model.onboardingReadiness.recommendedStep)
     case .loginItemFailed:
       failedLoginItemRequest = launchAtLogin
     }
+  }
+
+  private func recover(to destination: OnboardingStep) {
+    recoveryMessage = destination == .providers
+      ? "Your transcription setup is no longer ready. Check it before continuing."
+      : "System access changed. Check your permissions before continuing."
+    step = destination
   }
 
 }

@@ -13,9 +13,9 @@ struct GeneralSettingsPage: View {
 
   var body: some View {
     Form {
+      Section("Offline") { OfflineModeControl(model: model) }
       Section("Activation shortcut") {
-        ShortcutRecorder(current: preferences.shortcut, onCapture: model.acceptShortcut)
-          .frame(maxWidth: .infinity)
+        ActivationShortcutRecorder(model: model)
         SettingsControlRow(
           title: "Shortcut behavior", message: preferences.shortcutActivationMode.instructions
         ) {
@@ -77,34 +77,39 @@ struct DictationSettingsPage: View {
   var body: some View {
     Form {
       Section("Transcription") {
-        ProviderSelectionRow(model: model, kind: preferences.transcriptionProvider.credentialKind) {
-          Picker("Provider", selection: $preferences.transcriptionProvider) {
-            ForEach(TranscriptionProvider.allCases) { provider in
-              Text(provider.displayName).tag(provider)
+        ProviderSelectionRow(model: model, kind: preferences.effectiveTranscriptionProvider.credentialKind) {
+          TranscriptionModelPicker(model: model)
+        }
+        .id(preferences.effectiveTranscriptionProvider)
+        .disabled(model.coordinator.canCancel || model.changingOfflineMode)
+        if preferences.effectiveTranscriptionProvider != .local {
+          LabeledContent {
+            Text(preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
+          } label: {
+            if preferences.transcriptionProvider == .meta {
+              SettingsHelpLabel(
+                title: "Model",
+                message:
+                  "Meta streams use Muse Voice Transcribe and request Zero Data Retention for every session."
+              )
+            } else {
+              Text("Model")
             }
           }
         }
-        .id(preferences.transcriptionProvider)
-        LabeledContent {
-          Text(preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
-        } label: {
-          if preferences.transcriptionProvider == .meta {
-            SettingsHelpLabel(
-              title: "Model",
-              message:
-                "Meta streams use Muse Voice Transcribe and request Zero Data Retention for every session."
-            )
-          } else {
-            Text("Model")
-          }
-        }
+      }
+      if preferences.offlineMode {
+        Text("Offline mode uses local transcription. AI cleanup is off.")
+          .font(.caption).foregroundStyle(.secondary)
       }
       Section {
         VocabularyTagEditor(vocabulary: $preferences.vocabulary)
       } header: {
         SettingsHelpLabel(
           title: "Dictionary",
-          message: "Names and phrases are sent to your selected transcription provider as hints.")
+          message: preferences.effectiveTranscriptionProvider == .local
+            ? "Local uses these words as recognition hints from the next recording; spelling is not guaranteed."
+            : "Names and phrases are sent to your selected transcription provider as hints.")
       }
       Section("Microphone") {
         HStack {
@@ -218,6 +223,13 @@ struct CleanupSettingsPage: View {
         }
       }
     }
+    .disabled(preferences.offlineMode || model.changingOfflineMode)
+    .safeAreaInset(edge: .top) {
+      if preferences.offlineMode {
+        Text("Offline mode uses local transcription. AI cleanup is off.")
+          .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
+      }
+    }
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)
     .sheet(isPresented: $showsModelPicker) {
@@ -256,14 +268,19 @@ struct ProviderSettingsPage: View {
   var body: some View {
     Form {
       Section("Transcription") {
-        ProviderAccountRow(model: model, kind: .soniox)
-        ProviderAccountRow(model: model, kind: .metaModelAPI)
+        Group {
+          ProviderAccountRow(model: model, kind: .soniox)
+          ProviderAccountRow(model: model, kind: .metaModelAPI)
+        }
+        .disabled(model.preferences.offlineMode || model.changingOfflineMode)
+        LocalProviderAccountRow(model: model)
       }
       Section("AI Cleanup") {
         ProviderAccountRow(model: model, kind: .openRouter)
         ProviderAccountRow(model: model, kind: .cerebras)
         ProviderAccountRow(model: model, kind: .groq)
       }
+      .disabled(model.preferences.offlineMode || model.changingOfflineMode)
     }
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)
