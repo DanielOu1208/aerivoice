@@ -4,6 +4,18 @@ import Foundation
 /// Own one instance per installation directory. A staging directory preserves
 /// completed, verified files across failed or cancelled explicit downloads.
 actor LocalModelAssets {
+  enum VerificationPolicy {
+    case installed
+    case matchingManifest
+    case inventoryOnly
+  }
+
+  struct Verification: Sendable {
+    let directory: URL
+    let files: [LocalModelManifest.Asset]
+    let verifiedRevision: String?
+  }
+
   nonisolated static let manifest = LocalModelManifest.nemotron
   nonisolated static let defaultDirectory = FileManager.default.urls(
     for: .applicationSupportDirectory, in: .userDomainMask
@@ -59,20 +71,26 @@ actor LocalModelAssets {
     } catch { return false }
   }
 
-  /// Benchmark variants share the same allowed paths but have different hashes.
-  /// Callers must additionally hash and record every required file before loading.
-  func validateModelInventory() throws {
+  /// External variants may use a different revision, but must have the same
+  /// inventory. Only matching file hashes establish a verified revision.
+  func verify(policy: VerificationPolicy = .installed) throws -> Verification {
+    guard !operationActive else { throw AssetError.busy }
     try validateManifest()
     try checkNoSymlinks(directory)
     try checkExactContents(directory)
+    if policy == .installed { try checkMarker() }
+    let files = try specification.assets.map { asset in
+      let file = try fingerprint(path: asset.path, at: directory.appendingPathComponent(asset.path))
+      if policy != .inventoryOnly, file != asset { throw AssetError.corruptFile(asset.path) }
+      return file
+    }
+    return Verification(directory: directory, files: files,
+      verifiedRevision: files == specification.assets ? specification.revision : nil)
   }
 
   /// Rehash every file before passing the installation to the inference engine.
   func verifiedDirectory() async throws -> URL {
-    guard !operationActive else { throw AssetError.busy }
-    try validateManifest()
-    try checkInstalled(fullVerification: true)
-    return directory
+    try verify().directory
   }
 
   func download(progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
@@ -159,12 +177,7 @@ actor LocalModelAssets {
   private func checkInstalled(fullVerification: Bool) throws {
     try checkNoSymlinks(directory)
     try checkExactContents(directory)
-    let marker = directory.appendingPathComponent(markerName)
-    try checkNoSymlinks(marker)
-    guard let data = try? Data(contentsOf: marker),
-      let recorded = try? JSONDecoder().decode(LocalModelManifest.self, from: data),
-      recorded == specification
-    else { throw AssetError.notInstalled }
+    try checkMarker()
     for asset in specification.assets {
       let file = directory.appendingPathComponent(asset.path)
       try checkNoSymlinks(file)
@@ -172,6 +185,15 @@ actor LocalModelAssets {
         throw AssetError.corruptFile(asset.path)
       }
     }
+  }
+
+  private func checkMarker() throws {
+    let marker = directory.appendingPathComponent(markerName)
+    try checkNoSymlinks(marker)
+    guard let data = try? Data(contentsOf: marker),
+      let recorded = try? JSONDecoder().decode(LocalModelManifest.self, from: data),
+      recorded == specification
+    else { throw AssetError.notInstalled }
   }
 
   /// Inference engines may prefer optional bundles when present. Reject anything
@@ -215,15 +237,26 @@ actor LocalModelAssets {
       Int64(values.fileSize ?? -1) == asset.size
     else { return false }
     guard fullVerification else { return true }
+    return try fingerprint(path: asset.path, at: url) == asset
+  }
+
+  private func fingerprint(path: String, at url: URL) throws -> LocalModelManifest.Asset {
+    let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard values.isRegularFile == true, values.isSymbolicLink != true else {
+      throw AssetError.corruptFile(path)
+    }
     let file = try FileHandle(forReadingFrom: url)
     defer { try? file.close() }
     var hasher = SHA256()
+    var size: Int64 = 0
     while true {
       try Task.checkCancellation()
       guard let chunk = try file.read(upToCount: 1_048_576), !chunk.isEmpty else { break }
       hasher.update(data: chunk)
+      size += Int64(chunk.count)
     }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined() == asset.sha256
+    return .init(path: path, size: size,
+      sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined())
   }
 
   private func checkNoSymlinks(_ url: URL) throws {
@@ -240,7 +273,7 @@ actor LocalModelAssets {
     _ url: URL, progress: @escaping @Sendable (Int64) -> Void
   ) async throws -> URL {
     let delegate = DownloadProgress(progress: progress)
-    let (temporary, response) = try await URLSession.shared.download(from: url, delegate: delegate)
+    let (temporary, response) = try await AppNetworkPolicy.shared.download(from: url, delegate: delegate)
     guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
       try? FileManager.default.removeItem(at: temporary)
       throw AssetError.invalidResponse

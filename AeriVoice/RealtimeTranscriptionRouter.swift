@@ -8,18 +8,23 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
   private let soniox: RealtimeTranscribing
   private let meta: RealtimeTranscribing
   private let local: RealtimeTranscribing
+  private let apple: RealtimeTranscribing
+  private var activeLocalModel: LocalTranscriptionModel = .nemotron
   private var activeProvider: TranscriptionProvider?
   private var connectionGeneration = UUID()
 
   init(
     soniox: RealtimeTranscribing = SonioxRealtimeClient(),
     meta: RealtimeTranscribing = MetaRealtimeClient(),
-    local: RealtimeTranscribing = LocalRealtimeClient()
+    local: RealtimeTranscribing = LocalRealtimeClient(),
+    apple: RealtimeTranscribing = AppleRealtimeClient()
   ) {
     self.soniox = soniox
     self.meta = meta
     self.local = local
-    wire(local, provider: .local)
+    self.apple = apple
+    wire(local, provider: .local, localModel: .nemotron)
+    wire(apple, provider: .local, localModel: .apple)
     wire(soniox, provider: .soniox)
     wire(meta, provider: .meta)
   }
@@ -32,6 +37,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     let generation = UUID()
     connectionGeneration = generation
     activeProvider = configuration.provider
+    activeLocalModel = configuration.localModel
     do {
       try await client(for: configuration.provider).connect(
         configuration: configuration, apiKey: apiKey, vocabulary: vocabulary,
@@ -62,15 +68,16 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     soniox.cancel()
     meta.cancel()
     local.cancel()
+    apple.cancel()
   }
 
-  private func wire(_ client: RealtimeTranscribing, provider: TranscriptionProvider) {
+  private func wire(_ client: RealtimeTranscribing, provider: TranscriptionProvider, localModel: LocalTranscriptionModel? = nil) {
     client.onTranscript = { [weak self] update in
-      guard self?.activeProvider == provider else { return }
+      guard self?.activeProvider == provider, localModel == nil || self?.activeLocalModel == localModel else { return }
       self?.onTranscript?(update)
     }
     client.onError = { [weak self] error in
-      guard self?.activeProvider == provider else { return }
+      guard self?.activeProvider == provider, localModel == nil || self?.activeLocalModel == localModel else { return }
       self?.onError?(error)
     }
   }
@@ -79,7 +86,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     switch provider {
     case .soniox: soniox
     case .meta: meta
-    case .local: local
+    case .local: activeLocalModel == .apple ? apple : local
     }
   }
 }
@@ -108,7 +115,7 @@ enum RealtimeTranscriptionPrewarmer {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.timeoutInterval = 3
-        if (try? await URLSession.shared.data(for: request)) == nil { succeeded = false }
+        if (try? await AppNetworkPolicy.shared.data(for: request)) == nil { succeeded = false }
       }
       completion?(succeeded)
     }

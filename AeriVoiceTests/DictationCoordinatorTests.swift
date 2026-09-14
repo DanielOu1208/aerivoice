@@ -419,7 +419,7 @@ final class DictationCoordinatorTests: XCTestCase {
       try await waitUntil { fixture.transcriber.didConnect }
 
       XCTAssertEqual(fixture.cuePlayer.playedCues, [.start])
-      try await waitUntil { fixture.audio.didStart }
+      try await waitUntil { fixture.audio.didStart && fixture.coordinator.phase == .recording }
       XCTAssertEqual(fixture.coordinator.phase, .recording)
       XCTAssertEqual(fixture.benchmark.audioBytes, 3_200)
       XCTAssertEqual(fixture.benchmark.audioBytesSent, 0)

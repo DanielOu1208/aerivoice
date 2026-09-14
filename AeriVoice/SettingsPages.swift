@@ -13,9 +13,9 @@ struct GeneralSettingsPage: View {
 
   var body: some View {
     Form {
+      Section("Offline") { OfflineModeControl(model: model) }
       Section("Activation shortcut") {
-        ShortcutRecorder(current: preferences.shortcut, onCapture: model.acceptShortcut)
-          .frame(maxWidth: .infinity)
+        ActivationShortcutRecorder(model: model)
         SettingsControlRow(
           title: "Shortcut behavior", message: preferences.shortcutActivationMode.instructions
         ) {
@@ -85,8 +85,9 @@ struct DictationSettingsPage: View {
           }
         }
         .id(preferences.transcriptionProvider)
+        .disabled(preferences.offlineMode || model.coordinator.canCancel || model.changingOfflineMode)
         LabeledContent {
-          Text(preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
+          Text(preferences.transcriptionProvider == .local ? preferences.localTranscriptionModel.title : preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
         } label: {
           if preferences.transcriptionProvider == .meta {
             SettingsHelpLabel(
@@ -99,16 +100,20 @@ struct DictationSettingsPage: View {
           }
         }
       }
-      if preferences.transcriptionProvider == .local {
-        Section("Local model") { LocalModelSetupView(controller: model.localModel) }
+      if preferences.offlineMode {
+        Text("Offline mode uses local transcription. AI cleanup is off.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      if preferences.effectiveTranscriptionProvider == .local || model.localSetupRequested {
+        Section("Local model") { LocalTranscriptionSettings(model: model) }
       }
       Section {
         VocabularyTagEditor(vocabulary: $preferences.vocabulary)
       } header: {
         SettingsHelpLabel(
           title: "Dictionary",
-          message: preferences.transcriptionProvider == .local
-            ? "Local uses these words as recognition hints from the next recording. English hints need at least three characters; spelling is not guaranteed."
+          message: preferences.effectiveTranscriptionProvider == .local
+            ? "Local uses these words as recognition hints from the next recording; spelling is not guaranteed."
             : "Names and phrases are sent to your selected transcription provider as hints.")
       }
       Section("Microphone") {
@@ -223,6 +228,13 @@ struct CleanupSettingsPage: View {
         }
       }
     }
+    .disabled(preferences.offlineMode || model.changingOfflineMode)
+    .safeAreaInset(edge: .top) {
+      if preferences.offlineMode {
+        Text("Offline mode uses local transcription. AI cleanup is off.")
+          .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
+      }
+    }
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)
     .sheet(isPresented: $showsModelPicker) {
@@ -270,6 +282,7 @@ struct ProviderSettingsPage: View {
         ProviderAccountRow(model: model, kind: .groq)
       }
     }
+    .disabled(model.preferences.offlineMode || model.changingOfflineMode)
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)
   }

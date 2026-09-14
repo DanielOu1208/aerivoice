@@ -41,6 +41,12 @@ enum MicrophonePermissionAction: Equatable {
 @MainActor
 final class AppModel: ObservableObject {
   let localModel = LocalModelController.shared
+  let appleSpeech = AppleSpeechController.shared
+  @Published private(set) var changingOfflineMode = false
+  @Published var localSetupRequested = false
+  @Published var shortcutCaptureRequest: UUID?
+  @Published var capturesModifierSides = false
+  private var capturingShortcut = false
   let preferences: AppPreferences
   let coordinator: DictationCoordinator
   let credentialManager: CredentialManager
@@ -82,21 +88,36 @@ final class AppModel: ObservableObject {
     self.runtimeDiagnostics = runtime
     coordinator = DictationCoordinator(
       preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder,
-      runtimeDiagnostics: runtime)
+      runtimeDiagnostics: runtime,
+      localReadiness: {
+        if preferences.localTranscriptionModel == .apple {
+          let controller = AppleSpeechController.shared
+          if !controller.isReady { controller.prepareIfNeeded() }
+          return controller.isReady
+        }
+        let controller = LocalModelController.shared
+        if !controller.isReady { controller.prepareIfNeeded() }
+        return controller.isReady
+      })
     preferences.onDiagnosticsLoggingChange = { [weak benchmarkRecorder, weak preferences] enabled in
       benchmarkRecorder?.setEnabled(
         enabled, recordingGeneration: preferences?.diagnosticsGeneration)
     }
+    capturesModifierSides = preferences.shortcut?.distinguishesModifierSides == true
     preferences.onTranscriptionProviderChange = { [weak self] in self?.prewarmTranscription() }
+    preferences.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
     preferences.objectWillChange
       .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
       .sink { [weak runtime] in runtime?.settingsChanged() }
       .store(in: &cancellables)
     shortcutMonitor.onAvailabilityChange = { [weak runtime] in runtime?.shortcutAvailable($0) }
     localModel.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+    appleSpeech.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+    coordinator.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
     credentialManager.objectWillChange.sink { [weak self] in
       self?.objectWillChange.send()
     }.store(in: &cancellables)
+    shortcutMonitor.onHoldPress = { [weak coordinator] in coordinator?.holdShortcutPressed() }
     shortcutMonitor.onPress = { [weak coordinator] in coordinator?.shortcutPressed() }
     shortcutMonitor.onHoldRelease = { [weak coordinator] lifecycleGeneration in
       coordinator?.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
@@ -105,7 +126,7 @@ final class AppModel: ObservableObject {
     shortcutMonitor.shouldCancel = { [weak coordinator] in coordinator?.canCancel == true }
     preferences.$shortcut.combineLatest(preferences.$shortcutActivationMode)
       .sink { [weak self] definition, activationMode in
-        guard let self else { return }
+        guard let self, !self.capturingShortcut, !self.changingOfflineMode else { return }
         if let definition {
           self.shortcutMonitor.start(
             definition: definition, activationMode: activationMode)
@@ -119,7 +140,7 @@ final class AppModel: ObservableObject {
         guard let self else { return }
         self.credentialManager.refreshStoredCredentials()
         self.permissionRefresh += 1
-        guard AXIsProcessTrusted(), let shortcut = self.preferences.shortcut else { return }
+        guard !self.capturingShortcut, !self.changingOfflineMode, AXIsProcessTrusted(), let shortcut = self.preferences.shortcut else { return }
         self.shortcutMonitor.start(
           definition: shortcut, activationMode: self.preferences.shortcutActivationMode)
       }
@@ -127,14 +148,14 @@ final class AppModel: ObservableObject {
   }
 
   var transcriptionReady: Bool {
-    if let kind = preferences.transcriptionProvider.credentialKind { return hasCredential(kind) }
-    return localModel.isReady
+    if let kind = preferences.effectiveTranscriptionProvider.credentialKind { return hasCredential(kind) }
+    return selectedLocalModelReady
   }
 
   var onboardingReadiness: OnboardingReadiness {
     OnboardingReadiness.selectedProviders(
       preferences: preferences, hasCredential: hasCredential, hasPermissions: permissionsReady,
-      localModelReady: localModel.isReady)
+      localModelReady: selectedLocalModelReady)
   }
 
   var readinessComplete: Bool { onboardingReadiness.isComplete }
@@ -157,6 +178,51 @@ final class AppModel: ObservableObject {
     AVCaptureDevice.authorizationStatus(for: .audio) == .authorized && AXIsProcessTrusted()
   }
 
+  func setOfflineMode(_ enabled: Bool) {
+    guard enabled != preferences.offlineMode, canChangeOfflineMode else { return }
+    changingOfflineMode = true
+    shortcutMonitor.stop()
+    // Persist the restriction before asynchronous cancellation, including a possible quit.
+    if enabled { preferences.setOfflineMode(true) }
+    for kind in CredentialKind.allCases { credentialManager.cancelValidation(kind) }
+    preferences.openRouterCatalog.cancelRefresh()
+    Task { @MainActor in
+      await AppNetworkPolicy.shared.setOffline(enabled)
+      if enabled { await localModel.cancelDownloadAndWait() }
+      else { preferences.setOfflineMode(false) }
+      changingOfflineMode = false
+      prewarmTranscription()
+      if !capturingShortcut, let shortcut = preferences.shortcut {
+        shortcutMonitor.start(definition: shortcut, activationMode: preferences.shortcutActivationMode)
+      }
+    }
+  }
+
+  func beginShortcutCapture() {
+    capturingShortcut = true
+    shortcutMonitor.stop()
+  }
+
+  func endShortcutCapture() {
+    shortcutCaptureRequest = nil
+    capturingShortcut = false
+    capturesModifierSides = preferences.shortcut?.distinguishesModifierSides == true
+    if let shortcut = preferences.shortcut {
+      shortcutMonitor.start(definition: shortcut, activationMode: preferences.shortcutActivationMode)
+    }
+  }
+
+  func setModifierSideDistinction(_ enabled: Bool) {
+    guard !coordinator.canCancel else { return }
+    if enabled {
+      capturesModifierSides = true
+      shortcutCaptureRequest = UUID()
+    } else if let shortcut = preferences.shortcut {
+      preferences.shortcut = shortcut.removingModifierSideDistinction()
+      capturesModifierSides = false
+    }
+  }
+
   func acceptShortcut(_ definition: ShortcutDefinition) {
     let noModifiers = definition.modifiers == 0
     if noModifiers, !definition.isModifierOnly {
@@ -173,11 +239,13 @@ final class AppModel: ObservableObject {
   }
 
   func validateAndSave(_ value: String, kind: CredentialKind) {
+    guard !preferences.offlineMode, !changingOfflineMode else { return }
     credentialManager.beginValidation(
       value, kind: kind, configuration: credentialValidationConfiguration(for: kind))
   }
 
   func importLegacyCredential(_ kind: CredentialKind) {
+    guard !preferences.offlineMode, !changingOfflineMode else { return }
     credentialManager.beginLegacyImport(
       kind: kind, configuration: credentialValidationConfiguration(for: kind))
   }
@@ -239,8 +307,11 @@ final class AppModel: ObservableObject {
   }
 
   func prewarmTranscription() {
-    localModel.select(preferences.transcriptionProvider == .local)
-    guard preferences.transcriptionProvider != .local else { return }
+    let usesLocal = preferences.effectiveTranscriptionProvider == .local
+    localModel.select(usesLocal && preferences.localTranscriptionModel == .nemotron)
+    appleSpeech.select(usesLocal && preferences.localTranscriptionModel == .apple,
+                       localeIdentifier: preferences.appleSpeechLocale)
+    guard !preferences.offlineMode, !changingOfflineMode, !usesLocal else { return }
     let runtime = runtimeDiagnostics
     let token = runtime.beginPreparation(network: true)
     RealtimeTranscriptionPrewarmer.prewarm(provider: preferences.transcriptionProvider) {

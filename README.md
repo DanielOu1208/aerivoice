@@ -61,12 +61,13 @@ If Paste is unavailable, AeriVoice can copy the result for you.
 
 ## Providers and models
 
-Choose transcription and cleanup separately in Settings, using your own API keys.
+Choose transcription and cleanup separately in Settings. Cloud providers use your own API keys; Offline mode needs none.
 
 | Stage | Provider | Supported models |
 | --- | --- | --- |
 | Live transcription | <img src="docs/images/providers/soniox.png" width="24" height="24" alt=""> **Soniox** — Default | Soniox Realtime |
 | Live transcription | <img src="docs/images/providers/meta.svg" width="24" height="24" alt=""> **Meta** | Muse Voice Transcribe 1.0 |
+| Live transcription | **Local** | Apple Speech (system-managed language support) or NVIDIA Nemotron 3.5 (English) — Recommended |
 | AI cleanup | <img src="docs/images/providers/openrouter.svg" width="24" height="24" alt=""> **OpenRouter** — Default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras, plus a searchable catalog of compatible text models |
 | AI cleanup | <img src="docs/images/providers/cerebras.svg" width="24" height="24" alt=""> **Cerebras** | Qwen 3.8 27B |
 | AI cleanup | <img src="docs/images/providers/groq.svg" width="24" height="24" alt=""> **Groq** — Experimental | Qwen 3.8 27B |
@@ -104,7 +105,7 @@ macOS 26 or newer**, plus your own provider accounts. Provider charges and usage
 limits may apply.
 
 1. **Install.** [Download the beta](https://github.com/DanielOu1208/aerivoice/releases/latest), open the DMG, and drag AeriVoice to Applications.
-2. **Set up.** Connect one transcription provider and one cleanup provider, then grant Microphone and Accessibility permission. OpenRouter is optional; Cerebras and Groq can also be selected during onboarding.
+2. **Set up.** Connect your cloud providers, or choose a local model and enable Offline mode to skip cloud cleanup and API keys. Apple Speech reuses installed language support or offers a download; Nemotron requires its own download. Grant Microphone and Accessibility permission.
 3. **Dictate.** Focus a text field and tap or hold your configured shortcut.
 
 For the default setup: [Soniox API key](https://console.soniox.com/) +
@@ -181,3 +182,5 @@ Provider logos belong to their respective owners; see [artwork credits](docs/ART
 ## Local transcription
 
 AeriVoice also supports downloadable, on-device English transcription with Nemotron 3.5 and the existing Dictionary. See [Local dictation](docs/LOCAL-DICTATION.md) for setup, model requirements, privacy boundaries, and validation.
+
+Local transcription accuracy may be lower than cloud models. [Local setup, Offline mode, and shortcut behavior](docs/LOCAL-DICTATION.md) describes model downloads and the Hybrid, Toggle, and Hold modes.

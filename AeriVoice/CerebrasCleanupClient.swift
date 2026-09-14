@@ -22,7 +22,7 @@ struct CerebrasCleanupClient: CleaningText {
     let urlSession = session
     do {
       try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask { _ = try await urlSession.data(for: preparedRequest) }
+        group.addTask { _ = try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession) }
         group.addTask {
           try await Task.sleep(for: .seconds(1))
           throw URLError(.timedOut)
@@ -87,7 +87,7 @@ struct CerebrasCleanupClient: CleaningText {
     do {
       (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
         group.addTask {
-          try await urlSession.data(for: preparedRequest, delegate: metricsCollector)
+          try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession, delegate: metricsCollector)
         }
         group.addTask {
           try await Task.sleep(for: .seconds(10))
@@ -186,7 +186,7 @@ struct CerebrasCleanupClient: CleaningText {
     request.timeoutInterval = 10
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    let (data, response) = try await session.data(for: request)
+    let (data, response) = try await AppNetworkPolicy.shared.data(for: request, session: session)
     guard let http = response as? HTTPURLResponse else {
       throw AppError.provider("Cerebras returned an invalid response.")
     }

@@ -39,6 +39,9 @@ struct MainAppLoginItemManager: LoginItemManaging {
 @MainActor
 final class AppPreferences: ObservableObject {
   private enum Key {
+    static let offlineMode = "offlineMode"
+    static let localTranscriptionModel = "localTranscriptionModel"
+    static let appleSpeechLocale = "appleSpeechLocale"
     static let transcriptionProvider = "transcriptionProvider"
     static let cleanupMode = "cleanupMode"
     static let cleanupProvider = "cleanupProvider"
@@ -59,11 +62,37 @@ final class AppPreferences: ObservableObject {
     static let diagnosticsRevoked = "diagnosticsRevoked"
   }
 
+  @Published private(set) var offlineMode: Bool
+  @Published var localTranscriptionModel: LocalTranscriptionModel {
+    didSet {
+      defaults.set(localTranscriptionModel.rawValue, forKey: Key.localTranscriptionModel)
+      onTranscriptionProviderChange?()
+    }
+  }
+  @Published var appleSpeechLocale: String {
+    didSet {
+      defaults.set(appleSpeechLocale, forKey: Key.appleSpeechLocale)
+      onTranscriptionProviderChange?()
+    }
+  }
+
+  var effectiveTranscriptionProvider: TranscriptionProvider { offlineMode ? .local : transcriptionProvider }
+  var transcriptionConfiguration: TranscriptionConfiguration {
+    TranscriptionConfiguration(provider: effectiveTranscriptionProvider,
+      localModel: localTranscriptionModel, appleLocaleIdentifier: appleSpeechLocale)
+  }
+
+  func setOfflineMode(_ enabled: Bool) {
+    offlineMode = enabled
+    defaults.set(enabled, forKey: Key.offlineMode)
+    onTranscriptionProviderChange?()
+  }
+
   @Published var transcriptionProvider: TranscriptionProvider {
     didSet {
       defaults.set(transcriptionProvider.rawValue, forKey: Key.transcriptionProvider)
       if let onTranscriptionProviderChange { onTranscriptionProviderChange() }
-      else { RealtimeTranscriptionPrewarmer.prewarm(provider: transcriptionProvider) }
+      else if !offlineMode { RealtimeTranscriptionPrewarmer.prewarm(provider: transcriptionProvider) }
     }
   }
   @Published var cleanupMode: CleanupMode {
@@ -221,6 +250,9 @@ final class AppPreferences: ObservableObject {
         cacheURL: defaults === UserDefaults.standard ? OpenRouterCatalogStore.defaultCacheURL : nil)
     self.defaults = defaults
     self.loginItemManager = loginItemManager
+    offlineMode = defaults.bool(forKey: Key.offlineMode)
+    localTranscriptionModel = LocalTranscriptionModel(rawValue: defaults.string(forKey: Key.localTranscriptionModel) ?? "") ?? .nemotron
+    appleSpeechLocale = defaults.string(forKey: Key.appleSpeechLocale) ?? ""
     transcriptionProvider =
       TranscriptionProvider(
         rawValue: defaults.string(forKey: Key.transcriptionProvider) ?? "") ?? .soniox

@@ -38,19 +38,28 @@ struct ShortcutPressTracker {
   private(set) var isPressed = false
   private var pressedAt: CGEventTimestamp = 0
   private var finishesOnRelease = false
+  private var activationMode = ShortcutActivationMode.hybrid
 
-  mutating func press(at timestamp: CGEventTimestamp, finishesOnRelease: Bool) {
+  mutating func press(
+    at timestamp: CGEventTimestamp, finishesOnRelease: Bool,
+    activationMode: ShortcutActivationMode = .hybrid
+  ) {
     guard !isPressed else { return }
     isPressed = true
     pressedAt = timestamp
     self.finishesOnRelease = finishesOnRelease
+    self.activationMode = activationMode
   }
 
   mutating func release(at timestamp: CGEventTimestamp) -> Bool {
     guard isPressed else { return false }
     defer { reset() }
     guard finishesOnRelease, timestamp >= pressedAt else { return false }
-    return timestamp - pressedAt >= Self.holdThreshold
+    switch activationMode {
+    case .hold: return true
+    case .hybrid: return timestamp - pressedAt >= Self.holdThreshold
+    case .toggle: return false
+    }
   }
 
   mutating func reset() {
@@ -86,6 +95,7 @@ enum TargetedPasteEvent {
 @MainActor
 final class GlobalShortcutMonitor {
   var onPress: (() -> UUID?)?
+  var onHoldPress: (() -> UUID?)?
   var onHoldRelease: ((UUID) -> Void)?
   var onCancel: (() -> Void)?
   var shouldCancel: (() -> Bool)?
@@ -116,7 +126,7 @@ final class GlobalShortcutMonitor {
       guard let userInfo else { return Unmanaged.passUnretained(event) }
       let monitor = Unmanaged<GlobalShortcutMonitor>.fromOpaque(userInfo).takeUnretainedValue()
       if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        monitor.resetPressedState()
+        monitor.releaseHeldSessionOnMonitoringLoss()
         if let tap = monitor.tap { CGEvent.tapEnable(tap: tap, enable: true) }
         monitor.onAvailabilityChange?(monitor.tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false)
         return Unmanaged.passUnretained(event)
@@ -130,7 +140,10 @@ final class GlobalShortcutMonitor {
       tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
       eventsOfInterest: CGEventMask(mask), callback: callback,
       userInfo: Unmanaged.passUnretained(self).toOpaque())
-    guard let tap else { onAvailabilityChange?(false); return }
+    guard let tap else {
+      onAvailabilityChange?(false)
+      return
+    }
     source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
     CGEvent.tapEnable(tap: tap, enable: true)
@@ -144,8 +157,14 @@ final class GlobalShortcutMonitor {
     source = nil
     tap = nil
     definition = nil
-    resetPressedState()
+    releaseHeldSessionOnMonitoringLoss()
     if wasMonitoring { onAvailabilityChange?(false) }
+  }
+
+  private func releaseHeldSessionOnMonitoringLoss() {
+    let generation = heldLifecycleGeneration
+    resetPressedState()
+    if let generation { onHoldRelease?(generation) }
   }
 
   private func resetPressedState() {
@@ -155,10 +174,11 @@ final class GlobalShortcutMonitor {
   }
 
   private func press(at timestamp: CGEventTimestamp) {
-    let lifecycleGeneration = onPress?()
-    heldLifecycleGeneration = activationMode == .hybrid ? lifecycleGeneration : nil
+    let lifecycleGeneration = activationMode == .hold ? onHoldPress?() : onPress?()
+    heldLifecycleGeneration = activationMode == .toggle ? nil : lifecycleGeneration
     pressTracker.press(
-      at: timestamp, finishesOnRelease: heldLifecycleGeneration != nil)
+      at: timestamp, finishesOnRelease: heldLifecycleGeneration != nil,
+      activationMode: activationMode)
   }
 
   private func release(at timestamp: CGEventTimestamp) {
@@ -171,12 +191,10 @@ final class GlobalShortcutMonitor {
   private func handle(type: CGEventType, event: CGEvent) -> Bool {
     guard let definition else { return false }
     let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-    let flags = event.flags.intersection([
-      .maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn,
-    ])
+    let modifierBits = definition.modifierBits(in: event.flags)
     if definition.isModifierOnly, type == .flagsChanged {
       switch modifierLatch.flagsChanged(
-        current: flags.rawValue, required: UInt64(definition.modifiers))
+        current: modifierBits, required: definition.requiredModifierBits)
       {
       case .press:
         press(at: event.timestamp)
@@ -192,12 +210,13 @@ final class GlobalShortcutMonitor {
     }
     if type == .keyDown, keyCode == 53 {
       guard shouldCancel?() == true else { return false }
+      resetPressedState()
       onCancel?()
       return true
     }
     guard !definition.isModifierOnly else { return false }
     if type == .keyDown, keyCode == definition.keyCode,
-      flags.rawValue == UInt64(definition.modifiers)
+      definition.matchesModifiers(event.flags)
     {
       if event.getIntegerValueField(.keyboardEventAutorepeat) == 0, !pressTracker.isPressed {
         press(at: event.timestamp)

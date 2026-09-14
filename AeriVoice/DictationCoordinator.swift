@@ -52,6 +52,7 @@ final class DictationCoordinator: ObservableObject {
   private var sessionID: DictationSessionID?
   private var activeTranscriptionConfiguration: TranscriptionConfiguration?
   private var activeCleanupSettings: ActiveCleanupSettings?
+  private var skipsCleanup = false
   private var state = NotchState(phase: .idle)
   private var bufferedAudio: [Data] = []
   private var bufferedBytes = 0
@@ -143,15 +144,15 @@ final class DictationCoordinator: ObservableObject {
     launchPreparationAttempted = true
     let credentials = self.credentials
     let audio = self.audio
-    let transcriptionKind = preferences.transcriptionProvider.credentialKind
-    let cleanupKind = preferences.cleanupProvider.credentialKind
+    let transcriptionKind = preferences.effectiveTranscriptionProvider.credentialKind
+    let cleanupKind: CredentialKind? = preferences.offlineMode ? nil : preferences.cleanupProvider.credentialKind
     let runtime = runtimeDiagnostics
     let preparationToken = runtime?.beginPreparation()
     let work = observeWork("launchPreparation")
     launchPreparationTask = Task.detached(priority: .utility) {
       async let audioPreparation = audio.prepareWithDiagnostics()
       if !Task.isCancelled, let transcriptionKind { _ = credentials.value(for: transcriptionKind) }
-      if !Task.isCancelled { _ = credentials.value(for: cleanupKind) }
+      if !Task.isCancelled, let cleanupKind { _ = credentials.value(for: cleanupKind) }
       let result = await audioPreparation
       if let preparationToken {
         await runtime?.finishPreparation(preparationToken, result: result)
@@ -165,8 +166,8 @@ final class DictationCoordinator: ObservableObject {
     case .idle, .success, .error:
       guard startTask == nil else { return }
       inserter.invalidatePendingRestoration()
-      let transcriptionConfiguration = TranscriptionConfiguration(
-        provider: preferences.transcriptionProvider)
+      let transcriptionConfiguration = preferences.transcriptionConfiguration
+      skipsCleanup = preferences.offlineMode
       let cleanupConfiguration = preferences.cleanupConfiguration
       let cleanupMode = preferences.cleanupMode
       sessionVocabulary = VocabularyNormalizer.normalize(preferences.vocabulary)
@@ -208,6 +209,14 @@ final class DictationCoordinator: ObservableObject {
     }
     toggle()
     return wasStartable && phase == .starting ? lifecycleGeneration : nil
+  }
+
+  func holdShortcutPressed() -> UUID? {
+    switch phase {
+    case .idle, .success, .error: return shortcutPressed()
+    case .starting, .recording: return audioStopped ? nil : lifecycleGeneration
+    case .processing, .cleaning, .inserting: return nil
+    }
   }
 
   func finishHeldDictation(lifecycleGeneration: UUID) {
@@ -302,10 +311,8 @@ final class DictationCoordinator: ObservableObject {
       return
     }
     let cleanupProvider = cleanupSettings.configuration.provider
-    guard
-      let cleanupKey = credentials.value(for: cleanupProvider.credentialKind),
-      !cleanupKey.isEmpty
-    else {
+    let cleanupKey = skipsCleanup ? "" : (credentials.value(for: cleanupProvider.credentialKind) ?? "")
+    guard skipsCleanup || !cleanupKey.isEmpty else {
       showReadinessError(cleanupProvider.missingCredentialError, category: .missingCredential)
       return
     }
@@ -326,7 +333,7 @@ final class DictationCoordinator: ObservableObject {
 
     benchmark.mark(.readinessChecksFinished)
 
-    if cleanupProvider == .cerebras {
+    if !skipsCleanup, cleanupProvider == .cerebras {
       let cleaner = self.cleaner
       let work = observeWork("cleanupWarmUp")
       Task {
@@ -447,37 +454,41 @@ final class DictationCoordinator: ObservableObject {
       benchmark.mark(.sttFinalized)
       benchmark.recordRawCharacters(raw.count)
       guard sessionID == id else { return }
-      phase = .cleaning
-      state.phase = .cleaning
-      notch.present(state: state)
-      guard let cleanupSettings = activeCleanupSettings else {
-        throw AppError.provider("Cleanup settings were unavailable.")
-      }
-      let cleanupProvider = cleanupSettings.configuration.provider
-      guard let cleanupKey = credentials.value(for: cleanupProvider.credentialKind),
-        !cleanupKey.isEmpty
-      else {
-        throw cleanupProvider.missingCredentialError
-      }
-      benchmark.recordCleanupMode(cleanupSettings.mode)
-      benchmark.mark(.cleanupStarted)
       let finalText: String
-      do {
-        let cleanup = try await cleaner.clean(
-          raw, mode: cleanupSettings.mode, configuration: cleanupSettings.configuration,
-          apiKey: cleanupKey)
-        guard sessionID == id else { return }
-        finalText = cleanup.text
-        benchmark.recordCleanup(cleanup.metrics)
-      } catch {
-        guard sessionID == id else { return }
+      if skipsCleanup {
         finalText = raw
-        benchmark.recordCleanupFallback(rawCharacters: raw.count, error: error)
-        state.warning = "Cleanup failed—used raw text"
+      } else {
+        phase = .cleaning
+        state.phase = .cleaning
         notch.present(state: state)
+        guard let cleanupSettings = activeCleanupSettings else {
+          throw AppError.provider("Cleanup settings were unavailable.")
+        }
+        let cleanupProvider = cleanupSettings.configuration.provider
+        guard let cleanupKey = credentials.value(for: cleanupProvider.credentialKind),
+          !cleanupKey.isEmpty
+        else {
+          throw cleanupProvider.missingCredentialError
+        }
+        benchmark.recordCleanupMode(cleanupSettings.mode)
+        benchmark.mark(.cleanupStarted)
+        do {
+          let cleanup = try await cleaner.clean(
+            raw, mode: cleanupSettings.mode, configuration: cleanupSettings.configuration,
+            apiKey: cleanupKey)
+          guard sessionID == id else { return }
+          finalText = cleanup.text
+          benchmark.recordCleanup(cleanup.metrics)
+        } catch {
+          guard sessionID == id else { return }
+          finalText = raw
+          benchmark.recordCleanupFallback(rawCharacters: raw.count, error: error)
+          state.warning = "Cleanup failed—used raw text"
+          notch.present(state: state)
+        }
+        benchmark.mark(.cleanupFinished)
       }
       benchmark.recordCleanedCharacters(finalText.count)
-      benchmark.mark(.cleanupFinished)
       guard sessionID == id else { return }
       phase = .inserting
       state.phase = .inserting

@@ -92,10 +92,27 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
   }
 }
 
+enum LocalTranscriptionModel: String, CaseIterable, Codable, Identifiable, Sendable {
+  case nemotron
+  case apple
+
+  var id: Self { self }
+  var title: String {
+    switch self {
+    case .nemotron: "NVIDIA Nemotron — Recommended"
+    case .apple: "Apple Speech"
+    }
+  }
+}
+
 struct TranscriptionConfiguration: Equatable, Sendable {
   let provider: TranscriptionProvider
+  var localModel: LocalTranscriptionModel = .nemotron
+  var appleLocaleIdentifier: String = ""
 
-  var modelID: String { provider.modelID }
+  var modelID: String {
+    provider == .local && localModel == .apple ? "apple-speech-transcriber" : provider.modelID
+  }
   var audioEncoding: String { "pcm_s16le_16000" }
   var zeroDataRetentionRequired: Bool? { provider == .meta ? true : nil }
 }
@@ -412,57 +429,6 @@ struct CleanupConfiguration: Equatable, Sendable {
     self.reasoningEffort = model.normalizedReasoningEffort(
       reasoningEffort, supportedEfforts: supportedReasoningEfforts)
   }
-}
-
-enum ShortcutActivationMode: String, CaseIterable, Equatable, Identifiable, Sendable {
-  case toggle
-  case hybrid
-
-  var id: Self { self }
-
-  var title: String {
-    switch self {
-    case .toggle: "Toggle"
-    case .hybrid: "Hybrid"
-    }
-  }
-
-  var instructions: String {
-    switch self {
-    case .toggle:
-      "Press the shortcut once to start dictation and again to finish."
-    case .hybrid:
-      "Tap once to start and again to finish, or hold the shortcut and release to finish."
-    }
-  }
-}
-
-struct ShortcutDefinition: Codable, Equatable, Sendable {
-  let keyCode: UInt16
-  let modifiers: UInt
-  let displayName: String
-  let isModifierOnly: Bool
-
-  init(keyCode: UInt16, modifiers: UInt, displayName: String, isModifierOnly: Bool = false) {
-    self.keyCode = keyCode
-    self.modifiers = modifiers
-    self.displayName = displayName
-    self.isModifierOnly = isModifierOnly
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case keyCode, modifiers, displayName, isModifierOnly
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    keyCode = try container.decode(UInt16.self, forKey: .keyCode)
-    modifiers = try container.decode(UInt.self, forKey: .modifiers)
-    displayName = try container.decode(String.self, forKey: .displayName)
-    isModifierOnly = try container.decodeIfPresent(Bool.self, forKey: .isModifierOnly) ?? false
-  }
-
-  var cgFlags: CGEventFlags { CGEventFlags(rawValue: UInt64(modifiers)) }
 }
 
 struct NotchGeometry: Equatable, Sendable {

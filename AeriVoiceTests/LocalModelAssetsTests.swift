@@ -59,6 +59,80 @@ final class LocalModelAssetsTests: XCTestCase {
     _ = try await assets.verifiedDirectory()
   }
 
+  func testVerifiedRecordContainsMeasuredFilesAndPinnedRevision() async throws {
+    let root = temporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let assets = store(root, FixtureDownload())
+    let directory = try await assets.download { _ in }
+    let record = try await assets.verify()
+    XCTAssertEqual(record.directory, directory)
+    XCTAssertEqual(record.files, manifest().assets)
+    XCTAssertEqual(record.verifiedRevision, "test-revision")
+  }
+
+  func testExternalChangedFilesHaveNoVerifiedRevisionAndCannotUsePinnedPolicy() async throws {
+    let root = temporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let assets = store(root, FixtureDownload())
+    let directory = try await assets.download { _ in }
+    let changed = Data("different variant".utf8)
+    try changed.write(to: directory.appendingPathComponent("weights/a.bin"))
+    let record = try await assets.verify(policy: .inventoryOnly)
+    XCTAssertNil(record.verifiedRevision)
+    XCTAssertEqual(record.files.first?.size, Int64(changed.count))
+    XCTAssertEqual(record.files.first?.sha256,
+      SHA256.hash(data: changed).map { String(format: "%02x", $0) }.joined())
+    do {
+      _ = try await assets.verify(policy: .matchingManifest)
+      XCTFail("External pinned models must match every hash")
+    } catch LocalModelAssets.AssetError.corruptFile(let path) {
+      XCTAssertEqual(path, "weights/a.bin")
+    }
+  }
+
+  func testExternalMatchingFilesDoNotNeedInstallationMarker() async throws {
+    let root = temporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let assets = store(root, FixtureDownload())
+    let directory = try await assets.download { _ in }
+    try FileManager.default.removeItem(at: directory.appendingPathComponent(".aerivoice-verified.json"))
+    let record = try await assets.verify(policy: .matchingManifest)
+    XCTAssertEqual(record.verifiedRevision, "test-revision")
+    do {
+      _ = try await assets.verify()
+      XCTFail("App installations still require their marker")
+    } catch LocalModelAssets.AssetError.notInstalled {}
+  }
+
+  func testExternalInventoryRejectsMissingFilesSymlinksAndExtraBundles() async throws {
+    let root = temporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let assets = store(root, FixtureDownload())
+    let directory = try await assets.download { _ in }
+    let file = directory.appendingPathComponent("weights/a.bin")
+    try FileManager.default.removeItem(at: file)
+    do {
+      _ = try await assets.verify(policy: .inventoryOnly)
+      XCTFail("Missing required files must fail even for unpinned variants")
+    } catch {}
+    try FileManager.default.createSymbolicLink(at: file,
+      withDestinationURL: directory.appendingPathComponent("tokenizer.json"))
+    do {
+      _ = try await assets.verify(policy: .inventoryOnly)
+      XCTFail("External variants must reject symbolic links")
+    } catch LocalModelAssets.AssetError.unsafePath {}
+    try FileManager.default.removeItem(at: file)
+    try Data("abc".utf8).write(to: file)
+    try FileManager.default.createDirectory(
+      at: directory.appendingPathComponent("rogue.mlmodelc"), withIntermediateDirectories: true)
+    do {
+      _ = try await assets.verify(policy: .inventoryOnly)
+      XCTFail("External variants must reject unlisted bundles")
+    } catch LocalModelAssets.AssetError.unexpectedFile(let path) {
+      XCTAssertEqual(path, "rogue.mlmodelc")
+    }
+  }
+
   func testOptionalRogueDecoderBundleIsRejectedBeforeRuntimeLoad() async throws {
     let root = temporaryRoot()
     defer {

@@ -23,6 +23,7 @@ extension DictationCoordinatorTests {
     defaults.set(false, forKey: "muteOutput")
     defaults.set(true, forKey: "latencyLogging")
     let preferences = AppPreferences(defaults: defaults)
+    preferences.onTranscriptionProviderChange = {}
     preferences.transcriptionProvider = transcriptionProvider
     preferences.cleanupProvider = cleanupProvider
     preferences.vocabulary = "AeriVoice"

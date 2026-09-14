@@ -21,7 +21,7 @@ private final class URLSessionSonioxTransport: SonioxWebSocketTransport {
     task = session.webSocketTask(with: url)
   }
 
-  func resume() { task?.resume() }
+  func resume() { if let task { AppNetworkPolicy.shared.resume(task) } }
   func send(_ message: URLSessionWebSocketTask.Message) async throws {
     guard let task else { throw CancellationError() }
     try await task.send(message)
@@ -31,6 +31,7 @@ private final class URLSessionSonioxTransport: SonioxWebSocketTransport {
     return try await task.receive()
   }
   func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+    if let task { AppNetworkPolicy.shared.forget(task) }
     task?.cancel(with: closeCode, reason: reason)
     // Retaining the session must not add a new strong reference to its closed socket.
     task = nil

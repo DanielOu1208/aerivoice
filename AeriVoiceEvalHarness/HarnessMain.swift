@@ -22,6 +22,10 @@ struct HarnessMain {
             var entry: [String: Any] = ["id": $0.rawValue, "model": $0.modelID,
               "requires_credentials": $0.credentialKind != nil]
             if let kind = $0.credentialKind { entry["credential_key"] = kind.rawValue }
+            if $0 == .local {
+              entry["local_models"] = ["nemotron", "apple"]
+              entry["apple_locale_selection"] = true
+            }
             return entry
           },
           "cleanup_models": CleanupModel.allCases.map {
@@ -43,7 +47,7 @@ struct HarnessMain {
       let scenario = try decoder.decode(EvalScenario.self, from: Data(contentsOf: URL(fileURLWithPath: arguments[2])))
       try scenario.validate()
       let credentials: EvalCredentials
-      if scenario.live, scenario.kind == "transcription", scenario.provider == .local {
+      if scenario.live, scenario.provider == .local, scenario.kind == "transcription" || scenario.offlineMode == true {
         credentials = EvalCredentials(values: [:], controlled: false)
       } else {
         credentials = try EvalCredentials.read(controlled: !scenario.live || scenario.kind == "conversion")

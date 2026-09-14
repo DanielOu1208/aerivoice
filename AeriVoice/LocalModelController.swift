@@ -23,6 +23,13 @@ final class LocalModelController: ObservableObject {
   private var transition: Task<Void, Never>?
   private var downloadTask: Task<Void, Never>?
   private var pressure: DispatchSourceMemoryPressure?
+  var assetsInstalled: Bool {
+    switch state {
+    case .available, .preparing, .ready: true
+    default: false
+    }
+  }
+  var isDownloading: Bool { downloadTask != nil }
   var isReady: Bool { state == .ready && runtime.isReady }
   var canRemove: Bool { !runtime.hasActiveSession && state != .preparing }
 
@@ -77,7 +84,7 @@ final class LocalModelController: ObservableObject {
   }
 
   func download() {
-    guard downloadTask == nil else { return }
+    guard downloadTask == nil, !AppNetworkPolicy.shared.isOffline else { return }
     state = .downloading(0)
     downloadTask = Task { @MainActor [weak self] in
       guard let self else { return }
@@ -99,6 +106,11 @@ final class LocalModelController: ObservableObject {
   }
 
   func cancelDownload() { downloadTask?.cancel() }
+
+  func cancelDownloadAndWait() async {
+    downloadTask?.cancel()
+    await downloadTask?.value
+  }
 
   func remove() {
     guard canRemove, downloadTask == nil else { return }

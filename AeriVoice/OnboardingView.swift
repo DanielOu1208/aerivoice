@@ -27,8 +27,8 @@ struct OnboardingReadiness: Equatable, Sendable {
     hasPermissions: Bool, localModelReady: Bool = false
   ) -> OnboardingReadiness {
     OnboardingReadiness(
-      isTranscriptionReady: preferences.transcriptionProvider.credentialKind.map(hasCredential) ?? localModelReady,
-      hasCleanupCredential: hasCredential(preferences.cleanupProvider.credentialKind),
+      isTranscriptionReady: preferences.effectiveTranscriptionProvider.credentialKind.map(hasCredential) ?? localModelReady,
+      hasCleanupCredential: preferences.offlineMode || hasCredential(preferences.cleanupProvider.credentialKind),
       hasPermissions: hasPermissions,
       hasShortcut: preferences.shortcut != nil)
   }
@@ -143,8 +143,15 @@ struct OnboardingView: View {
             }
           }
           .id(preferences.transcriptionProvider)
-          if preferences.transcriptionProvider == .local {
-            LocalModelSetupView(controller: model.localModel)
+          .disabled(preferences.offlineMode || model.coordinator.canCancel)
+          if preferences.effectiveTranscriptionProvider == .local {
+            LocalTranscriptionSettings(model: model)
+            OfflineModeControl(model: model)
+          } else {
+            Button("Try Apple Speech") {
+              preferences.localTranscriptionModel = .apple
+              preferences.transcriptionProvider = .local
+            }
           }
         }
         Section("AI cleanup") {
@@ -160,6 +167,7 @@ struct OnboardingView: View {
             }
           }
           .id(preferences.cleanupProvider)
+          .disabled(preferences.offlineMode)
         }
       }
       .formStyle(.grouped)
@@ -210,8 +218,7 @@ struct OnboardingView: View {
   private var shortcutStep: some View {
     Form {
       Section("Activation shortcut") {
-        ShortcutRecorder(current: preferences.shortcut, onCapture: model.acceptShortcut)
-          .frame(maxWidth: .infinity)
+        ActivationShortcutRecorder(model: model)
         Picker("Shortcut behavior", selection: $preferences.shortcutActivationMode) {
           ForEach(ShortcutActivationMode.allCases) { mode in
             Text(mode.title).tag(mode)
@@ -254,13 +261,11 @@ struct OnboardingView: View {
   private var stepSubtitle: String {
     switch step {
     case .providers:
-      "Choose and connect a service for transcription and one for AI cleanup."
+      "Connect cloud services, or set up a local model and enable Offline mode."
     case .permissions:
       "You stay in control of when AeriVoice can listen and insert text."
     case .shortcut:
-      preferences.shortcutActivationMode == .hybrid
-        ? "Tap or hold one shortcut to dictate from any app."
-        : "One shortcut starts and stops dictation from any app."
+      preferences.shortcutActivationMode.instructions
     }
   }
 

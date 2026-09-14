@@ -49,7 +49,7 @@ struct OpenRouterCleanupClient: CleaningText {
     let preparedRequest = request
     let urlSession = session
     let (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
-      group.addTask { try await urlSession.data(for: preparedRequest) }
+      group.addTask { try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession) }
       group.addTask {
         try await Task.sleep(for: .seconds(10))
         throw URLError(.timedOut)
@@ -124,7 +124,7 @@ struct OpenRouterCleanupClient: CleaningText {
     var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/auth/key")!)
     request.timeoutInterval = 10
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-    let (_, response) = try await session.data(for: request)
+    let (_, response) = try await AppNetworkPolicy.shared.data(for: request, session: session)
     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
       throw AppError.provider("OpenRouter rejected this key.")
     }

@@ -61,3 +61,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
+
+      - name: Check local evaluation scenarios and model records
+        run: |
+          xcodebuild \
+            -project AeriVoice.xcodeproj \
+            -scheme AeriVoiceEvalHarness \
+            -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/aerivoice-eval-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+          python3 scripts/test-local-eval.py "$RUNNER_TEMP/aerivoice-eval-build/AeriVoiceEvalHarness" -v
+          python3 scripts/test-apple-eval.py "$RUNNER_TEMP/aerivoice-eval-build/AeriVoiceEvalHarness" -v
+          python3 scripts/test-local-model-provenance.py -v
