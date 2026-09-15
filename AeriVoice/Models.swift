@@ -152,6 +152,25 @@ enum CleanupMode: String, CaseIterable, Codable, Sendable {
   case polished = "Polished"
 }
 
+/// Instructions are captured at recording start, independently of provider settings.
+struct CleanupInstructions: Equatable, Sendable {
+  static let maxCustomInstructionCharacters = 2_000
+
+  let mode: CleanupMode
+  let customInstructions: String
+
+  init(mode: CleanupMode, customInstructions: String = "") {
+    self.mode = mode
+    self.customInstructions = customInstructions
+  }
+
+  func validate() throws {
+    guard customInstructions.unicodeScalars.count <= Self.maxCustomInstructionCharacters else {
+      throw AppError.provider("Custom instructions must be 2,000 characters or fewer.")
+    }
+  }
+}
+
 struct CleanupReasoningEffort: RawRepresentable, Hashable, CaseIterable, Codable, Sendable {
   let rawValue: String
 
@@ -569,11 +588,18 @@ protocol RealtimeTranscribing: AnyObject {
 protocol CleaningText: Sendable {
   func warmUp(configuration: CleanupConfiguration, apiKey: String) async
   func clean(
-    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+    _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult
 }
 
 extension CleaningText {
+  func clean(
+    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+  ) async throws -> CleanupTextResult {
+    try await clean(text, instructions: CleanupInstructions(mode: mode),
+                    configuration: configuration, apiKey: apiKey)
+  }
+
   func warmUp(configuration: CleanupConfiguration, apiKey: String) async {}
 }
 

@@ -17,6 +17,10 @@ final class GroqCleanupClientTests: XCTestCase {
       XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer key")
       let body = try XCTUnwrap(request.groqBodyData)
       let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+      let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+      XCTAssertEqual(messages.last?["content"], "hello world")
+      XCTAssertTrue(messages.first?["content"]?.contains("Use Canadian spelling.") == true)
+      XCTAssertTrue(messages.first?["content"]?.contains("JSON") == true)
       XCTAssertEqual(json["model"] as? String, "qwen/qwen3.8-27b")
       XCTAssertEqual(json["reasoning_effort"] as? String, "none")
       XCTAssertEqual(json["reasoning_format"] as? String, "hidden")
@@ -35,7 +39,7 @@ final class GroqCleanupClientTests: XCTestCase {
     }
 
     let result = try await GroqCleanupClient(session: makeSession()).clean(
-      "hello world", mode: .faithful,
+      "hello world", instructions: .init(mode: .faithful, customInstructions: "Use Canadian spelling."),
       configuration: CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none),
       apiKey: "key")
 

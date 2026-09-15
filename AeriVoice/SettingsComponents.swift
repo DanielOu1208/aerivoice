@@ -412,3 +412,48 @@ struct PermissionStatusRow: View {
     }
   }
 }
+
+/// Invalid drafts stay visible without replacing the last saved instructions.
+struct CleanupInstructionsEditor: View {
+  @ObservedObject var preferences: AppPreferences
+  @State private var draft = ""
+
+  private var characterCount: Int { draft.unicodeScalars.count }
+  private var exceedsLimit: Bool {
+    characterCount > CleanupInstructions.maxCustomInstructionCharacters
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Custom instructions").font(.headline)
+      Text("Applies to both styles. Request a tone, preferred terms, translation, or formatting. Leave empty for the default cleanup.")
+        .font(.caption).foregroundStyle(.secondary)
+      TextEditor(text: $draft)
+        .font(.body)
+        .frame(minHeight: 90, maxHeight: 160)
+        .accessibilityLabel("Custom instructions")
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+      HStack {
+        Text("\(characterCount) / 2,000")
+          .foregroundStyle(exceedsLimit ? .red : .secondary)
+        Spacer()
+        Button("Clear") {
+          draft = ""
+          preferences.cleanupCustomInstructions = ""
+        }
+        .disabled(draft.isEmpty)
+        .accessibilityLabel("Clear custom instructions")
+      }
+      .font(.caption)
+      if exceedsLimit {
+        Text("Over the limit. These changes aren't saved; your last saved instructions remain active.")
+          .font(.caption).foregroundStyle(.red)
+      }
+    }
+    .padding(.vertical, 4)
+    .onAppear { draft = preferences.cleanupCustomInstructions }
+    .onChange(of: draft) { _, value in
+      if !exceedsLimit { preferences.cleanupCustomInstructions = value }
+    }
+  }
+}

@@ -1,10 +1,15 @@
 import Foundation
 
 struct CerebrasCleanupClient: CleaningText {
+  private let systemPromptOverride: String?
   private let session: URLSession
   private let warmUpState: CerebrasWarmUpState
 
-  init(session: URLSession = .shared, warmUpInterval: Duration = .seconds(60)) {
+  init(
+    session: URLSession = .shared, warmUpInterval: Duration = .seconds(60),
+    systemPromptOverride: String? = nil
+  ) {
+    self.systemPromptOverride = systemPromptOverride
     self.session = session
     warmUpState = CerebrasWarmUpState(minimumInterval: warmUpInterval)
   }
@@ -36,16 +41,19 @@ struct CerebrasCleanupClient: CleaningText {
   }
 
   func clean(
-    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+    _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult {
-    let maxCompletionTokens = try CerebrasTokenBudget.maxCompletionTokens(for: text)
+    let systemPrompt = try CleanupPrompt.system(instructions: instructions, override: systemPromptOverride)
+    let maxCompletionTokens = try CerebrasTokenBudget.maxCompletionTokens(
+      for: text, systemPrompt: systemPrompt,
+      allowsExpansion: !instructions.customInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     return try await clean(
-      text, mode: mode, configuration: configuration, apiKey: apiKey,
+      text, systemPrompt: systemPrompt, configuration: configuration, apiKey: apiKey,
       maxCompletionTokens: maxCompletionTokens)
   }
 
   private func clean(
-    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String,
+    _ text: String, systemPrompt: String, configuration: CleanupConfiguration, apiKey: String,
     maxCompletionTokens: Int
   ) async throws -> CleanupTextResult {
     guard configuration.provider == .cerebras else {
@@ -62,7 +70,7 @@ struct CerebrasCleanupClient: CleaningText {
       CerebrasRequest(
         model: configuration.model.rawValue,
         messages: [
-          .init(role: "system", content: CleanupPrompt.system(mode: mode)),
+          .init(role: "system", content: systemPrompt),
           .init(role: "user", content: text),
         ],
         reasoningEffort: configuration.reasoningEffort.rawValue,
@@ -199,7 +207,7 @@ struct CerebrasCleanupClient: CleaningText {
       throw AppError.provider("Cerebras accepted this key, but Qwen 3.8 27B is unavailable.")
     }
     _ = try await clean(
-      "Test.", mode: .faithful,
+      "Test.", systemPrompt: CleanupPrompt.system(mode: .faithful),
       configuration: CleanupConfiguration(model: model, reasoningEffort: .none), apiKey: apiKey,
       maxCompletionTokens: CerebrasTokenBudget.verificationTokens)
   }
@@ -303,13 +311,17 @@ enum CerebrasTokenBudget {
   static let totalTokenLimit = 16_000
   static let requestOverheadTokens = 512
 
-  static func maxCompletionTokens(for text: String) throws -> Int {
+  static func maxCompletionTokens(
+    for text: String, systemPrompt: String = "", allowsExpansion: Bool = false
+  ) throws -> Int {
     let estimatedTokens = estimatedTokens(for: text)
     let safetyMargin = max(128, (estimatedTokens + 3) / 4)
     let completionTokens = min(
       maximumCompletionTokens,
-      max(minimumCompletionTokens, estimatedTokens + safetyMargin))
-    guard estimatedTokens + requestOverheadTokens + completionTokens <= totalTokenLimit else {
+      max(minimumCompletionTokens,
+          allowsExpansion ? estimatedTokens * 3 + safetyMargin : estimatedTokens + safetyMargin))
+    let promptTokens = systemPrompt.isEmpty ? 0 : Self.estimatedTokens(for: systemPrompt)
+    guard estimatedTokens + promptTokens + requestOverheadTokens + completionTokens <= totalTokenLimit else {
       throw AppError.provider(
         "This dictation is too long for Cerebras’s current limit. Use OpenRouter or try a shorter dictation."
       )

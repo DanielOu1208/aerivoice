@@ -44,6 +44,7 @@ final class AppPreferences: ObservableObject {
     static let appleSpeechLocale = "appleSpeechLocale"
     static let transcriptionProvider = "transcriptionProvider"
     static let cleanupMode = "cleanupMode"
+    static let cleanupCustomInstructions = "cleanupCustomInstructions"
     static let cleanupProvider = "cleanupProvider"
     static let catalogRequiresZeroDataRetention = "catalogRequiresZeroDataRetention"
     static let cleanupModel = "cleanupModel"
@@ -97,6 +98,9 @@ final class AppPreferences: ObservableObject {
   }
   @Published var cleanupMode: CleanupMode {
     didSet { defaults.set(cleanupMode.rawValue, forKey: Key.cleanupMode) }
+  }
+  @Published var cleanupCustomInstructions: String {
+    didSet { defaults.set(cleanupCustomInstructions, forKey: Key.cleanupCustomInstructions) }
   }
   @Published var cleanupProvider: CleanupProvider {
     didSet {
@@ -256,6 +260,7 @@ final class AppPreferences: ObservableObject {
     transcriptionProvider =
       TranscriptionProvider(
         rawValue: defaults.string(forKey: Key.transcriptionProvider) ?? "") ?? .soniox
+    cleanupCustomInstructions = defaults.string(forKey: Key.cleanupCustomInstructions) ?? ""
     cleanupMode = CleanupMode(rawValue: defaults.string(forKey: Key.cleanupMode) ?? "") ?? .polished
     let savedProvider = CleanupProvider(
       rawValue: defaults.string(forKey: Key.cleanupProvider) ?? "")

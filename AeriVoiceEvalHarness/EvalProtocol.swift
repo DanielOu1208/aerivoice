@@ -20,6 +20,8 @@ struct EvalScenario: Decodable {
   let cleanupModel: String?
   let cleanupReasoning: String?
   let cleanupMode: String?
+  let cleanupCustomInstructions: String?
+  let cleanupPromptOverride: String?
   let vocabulary: [String]?
   let prepared: Bool?
   let soundCues: Bool?
@@ -42,6 +44,10 @@ struct EvalScenario: Decodable {
     CleanupConfiguration(model: model, reasoningEffort: cleanupReasoning.flatMap(CleanupReasoningEffort.init) ?? model.defaultReasoningEffort)
   }
   var cleaningMode: CleanupMode { CleanupMode(rawValue: cleanupMode ?? "Faithful")! }
+  static let maxPromptOverrideCharacters = 16_000
+  var cleaningInstructions: CleanupInstructions {
+    CleanupInstructions(mode: cleaningMode, customInstructions: cleanupCustomInstructions ?? "")
+  }
   var count: Int { repetitions ?? 1 }
   var timeout: Double { deadlineS ?? 60 }
   var observationMS: Double { postResultObservationMs ?? 2_500 }
@@ -83,6 +89,14 @@ struct EvalScenario: Decodable {
     if offlineMode == true, provider != .local || kind == "cleanup" || kind == "conversion" { throw EvalError.invalidScenario }
     if let localModelVariant, !["560ms", "1120ms"].contains(localModelVariant) { throw EvalError.invalidScenario }
     if localModelVariant == "1120ms", localModelPath == nil { throw EvalError.invalidScenario }
+    try cleaningInstructions.validate()
+    if let cleanupPromptOverride {
+      guard kind == "cleanup",
+        !cleanupPromptOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        cleanupPromptOverride.unicodeScalars.count <= Self.maxPromptOverrideCharacters,
+        (cleanupCustomInstructions ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else { throw EvalError.invalidScenario }
+    }
     if let cleanupReasoning {
       guard let effort = CleanupReasoningEffort(rawValue: cleanupReasoning), model.supportedReasoningEfforts.contains(effort) else {
         throw EvalError.invalidScenario

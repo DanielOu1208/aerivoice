@@ -14,6 +14,10 @@ final class OpenRouterCleanupClientTests: XCTestCase {
       XCTAssertEqual(request.timeoutInterval, 10)
       let body = try XCTUnwrap(request.bodyData)
       let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+      let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+      XCTAssertEqual(messages.last?["content"], "hello world")
+      XCTAssertTrue(messages.first?["content"]?.contains("Use Canadian spelling.") == true)
+      XCTAssertTrue(messages.first?["content"]?.contains("JSON") == true)
       XCTAssertEqual(json["model"] as? String, "google/gemini-3.7-flash")
       XCTAssertEqual(json["max_tokens"] as? Int, 8_192)
       let reasoning = try XCTUnwrap(json["reasoning"] as? [String: Any])
@@ -36,7 +40,7 @@ final class OpenRouterCleanupClientTests: XCTestCase {
       )
     }
     let result = try await OpenRouterCleanupClient(session: makeSession()).clean(
-      "hello world", mode: .faithful,
+      "hello world", instructions: .init(mode: .faithful, customInstructions: "Use Canadian spelling."),
       configuration: CleanupConfiguration(model: .gemini37Flash, reasoningEffort: .low),
       apiKey: "key")
     XCTAssertEqual(result.text, "Hello, world.")
@@ -187,6 +191,7 @@ final class OpenRouterCleanupClientTests: XCTestCase {
         XCTAssertEqual(provider["zdr"] as? Bool, requiresZDR)
         let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
         XCTAssertTrue(messages[0]["content"]?.contains("plain text") == true)
+        XCTAssertTrue(messages[0]["content"]?.contains("Use bullet points.") == true)
         XCTAssertFalse(messages[0]["content"]?.contains("JSON") == true)
         let response = #"{"choices":[{"finish_reason":"stop","message":{"content":"你好，world."}}]}"#
         return (
@@ -195,7 +200,7 @@ final class OpenRouterCleanupClientTests: XCTestCase {
         )
       }
       let result = try await OpenRouterCleanupClient(session: makeSession()).clean(
-        "你好 world", mode: .faithful,
+        "你好 world", instructions: .init(mode: .faithful, customInstructions: "Use bullet points."),
         configuration: CleanupConfiguration(
           model: try XCTUnwrap(CleanupModel(openRouterID: "vendor/new-chat")),
           reasoningEffort: .automatic, catalogRequiresZeroDataRetention: requiresZDR),

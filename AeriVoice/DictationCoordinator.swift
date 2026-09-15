@@ -26,7 +26,7 @@ struct SystemDictationReadiness: DictationReadinessChecking {
 @MainActor
 final class DictationCoordinator: ObservableObject {
   private struct ActiveCleanupSettings {
-    let mode: CleanupMode
+    let instructions: CleanupInstructions
     let configuration: CleanupConfiguration
   }
 
@@ -173,7 +173,9 @@ final class DictationCoordinator: ObservableObject {
       sessionVocabulary = VocabularyNormalizer.normalize(preferences.vocabulary)
       activeTranscriptionConfiguration = transcriptionConfiguration
       activeCleanupSettings = ActiveCleanupSettings(
-        mode: cleanupMode, configuration: cleanupConfiguration)
+        instructions: CleanupInstructions(mode: cleanupMode,
+          customInstructions: preferences.cleanupCustomInstructions),
+        configuration: cleanupConfiguration)
       benchmark.begin(
         enabled: preferences.latencyLogging,
         transcriptionConfiguration: transcriptionConfiguration, cleanupMode: cleanupMode,
@@ -470,11 +472,11 @@ final class DictationCoordinator: ObservableObject {
         else {
           throw cleanupProvider.missingCredentialError
         }
-        benchmark.recordCleanupMode(cleanupSettings.mode)
+        benchmark.recordCleanupMode(cleanupSettings.instructions.mode)
         benchmark.mark(.cleanupStarted)
         do {
           let cleanup = try await cleaner.clean(
-            raw, mode: cleanupSettings.mode, configuration: cleanupSettings.configuration,
+            raw, instructions: cleanupSettings.instructions, configuration: cleanupSettings.configuration,
             apiKey: cleanupKey)
           guard sessionID == id else { return }
           finalText = cleanup.text

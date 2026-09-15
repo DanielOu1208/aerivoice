@@ -152,6 +152,7 @@ struct CleanupSettingsPage: View {
           }
           .pickerStyle(.menu)
         }
+        CleanupInstructionsEditor(preferences: preferences)
       }
       Section("Provider") {
         ProviderSelectionRow(model: model, kind: preferences.cleanupProvider.credentialKind) {
@@ -250,9 +251,9 @@ struct CleanupSettingsPage: View {
   private var cleanupModeDescription: String {
     switch preferences.cleanupMode {
     case .faithful:
-      "Corrects punctuation, casing, and obvious transcription mistakes while preserving your wording."
+      "Removes speech clutter and corrects punctuation and obvious transcription mistakes while preserving your wording."
     case .polished:
-      "Allows careful rephrasing to produce smoother, more concise text."
+      "Removes speech clutter and improves grammar and phrasing without losing your meaning or details."
     }
   }
 

@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 @MainActor
@@ -33,14 +34,26 @@ final class EvalRunner {
     }
     defer { resources.stop(); signals.forEach { $0.cancel() } }
     resources.start()
-    events.emit("run_started", [
+    var runMetadata: [String: Any] = [
       "id": scenario.id ?? "evaluation", "kind": scenario.kind, "mode": scenario.mode,
       "pid": getpid(), "environment": EvalEvents.object(BenchmarkEnvironment.live),
       "measurement_boundary": "production_pipeline_harness", "resource_sampling_interval_ms": 100,
       "instrumentation_cpu_included": true, "audio_hardware": false, "desktop_insertion": false,
       "cleanup_bypassed": scenario.kind == "transcription" || scenario.offlineMode == true,
       "offline_mode": scenario.offlineMode == true,
-    ])
+    ]
+    if ["cleanup", "pipeline", "stability"].contains(scenario.kind), scenario.offlineMode != true {
+      let plainText = scenario.model.provider == .openRouter && scenario.model.isOpenRouterCatalogModel
+      let prompt = try CleanupPrompt.system(
+        instructions: scenario.cleaningInstructions, plainText: plainText,
+        override: scenario.cleanupPromptOverride)
+      runMetadata["cleanup_effective_prompt_sha256"] = promptHash(prompt)
+      runMetadata["cleanup_output_mode"] = plainText ? "plain" : "json"
+      if let override = scenario.cleanupPromptOverride {
+        runMetadata["cleanup_prompt_override_sha256"] = promptHash(override)
+      }
+    }
+    events.emit("run_started", runMetadata)
     if scenario.kind == "cleanup" { try await runCleanup(); return }
     guard let path = scenario.audioPath else { throw EvalError.invalidAudio }
     let fixture = try EvalAudioFixture(path: path, rate: scenario.fixtureRate,
@@ -50,6 +63,10 @@ final class EvalRunner {
                                     "pcm_bytes": fixture.pcmBytes, "predecoded": true])
     if scenario.kind == "conversion" { try await runConversion(fixture); return }
     try await runSessions(fixture)
+  }
+
+  private func promptHash(_ prompt: String) -> String {
+    SHA256.hash(data: Data(prompt.utf8)).map { String(format: "%02x", $0) }.joined()
   }
 
   private func makeCleaner() -> EvalCleaner {
@@ -62,8 +79,9 @@ final class EvalRunner {
     }
     let session = URLSession(configuration: configuration)
     return EvalCleaner(client: CleanupClientRouter(
-      openRouter: OpenRouterCleanupClient(session: session), groq: GroqCleanupClient(session: session),
-      cerebras: CerebrasCleanupClient(session: session)), events: events)
+      openRouter: OpenRouterCleanupClient(session: session, systemPromptOverride: scenario.cleanupPromptOverride),
+      groq: GroqCleanupClient(session: session, systemPromptOverride: scenario.cleanupPromptOverride),
+      cerebras: CerebrasCleanupClient(session: session, systemPromptOverride: scenario.cleanupPromptOverride)), events: events)
   }
 
   private func runSessions(_ fixture: EvalAudioFixture) async throws {
@@ -153,6 +171,7 @@ final class EvalRunner {
     preferences.cleanupModel = scenario.model
     preferences.cleanupReasoningEffort = scenario.configuration.reasoningEffort
     preferences.cleanupMode = scenario.cleaningMode
+    preferences.cleanupCustomInstructions = scenario.cleanupCustomInstructions ?? ""
     preferences.vocabulary = (scenario.vocabulary ?? []).joined(separator: "\n")
     preferences.soundCues = scenario.soundCues ?? true
     preferences.muteOutput = true
@@ -257,7 +276,7 @@ final class EvalRunner {
       let operation = EvalCleanupOperation()
       let task = Task {
         do {
-          operation.result = .success(try await cleaner.clean(text, mode: scenario.cleaningMode,
+          operation.result = .success(try await cleaner.clean(text, instructions: scenario.cleaningInstructions,
                                                              configuration: scenario.configuration, apiKey: key))
         } catch { operation.result = .failure(error) }
       }

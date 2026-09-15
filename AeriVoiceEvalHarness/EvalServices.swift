@@ -125,7 +125,7 @@ final class EvalReceiver: TextInserting {
 
 /// STT-only runs preserve coordinator stop/drain/finalization ordering but bypass cleanup requests.
 struct EvalIdentityCleaner: CleaningText {
-  func clean(_ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String) async throws -> CleanupTextResult {
+  func clean(_ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String) async throws -> CleanupTextResult {
     CleanupTextResult(text: text, metrics: CleanupRequestMetrics(
       actualModel: nil, selectedProvider: nil, selectedProviderModel: nil, routingStrategy: nil,
       routingAttempt: nil, serviceTier: nil, promptTokens: nil, completionTokens: nil,
