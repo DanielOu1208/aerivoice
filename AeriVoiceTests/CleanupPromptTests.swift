@@ -4,6 +4,32 @@ import XCTest
 @testable import AeriVoice
 
 final class CleanupPromptTests: XCTestCase {
+  func testComposeCustomSettingsKeepTheEntireBasePromptAndOutputFormat() throws {
+    for plainText in [false, true] {
+      let base = CleanupPrompt.system(mode: .compose, plainText: plainText)
+      let custom = "Translate into Traditional Chinese and avoid bullet points."
+      let prompt = try CleanupPrompt.system(
+        instructions: .init(mode: .compose, customInstructions: custom), plainText: plainText)
+      XCTAssertTrue(prompt.hasPrefix(base + "\n\n"))
+      XCTAssertTrue(prompt.hasSuffix(custom))
+      XCTAssertTrue(prompt.contains("override default style, language, and formatting rules only"))
+      XCTAssertTrue(prompt.contains("Keep the required response format"))
+      XCTAssertFalse(prompt.contains("Spoken formatting phrases stay literal."))
+      XCTAssertTrue(base.contains(plainText ? "plain text" : "JSON"))
+      XCTAssertEqual(base.contains("schema JSON"), !plainText)
+      XCTAssertFalse(plainText && base.contains("JSON"))
+    }
+  }
+
+  func testFormattingExpansionDoesNotChangeExistingStyleBudgets() {
+    XCTAssertTrue(CleanupInstructions(mode: .compose).allowsExpansion)
+    for mode: CleanupMode in [.faithful, .polished] {
+      XCTAssertFalse(CleanupInstructions(mode: mode).allowsExpansion)
+      XCTAssertFalse(CleanupInstructions(mode: mode, customInstructions: " \n").allowsExpansion)
+      XCTAssertTrue(CleanupInstructions(mode: mode, customInstructions: "Use bullets.").allowsExpansion)
+    }
+  }
+
   func testEmptyCustomInstructionsDoNotAddTokens() throws {
     for mode in CleanupMode.allCases {
       for plainText in [false, true] {

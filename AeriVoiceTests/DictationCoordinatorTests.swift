@@ -767,7 +767,7 @@ final class DictationCoordinatorTests: XCTestCase {
 
     fixture.preferences.cleanupModel = .gpt56LunaFast
     fixture.preferences.cleanupReasoningEffort = .max
-    fixture.preferences.cleanupMode = .polished
+    fixture.preferences.cleanupMode = .compose
     fixture.preferences.cleanupCustomInstructions = "Translate into Chinese."
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .success }
@@ -786,7 +786,7 @@ final class DictationCoordinatorTests: XCTestCase {
     XCTAssertEqual(
       fixture.cleaner.lastConfiguration,
       CleanupConfiguration(model: .gpt56LunaFast, reasoningEffort: .max))
-    XCTAssertEqual(fixture.cleaner.lastMode, .polished)
+    XCTAssertEqual(fixture.cleaner.lastMode, .compose)
     XCTAssertEqual(fixture.cleaner.lastInstructions?.customInstructions, "Translate into Chinese.")
   }
 }

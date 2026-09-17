@@ -150,6 +150,19 @@ enum TranscriptTail {
 enum CleanupMode: String, CaseIterable, Codable, Sendable {
   case faithful = "Faithful"
   case polished = "Polished"
+  case compose = "Compose"
+
+  var displayName: String {
+    self == .compose ? "Compose (Experimental)" : rawValue
+  }
+
+  var summary: String {
+    switch self {
+    case .faithful: "Light cleanup that stays close to your wording."
+    case .polished: "Improves grammar and flow while preserving your meaning."
+    case .compose: "Formats lists and paragraphs and applies spoken corrections."
+    }
+  }
 }
 
 /// Instructions are captured at recording start, independently of provider settings.
@@ -158,6 +171,10 @@ struct CleanupInstructions: Equatable, Sendable {
 
   let mode: CleanupMode
   let customInstructions: String
+
+  var allowsExpansion: Bool {
+    mode == .compose || !customInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
 
   init(mode: CleanupMode, customInstructions: String = "") {
     self.mode = mode

@@ -15,7 +15,7 @@ struct GroqCleanupClient: CleaningText {
     let systemPrompt = try CleanupPrompt.system(instructions: instructions, override: systemPromptOverride)
     let maxCompletionTokens = try GroqTokenBudget.maxCompletionTokens(
       for: text, systemPrompt: systemPrompt,
-      allowsExpansion: !instructions.customInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      allowsExpansion: instructions.allowsExpansion)
     return try await clean(
       text, systemPrompt: systemPrompt, configuration: configuration, apiKey: apiKey,
       maxCompletionTokens: maxCompletionTokens)

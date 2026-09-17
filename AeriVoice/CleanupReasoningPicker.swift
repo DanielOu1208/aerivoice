@@ -65,7 +65,10 @@ struct CleanupReasoningPicker: View {
         return "Model default (\(defaultEffort.displayName))"
       }
     }
-    if preferences.cleanupModel == .qwen38_27BCerebras && effort == .none {
+    if preferences.cleanupModel == .qwen38_27BCerebras && effort == .none,
+      preferences.cleanupMode != .compose,
+      preferences.cleanupCustomInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
       return "None (Recommended)"
     }
     return effort.displayName

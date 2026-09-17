@@ -146,11 +146,11 @@ struct CleanupSettingsPage: View {
   var body: some View {
     Form {
       Section("Cleanup style") {
-        SettingsControlRow(title: "Style", message: cleanupModeDescription) {
-          Picker("Style", selection: $preferences.cleanupMode) {
-            ForEach(CleanupMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-          }
-          .pickerStyle(.menu)
+        SettingsControlRow(title: "Style", message: preferences.cleanupMode.summary) {
+          CleanupStylePicker(selection: $preferences.cleanupMode)
+        }
+        if preferences.cleanupMode == .compose {
+          ExperimentalCleanupNotice()
         }
         CleanupInstructionsEditor(preferences: preferences)
       }
@@ -246,15 +246,6 @@ struct CleanupSettingsPage: View {
 
   private var selectedModelName: String {
     catalog.entry(for: preferences.cleanupModel)?.name ?? preferences.cleanupModel.displayName
-  }
-
-  private var cleanupModeDescription: String {
-    switch preferences.cleanupMode {
-    case .faithful:
-      "Removes speech clutter and corrects punctuation and obvious transcription mistakes while preserving your wording."
-    case .polished:
-      "Removes speech clutter and improves grammar and phrasing without losing your meaning or details."
-    }
   }
 
   private func warning(_ text: String) -> some View {

@@ -425,9 +425,12 @@ struct CleanupInstructionsEditor: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Custom instructions").font(.headline)
-      Text("Applies to both styles. Request a tone, preferred terms, translation, or formatting. Leave empty for the default cleanup.")
+      Text("Custom instructions (Experimental)").font(.headline)
+      Text("Applies to all cleanup styles. Request a tone, preferred terms, translation, or formatting. Leave empty for the default cleanup.")
         .font(.caption).foregroundStyle(.secondary)
+      if preferences.cleanupMode != .compose {
+        ExperimentalCleanupNotice()
+      }
       TextEditor(text: $draft)
         .font(.body)
         .frame(minHeight: 90, maxHeight: 160)
@@ -454,6 +457,65 @@ struct CleanupInstructionsEditor: View {
     .onAppear { draft = preferences.cleanupCustomInstructions }
     .onChange(of: draft) { _, value in
       if !exceedsLimit { preferences.cleanupCustomInstructions = value }
+    }
+  }
+}
+
+struct ExperimentalCleanupNotice: View {
+  var body: some View {
+    Label(
+      "Experimental: edits may be missed or change your meaning. When using Compose or custom instructions, we recommend trying higher reasoning for reliability when supported. It adds latency; improvements are not yet verified. Review important text.",
+      systemImage: "exclamationmark.triangle"
+    )
+    .font(.caption)
+    .foregroundStyle(.secondary)
+    .fixedSize(horizontal: false, vertical: true)
+  }
+}
+
+struct CleanupStylePicker: View {
+  @Binding var selection: CleanupMode
+  @State private var isExpanded = false
+
+  var body: some View {
+    Button {
+      isExpanded.toggle()
+    } label: {
+      HStack(spacing: 8) {
+        Text(selection.displayName)
+        Image(systemName: "chevron.up.chevron.down").font(.caption2)
+      }
+    }
+    .accessibilityLabel("Cleanup style")
+    .accessibilityValue(selection.displayName)
+    .popover(isPresented: $isExpanded, arrowEdge: .bottom) {
+      VStack(alignment: .leading, spacing: 4) {
+        ForEach(CleanupMode.allCases, id: \.self) { mode in
+          Button {
+            selection = mode
+            isExpanded = false
+          } label: {
+            HStack(alignment: .top, spacing: 10) {
+              Image(systemName: selection == mode ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(selection == mode ? Color.accentColor : Color.secondary)
+              VStack(alignment: .leading, spacing: 4) {
+                Text(mode.displayName).font(.headline)
+                Text(mode.summary).font(.caption).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+              Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(mode.displayName + ". " + mode.summary)
+          .accessibilityAddTraits(selection == mode ? [.isSelected] : [])
+        }
+      }
+      .padding(8)
+      .frame(width: 360)
     }
   }
 }

@@ -43,7 +43,7 @@ AI, and keep writing without switching windows.
   transcribes on your Mac; Offline mode inserts the result with no AI cleanup and
   no cloud keys.
 - **Your words, your style.** Polished mode refines your writing by default.
-  Choose Faithful mode for lighter edits; existing style choices are preserved.
+  Choose Faithful for lighter edits, or Compose for lists, paragraphs, and spoken corrections; existing style choices are preserved.
 - **Stay in your flow.** Tap or hold a global shortcut, follow the live transcript
   in a compact notch-style overlay, and send the finished text to your current app.
 - **Make it personal.** Add vocabulary hints for names and specialist terms,
@@ -126,12 +126,42 @@ engine when assets are unavailable.
 Local accuracy may be lower than cloud models. [Local dictation](docs/LOCAL-DICTATION.md)
 covers model requirements, shortcuts, privacy, and validation.
 
-## Custom cleanup instructions
+## Cleanup styles
+
+Choose a style under **AI Cleanup → Cleanup style**. Open the style chooser to see a short description of every option:
+
+| Style | What it does |
+| --- | --- |
+| **Faithful** | Removes speech clutter and fixes punctuation while staying close to your wording. |
+| **Polished** (default) | Improves grammar and phrasing without losing your meaning or details. |
+| **Compose (Experimental)** | Organizes clear lists and paragraphs, resolves spoken corrections, and refines the writing. |
+
+Compose edits the current recording and inserts the finished text when you stop.
+For example, “Meet on Monday, sorry, Wednesday” keeps Wednesday; “first save the
+file, second close the window” becomes a numbered list. “New line” and “new
+paragraph” control spacing when used as layout cues. Quoted or discussed cues
+stay literal, and requests you dictate to another person or AI remain requests.
+Lists use plain-text bullets or numbers; rich text and editing earlier recordings
+are not supported. Language, script, and mixed-language speech are preserved
+unless your custom settings request a change.
+
+Compose uses your selected cleanup model. Output quality and timing vary by
+model; the initial evaluation used direct Cerebras with reasoning disabled.
+Compose is experimental: it can miss formatting or corrections, or change meaning.
+For more reliable results, we recommend trying higher reasoning when supported;
+this adds latency, and the reliability improvement has not yet been verified in
+our benchmarks. Review important text. Your reasoning setting is not changed
+automatically. Offline mode skips all cleanup.
+See the [Compose benchmark checkpoint](docs/COMPOSE-VALIDATION.md) for measured
+results, evaluation limits, and remaining UI acceptance gates.
+
+## Custom cleanup instructions (Experimental)
 
 Under **AI Cleanup → Cleanup style**, add instructions for tone, spelling,
-terminology, translation, or formatting. The same instructions apply to both
-Faithful and Polished. Leave the field empty, or choose **Clear**, to use the
-built-in style alone.
+terminology, translation, or formatting. The same instructions apply to
+Faithful, Polished, and Compose. Leave the field empty, or choose **Clear**, to use the
+built-in style alone. Custom instructions carry the same experimental warning and
+higher-reasoning guidance as Compose.
 
 Instructions are saved locally and sent to your selected cleanup provider with
 each dictation. They are not included in routine diagnostic logs. The limit is

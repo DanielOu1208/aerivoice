@@ -264,6 +264,32 @@ final class OpenRouterCleanupClientTests: XCTestCase {
     }
   }
 
+  func testComposePreservesMultilineTextInStructuredAndPlainResponses() async throws {
+    let output = "Tasks:\n1. Review.\n2. Ship.\n\nAsk first."
+    for model in [CleanupModel.gemini35FlashLite, try XCTUnwrap(CleanupModel(openRouterID: "vendor/chat"))] {
+      URLProtocolStub.handler = { request in
+        let body = try XCTUnwrap(request.bodyData)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+        XCTAssertEqual(messages.first?["content"], CleanupPrompt.system(mode: .compose, plainText: model.isOpenRouterCatalogModel))
+        let content: String
+        if model.isOpenRouterCatalogModel {
+          XCTAssertNil(json["response_format"])
+          content = output
+        } else {
+          XCTAssertNotNil(json["response_format"])
+          content = String(decoding: try JSONSerialization.data(withJSONObject: ["text": output]), as: UTF8.self)
+        }
+        let response = try JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": content]]]])
+        return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, response)
+      }
+      let result = try await OpenRouterCleanupClient(session: makeSession()).clean(
+        "tasks first review second ship new paragraph ask first", instructions: .init(mode: .compose),
+        configuration: CleanupConfiguration(model: model, reasoningEffort: model.defaultReasoningEffort), apiKey: "test-key")
+      XCTAssertEqual(result.text, output)
+    }
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [URLProtocolStub.self]
