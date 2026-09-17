@@ -21,16 +21,16 @@ struct CleanupClientRouter: CleaningText {
   }
 
   func clean(
-    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+    _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult {
     switch configuration.provider {
     case .openRouter:
       try await openRouter.clean(
-        text, mode: mode, configuration: configuration, apiKey: apiKey)
+        text, instructions: instructions, configuration: configuration, apiKey: apiKey)
     case .groq:
-      try await groq.clean(text, mode: mode, configuration: configuration, apiKey: apiKey)
+      try await groq.clean(text, instructions: instructions, configuration: configuration, apiKey: apiKey)
     case .cerebras:
-      try await cerebras.clean(text, mode: mode, configuration: configuration, apiKey: apiKey)
+      try await cerebras.clean(text, instructions: instructions, configuration: configuration, apiKey: apiKey)
     }
   }
 }

@@ -150,6 +150,44 @@ enum TranscriptTail {
 enum CleanupMode: String, CaseIterable, Codable, Sendable {
   case faithful = "Faithful"
   case polished = "Polished"
+  case compose = "Compose"
+  case custom = "Custom"
+
+  var displayName: String {
+    self == .compose || self == .custom ? "\(rawValue) (Experimental)" : rawValue
+  }
+
+  var summary: String {
+    switch self {
+    case .faithful: "Light cleanup that stays close to your wording."
+    case .polished: "Improves grammar and flow while preserving your meaning."
+    case .compose: "Formats lists and paragraphs and applies spoken corrections."
+    case .custom: "Polished cleanup with your own tone, language, and formatting instructions."
+    }
+  }
+}
+
+/// Instructions are captured at recording start, independently of provider settings.
+struct CleanupInstructions: Equatable, Sendable {
+  static let maxCustomInstructionCharacters = 2_000
+
+  let mode: CleanupMode
+  let customInstructions: String
+
+  var allowsExpansion: Bool {
+    mode == .compose || !customInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  init(mode: CleanupMode, customInstructions: String = "") {
+    self.mode = mode
+    self.customInstructions = mode == .custom ? customInstructions : ""
+  }
+
+  func validate() throws {
+    guard customInstructions.unicodeScalars.count <= Self.maxCustomInstructionCharacters else {
+      throw AppError.provider("Custom instructions must be 2,000 characters or fewer.")
+    }
+  }
 }
 
 struct CleanupReasoningEffort: RawRepresentable, Hashable, CaseIterable, Codable, Sendable {
@@ -569,11 +607,18 @@ protocol RealtimeTranscribing: AnyObject {
 protocol CleaningText: Sendable {
   func warmUp(configuration: CleanupConfiguration, apiKey: String) async
   func clean(
-    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+    _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
   ) async throws -> CleanupTextResult
 }
 
 extension CleaningText {
+  func clean(
+    _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+  ) async throws -> CleanupTextResult {
+    try await clean(text, instructions: CleanupInstructions(mode: mode),
+                    configuration: configuration, apiKey: apiKey)
+  }
+
   func warmUp(configuration: CleanupConfiguration, apiKey: String) async {}
 }
 

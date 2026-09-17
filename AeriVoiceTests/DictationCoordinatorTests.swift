@@ -760,20 +760,23 @@ final class DictationCoordinatorTests: XCTestCase {
 
   func testCleanupSettingsAreSnapshottedForEachDictation() async throws {
     let fixture = makeFixture()
-    fixture.preferences.cleanupMode = .faithful
+    fixture.preferences.cleanupMode = .custom
+    fixture.preferences.cleanupCustomInstructions = "Use Canadian spelling."
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .recording }
 
     fixture.preferences.cleanupModel = .gpt56LunaFast
     fixture.preferences.cleanupReasoningEffort = .max
-    fixture.preferences.cleanupMode = .polished
+    fixture.preferences.cleanupMode = .compose
+    fixture.preferences.cleanupCustomInstructions = "Translate into Chinese."
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .success }
 
     XCTAssertEqual(
       fixture.cleaner.lastConfiguration,
       CleanupConfiguration(model: .gemini35FlashLite, reasoningEffort: .minimal))
-    XCTAssertEqual(fixture.cleaner.lastMode, .faithful)
+    XCTAssertEqual(fixture.cleaner.lastMode, .custom)
+    XCTAssertEqual(fixture.cleaner.lastInstructions?.customInstructions, "Use Canadian spelling.")
 
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .recording }
@@ -783,6 +786,16 @@ final class DictationCoordinatorTests: XCTestCase {
     XCTAssertEqual(
       fixture.cleaner.lastConfiguration,
       CleanupConfiguration(model: .gpt56LunaFast, reasoningEffort: .max))
-    XCTAssertEqual(fixture.cleaner.lastMode, .polished)
+    XCTAssertEqual(fixture.cleaner.lastMode, .compose)
+    XCTAssertEqual(fixture.cleaner.lastInstructions?.customInstructions, "")
+    XCTAssertEqual(fixture.preferences.cleanupCustomInstructions, "Translate into Chinese.")
+
+    fixture.preferences.cleanupMode = .custom
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertEqual(fixture.cleaner.lastMode, .custom)
+    XCTAssertEqual(fixture.cleaner.lastInstructions?.customInstructions, "Translate into Chinese.")
   }
 }

@@ -36,6 +36,14 @@ struct HarnessMain {
           },
           "kinds": ["pipeline", "transcription", "cleanup", "conversion", "stability"],
           "modes": ["live", "controlled"],
+          "optional_scenario_fields": [
+            "cleanup_custom_instructions": ["type": "string",
+              "max_characters": CleanupInstructions.maxCustomInstructionCharacters],
+            "cleanup_prompt_override": ["type": "string", "kinds": ["cleanup"],
+              "max_characters": EvalScenario.maxPromptOverrideCharacters,
+              "incompatible_with": ["nonempty cleanup_custom_instructions"]],
+          ],
+          "prompt_character_count": "unicode_scalars",
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         FileHandle.standardOutput.write(data + Data([10]))

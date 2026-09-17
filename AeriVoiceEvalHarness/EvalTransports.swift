@@ -179,16 +179,23 @@ final class EvalCleaner: CleaningText, @unchecked Sendable {
     await client.warmUp(configuration: configuration, apiKey: apiKey)
     events.emit("warming_finished", session: session)
   }
-  func clean(_ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String) async throws -> CleanupTextResult {
+  func clean(_ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String) async throws -> CleanupTextResult {
     lock.withLock { active += 1 }; defer { lock.withLock { active -= 1 } }
     let session = events.session
     events.emit("cleanup_started", ["raw_text": text], session: session)
     do {
-      let result = try await client.clean(text, mode: mode, configuration: configuration, apiKey: apiKey)
+      let result = try await client.clean(text, instructions: instructions, configuration: configuration, apiKey: apiKey)
       events.emit("cleanup_finished", ["output_text": result.text, "metrics": evalCleanupMetrics(result.metrics)], session: session)
       return result
     } catch {
-      events.emit("cleanup_failed", ["category": evalFailure(error)], session: session)
+      var details: [String: Any] = ["category": evalFailure(error)]
+      if let failure = error as? ProviderHTTPError {
+        details["http_status"] = failure.statusCode
+        if let metrics = failure.cleanupMetrics { details["metrics"] = evalCleanupMetrics(metrics) }
+      } else if let failure = error as? CleanupNetworkError {
+        details["metrics"] = evalCleanupMetrics(failure.cleanupMetrics)
+      }
+      events.emit("cleanup_failed", details, session: session)
       throw error
     }
   }

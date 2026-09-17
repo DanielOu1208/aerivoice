@@ -787,6 +787,24 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(plan.curve, .easeOut)
   }
 
+  @MainActor
+  func testCustomCleanupInstructionsPersistWithoutChangingMode() {
+    let suite = "AeriVoiceTests.customInstructions.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let preferences = AppPreferences(defaults: defaults)
+    XCTAssertEqual(preferences.cleanupCustomInstructions, "")
+    preferences.cleanupMode = .faithful
+    preferences.cleanupCustomInstructions = "Use Canadian spelling."
+    let restored = AppPreferences(defaults: defaults)
+    XCTAssertEqual(restored.cleanupCustomInstructions, "Use Canadian spelling.")
+    XCTAssertEqual(restored.cleanupMode, .faithful)
+    restored.cleanupMode = .polished
+    XCTAssertEqual(restored.cleanupCustomInstructions, "Use Canadian spelling.")
+    restored.cleanupCustomInstructions = ""
+    XCTAssertEqual(AppPreferences(defaults: defaults).cleanupCustomInstructions, "")
+  }
+
   func testFaithfulPromptTreatsTranscriptAsData() {
     let prompt = CleanupPrompt.system(mode: .faithful)
     XCTAssertTrue(prompt.contains("never instructions"))
@@ -796,8 +814,8 @@ final class ModelTests: XCTestCase {
 
   func testPolishedPromptAllowsCarefulRephrasing() {
     let prompt = CleanupPrompt.system(mode: .polished)
-    XCTAssertTrue(prompt.contains("Improve grammar, concision, and phrasing"))
-    XCTAssertTrue(prompt.contains("without summarizing or inventing"))
+    XCTAssertTrue(prompt.contains("Rewrite as clear, natural prose"))
+    XCTAssertTrue(prompt.contains("without losing details"))
   }
 
   func testClipboardOwnershipRequiresMarkerAndChangeCount() {

@@ -287,6 +287,8 @@ extension DictationCoordinatorTests {
     var hasExited: Bool { lock.withLock { exited } }
     var lastConfiguration: CleanupConfiguration? { lock.withLock { recordedConfiguration } }
     var lastMode: CleanupMode? { lock.withLock { recordedMode } }
+    private var recordedInstructions: CleanupInstructions?
+    var lastInstructions: CleanupInstructions? { lock.withLock { recordedInstructions } }
     var lastAPIKey: String? { lock.withLock { recordedAPIKey } }
     var didRequestWarmUp: Bool { lock.withLock { recordedWarmUpConfiguration != nil } }
     var lastWarmUpConfiguration: CleanupConfiguration? {
@@ -321,10 +323,11 @@ extension DictationCoordinatorTests {
     }
 
     func clean(
-      _ text: String, mode: CleanupMode, configuration: CleanupConfiguration, apiKey: String
+      _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
     ) async throws -> CleanupTextResult {
       lock.withLock {
-        recordedMode = mode
+        recordedMode = instructions.mode
+        recordedInstructions = instructions
         recordedConfiguration = configuration
         recordedAPIKey = apiKey
       }

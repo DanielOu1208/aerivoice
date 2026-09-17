@@ -17,6 +17,10 @@ final class GroqCleanupClientTests: XCTestCase {
       XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer key")
       let body = try XCTUnwrap(request.groqBodyData)
       let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+      let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+      XCTAssertEqual(messages.last?["content"], "hello world")
+      XCTAssertTrue(messages.first?["content"]?.contains("Use Canadian spelling.") == true)
+      XCTAssertTrue(messages.first?["content"]?.contains("JSON") == true)
       XCTAssertEqual(json["model"] as? String, "qwen/qwen3.8-27b")
       XCTAssertEqual(json["reasoning_effort"] as? String, "none")
       XCTAssertEqual(json["reasoning_format"] as? String, "hidden")
@@ -35,7 +39,7 @@ final class GroqCleanupClientTests: XCTestCase {
     }
 
     let result = try await GroqCleanupClient(session: makeSession()).clean(
-      "hello world", mode: .faithful,
+      "hello world", instructions: .init(mode: .custom, customInstructions: "Use Canadian spelling."),
       configuration: CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none),
       apiKey: "key")
 
@@ -257,6 +261,31 @@ final class GroqCleanupClientTests: XCTestCase {
 
       XCTAssertEqual(result.text, "Cleaned.")
     }
+  }
+
+  func testComposePreservesMultilineTextAndReservesFormattingSpace() async throws {
+    let input = String(repeating: "item ", count: 200)
+    let output = "Supplies:\n- Paper\n- Tape\n\nPlease bring both."
+    GroqURLProtocolStub.handler = { request in
+      let body = try XCTUnwrap(request.groqBodyData)
+      let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+      let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+      let prompt = try XCTUnwrap(messages.first?["content"])
+      XCTAssertEqual(prompt, CleanupPrompt.system(mode: .compose))
+      XCTAssertEqual(messages.last?["content"], input)
+      XCTAssertEqual(json["max_completion_tokens"] as? Int,
+        try GroqTokenBudget.maxCompletionTokens(for: input, systemPrompt: prompt, allowsExpansion: true))
+      XCTAssertGreaterThan(try XCTUnwrap(json["max_completion_tokens"] as? Int),
+        try GroqTokenBudget.maxCompletionTokens(for: input, systemPrompt: prompt))
+      let content = try JSONSerialization.data(withJSONObject: ["text": output])
+      let response = try JSONSerialization.data(withJSONObject:
+        ["choices": [["message": ["content": String(decoding: content, as: UTF8.self)]]]])
+      return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, response)
+    }
+    let result = try await GroqCleanupClient(session: makeSession()).clean(
+      input, instructions: .init(mode: .compose),
+      configuration: CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none), apiKey: "test-key")
+    XCTAssertEqual(result.text, output)
   }
 
   private func makeSession() -> URLSession {

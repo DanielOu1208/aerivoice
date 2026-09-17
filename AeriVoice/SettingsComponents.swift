@@ -412,3 +412,108 @@ struct PermissionStatusRow: View {
     }
   }
 }
+
+/// Invalid drafts stay visible without replacing the last saved instructions.
+struct CleanupInstructionsEditor: View {
+  @ObservedObject var preferences: AppPreferences
+  @State private var draft = ""
+
+  private var characterCount: Int { draft.unicodeScalars.count }
+  private var exceedsLimit: Bool {
+    characterCount > CleanupInstructions.maxCustomInstructionCharacters
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Custom instructions (Experimental)").font(.headline)
+      Text("Starts with Polished cleanup. Request a tone, preferred terms, translation, or formatting. Instructions apply only in Custom and stay saved when you switch styles. Leave empty for Polished cleanup.")
+        .font(.caption).foregroundStyle(.secondary)
+      ExperimentalCleanupNotice()
+      TextEditor(text: $draft)
+        .font(.body)
+        .frame(minHeight: 90, maxHeight: 160)
+        .accessibilityLabel("Custom instructions")
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+      HStack {
+        Text("\(characterCount) / 2,000")
+          .foregroundStyle(exceedsLimit ? .red : .secondary)
+        Spacer()
+        Button("Clear") {
+          draft = ""
+          preferences.cleanupCustomInstructions = ""
+        }
+        .disabled(draft.isEmpty)
+        .accessibilityLabel("Clear custom instructions")
+      }
+      .font(.caption)
+      if exceedsLimit {
+        Text("Over the limit. These changes aren't saved; your last saved instructions remain active.")
+          .font(.caption).foregroundStyle(.red)
+      }
+    }
+    .padding(.vertical, 4)
+    .onAppear { draft = preferences.cleanupCustomInstructions }
+    .onChange(of: draft) { _, value in
+      if !exceedsLimit { preferences.cleanupCustomInstructions = value }
+    }
+  }
+}
+
+struct ExperimentalCleanupNotice: View {
+  var body: some View {
+    Label(
+      "Experimental: edits may be missed or change your meaning. When using Compose or custom instructions, we recommend trying higher reasoning for reliability when supported. It adds latency; improvements are not yet verified. Review important text.",
+      systemImage: "exclamationmark.triangle"
+    )
+    .font(.caption)
+    .foregroundStyle(.secondary)
+    .fixedSize(horizontal: false, vertical: true)
+  }
+}
+
+struct CleanupStylePicker: View {
+  @Binding var selection: CleanupMode
+  @State private var isExpanded = false
+
+  var body: some View {
+    Button {
+      isExpanded.toggle()
+    } label: {
+      HStack(spacing: 8) {
+        Text(selection.displayName)
+        Image(systemName: "chevron.up.chevron.down").font(.caption2)
+      }
+    }
+    .accessibilityLabel("Cleanup style")
+    .accessibilityValue(selection.displayName)
+    .popover(isPresented: $isExpanded, arrowEdge: .bottom) {
+      VStack(alignment: .leading, spacing: 4) {
+        ForEach(CleanupMode.allCases, id: \.self) { mode in
+          Button {
+            selection = mode
+            isExpanded = false
+          } label: {
+            HStack(alignment: .top, spacing: 10) {
+              Image(systemName: selection == mode ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(selection == mode ? Color.accentColor : Color.secondary)
+              VStack(alignment: .leading, spacing: 4) {
+                Text(mode.displayName).font(.headline)
+                Text(mode.summary).font(.caption).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+              Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(mode.displayName + ". " + mode.summary)
+          .accessibilityAddTraits(selection == mode ? [.isSelected] : [])
+        }
+      }
+      .padding(8)
+      .frame(width: 360)
+    }
+  }
+}
