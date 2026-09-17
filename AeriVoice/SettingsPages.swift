@@ -152,7 +152,9 @@ struct CleanupSettingsPage: View {
         if preferences.cleanupMode == .compose {
           ExperimentalCleanupNotice()
         }
-        CleanupInstructionsEditor(preferences: preferences)
+        if preferences.cleanupMode == .custom {
+          CleanupInstructionsEditor(preferences: preferences)
+        }
       }
       Section("Provider") {
         ProviderSelectionRow(model: model, kind: preferences.cleanupProvider.credentialKind) {

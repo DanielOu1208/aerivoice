@@ -39,7 +39,7 @@ final class GroqCleanupClientTests: XCTestCase {
     }
 
     let result = try await GroqCleanupClient(session: makeSession()).clean(
-      "hello world", instructions: .init(mode: .faithful, customInstructions: "Use Canadian spelling."),
+      "hello world", instructions: .init(mode: .custom, customInstructions: "Use Canadian spelling."),
       configuration: CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none),
       apiKey: "key")
 

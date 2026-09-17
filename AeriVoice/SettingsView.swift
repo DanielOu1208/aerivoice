@@ -19,6 +19,19 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     }
   }
 
+  /// Sidebar glyph. Dictation uses the app mark; the rest stay SF Symbols.
+  @ViewBuilder var icon: some View {
+    if self == .dictation {
+      Image("MenuBarIcon")
+        .resizable()
+        .renderingMode(.template)
+        .scaledToFit()
+        .frame(width: 14, height: 14)
+    } else {
+      Image(systemName: systemImage)
+    }
+  }
+
   var systemImage: String {
     switch self {
     case .general: "gearshape"
@@ -76,7 +89,7 @@ struct SettingsSidebar: View {
       Label {
         Text(destination.title)
       } icon: {
-        Image(systemName: destination.systemImage)
+        destination.icon
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(.white)
           .frame(width: 25, height: 25)

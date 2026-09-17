@@ -151,9 +151,10 @@ enum CleanupMode: String, CaseIterable, Codable, Sendable {
   case faithful = "Faithful"
   case polished = "Polished"
   case compose = "Compose"
+  case custom = "Custom"
 
   var displayName: String {
-    self == .compose ? "Compose (Experimental)" : rawValue
+    self == .compose || self == .custom ? "\(rawValue) (Experimental)" : rawValue
   }
 
   var summary: String {
@@ -161,6 +162,7 @@ enum CleanupMode: String, CaseIterable, Codable, Sendable {
     case .faithful: "Light cleanup that stays close to your wording."
     case .polished: "Improves grammar and flow while preserving your meaning."
     case .compose: "Formats lists and paragraphs and applies spoken corrections."
+    case .custom: "Polished cleanup with your own tone, language, and formatting instructions."
     }
   }
 }
@@ -178,7 +180,7 @@ struct CleanupInstructions: Equatable, Sendable {
 
   init(mode: CleanupMode, customInstructions: String = "") {
     self.mode = mode
-    self.customInstructions = customInstructions
+    self.customInstructions = mode == .custom ? customInstructions : ""
   }
 
   func validate() throws {

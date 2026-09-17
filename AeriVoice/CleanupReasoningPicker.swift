@@ -67,7 +67,7 @@ struct CleanupReasoningPicker: View {
     }
     if preferences.cleanupModel == .qwen38_27BCerebras && effort == .none,
       preferences.cleanupMode != .compose,
-      preferences.cleanupCustomInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      preferences.cleanupMode != .custom
     {
       return "None (Recommended)"
     }

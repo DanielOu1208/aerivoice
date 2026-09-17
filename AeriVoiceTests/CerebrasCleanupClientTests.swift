@@ -38,7 +38,7 @@ final class CerebrasCleanupClientTests: XCTestCase {
     }
 
     let result = try await CerebrasCleanupClient(session: makeSession()).clean(
-      "hello world", instructions: .init(mode: .faithful, customInstructions: "Use Canadian spelling."),
+      "hello world", instructions: .init(mode: .custom, customInstructions: "Use Canadian spelling."),
       configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
       apiKey: "test-key")
 

@@ -53,8 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
   private func configureMenu() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    item.button?.image = NSImage(
-      systemSymbolName: "waveform", accessibilityDescription: "AeriVoice")
     statusItem = item
     rebuildMenu()
     model.objectWillChange.receive(on: RunLoop.main)
@@ -97,9 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       withTitle: "Quit AeriVoice", action: #selector(quit), keyEquivalent: "q")
     for item in menu.items { item.target = self }
     statusItem?.menu = menu
-    statusItem?.button?.image = NSImage(
-      systemSymbolName: phase == .recording ? "waveform.circle.fill" : "waveform",
-      accessibilityDescription: "AeriVoice")
+    if let source = NSImage(named: "MenuBarIcon") {
+      statusItem?.button?.image = MenuBarIconRenderer.image(
+        from: source, recording: phase == .recording)
+    }
   }
 
   private func configureNotifications() {

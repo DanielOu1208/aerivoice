@@ -40,7 +40,7 @@ final class OpenRouterCleanupClientTests: XCTestCase {
       )
     }
     let result = try await OpenRouterCleanupClient(session: makeSession()).clean(
-      "hello world", instructions: .init(mode: .faithful, customInstructions: "Use Canadian spelling."),
+      "hello world", instructions: .init(mode: .custom, customInstructions: "Use Canadian spelling."),
       configuration: CleanupConfiguration(model: .gemini37Flash, reasoningEffort: .low),
       apiKey: "key")
     XCTAssertEqual(result.text, "Hello, world.")
@@ -200,7 +200,7 @@ final class OpenRouterCleanupClientTests: XCTestCase {
         )
       }
       let result = try await OpenRouterCleanupClient(session: makeSession()).clean(
-        "你好 world", instructions: .init(mode: .faithful, customInstructions: "Use bullet points."),
+        "你好 world", instructions: .init(mode: .custom, customInstructions: "Use bullet points."),
         configuration: CleanupConfiguration(
           model: try XCTUnwrap(CleanupModel(openRouterID: "vendor/new-chat")),
           reasoningEffort: .automatic, catalogRequiresZeroDataRetention: requiresZDR),

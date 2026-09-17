@@ -426,11 +426,9 @@ struct CleanupInstructionsEditor: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("Custom instructions (Experimental)").font(.headline)
-      Text("Applies to all cleanup styles. Request a tone, preferred terms, translation, or formatting. Leave empty for the default cleanup.")
+      Text("Starts with Polished cleanup. Request a tone, preferred terms, translation, or formatting. Instructions apply only in Custom and stay saved when you switch styles. Leave empty for Polished cleanup.")
         .font(.caption).foregroundStyle(.secondary)
-      if preferences.cleanupMode != .compose {
-        ExperimentalCleanupNotice()
-      }
+      ExperimentalCleanupNotice()
       TextEditor(text: $draft)
         .font(.body)
         .frame(minHeight: 90, maxHeight: 160)

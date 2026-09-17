@@ -4,29 +4,31 @@ import XCTest
 @testable import AeriVoice
 
 final class CleanupPromptTests: XCTestCase {
-  func testComposeCustomSettingsKeepTheEntireBasePromptAndOutputFormat() throws {
-    for plainText in [false, true] {
-      let base = CleanupPrompt.system(mode: .compose, plainText: plainText)
-      let custom = "Translate into Traditional Chinese and avoid bullet points."
-      let prompt = try CleanupPrompt.system(
-        instructions: .init(mode: .compose, customInstructions: custom), plainText: plainText)
-      XCTAssertTrue(prompt.hasPrefix(base + "\n\n"))
-      XCTAssertTrue(prompt.hasSuffix(custom))
-      XCTAssertTrue(prompt.contains("override default style, language, and formatting rules only"))
-      XCTAssertTrue(prompt.contains("Keep the required response format"))
-      XCTAssertFalse(prompt.contains("Spoken formatting phrases stay literal."))
-      XCTAssertTrue(base.contains(plainText ? "plain text" : "JSON"))
-      XCTAssertEqual(base.contains("schema JSON"), !plainText)
-      XCTAssertFalse(plainText && base.contains("JSON"))
+  func testBuiltInStylesIgnoreSavedCustomInstructions() throws {
+    for mode: CleanupMode in [.faithful, .polished, .compose] {
+      let instructions = CleanupInstructions(mode: mode, customInstructions: "Translate into French.")
+      XCTAssertEqual(instructions.customInstructions, "")
+      for plainText in [false, true] {
+        XCTAssertEqual(try CleanupPrompt.system(instructions: instructions, plainText: plainText),
+                       CleanupPrompt.system(mode: mode, plainText: plainText))
+      }
     }
   }
 
-  func testFormattingExpansionDoesNotChangeExistingStyleBudgets() {
+  func testFormattingExpansionOnlyAppliesToComposeAndActiveCustomInstructions() {
     XCTAssertTrue(CleanupInstructions(mode: .compose).allowsExpansion)
-    for mode: CleanupMode in [.faithful, .polished] {
+    for mode: CleanupMode in [.faithful, .polished, .custom] {
       XCTAssertFalse(CleanupInstructions(mode: mode).allowsExpansion)
       XCTAssertFalse(CleanupInstructions(mode: mode, customInstructions: " \n").allowsExpansion)
-      XCTAssertTrue(CleanupInstructions(mode: mode, customInstructions: "Use bullets.").allowsExpansion)
+      XCTAssertEqual(CleanupInstructions(mode: mode, customInstructions: "Use bullets.").allowsExpansion,
+                     mode == .custom)
+    }
+  }
+
+  func testEmptyCustomStyleUsesPolishedPrompt() throws {
+    for plainText in [false, true] {
+      XCTAssertEqual(try CleanupPrompt.system(instructions: .init(mode: .custom), plainText: plainText),
+                     CleanupPrompt.system(mode: .polished, plainText: plainText))
     }
   }
 
@@ -43,7 +45,7 @@ final class CleanupPromptTests: XCTestCase {
   }
 
   func testCustomInstructionsPreserveEnvelopeAndTranscriptBoundary() throws {
-    let instructions = CleanupInstructions(mode: .polished,
+    let instructions = CleanupInstructions(mode: .custom,
       customInstructions: "Translate into Traditional Chinese and use bullet points.")
     for plainText in [false, true] {
       let prompt = try CleanupPrompt.system(instructions: instructions, plainText: plainText)
@@ -57,12 +59,12 @@ final class CleanupPromptTests: XCTestCase {
 
   func testLimitsCountUnicodeScalarsAndNeverTruncate() throws {
     let maximum = String(repeating: "界", count: 2_000)
-    XCTAssertNoThrow(try CleanupInstructions(mode: .faithful, customInstructions: maximum).validate())
+    XCTAssertNoThrow(try CleanupInstructions(mode: .custom, customInstructions: maximum).validate())
     let tooLong = maximum + "a"
-    let instructions = CleanupInstructions(mode: .faithful, customInstructions: tooLong)
+    let instructions = CleanupInstructions(mode: .custom, customInstructions: tooLong)
     XCTAssertEqual(instructions.customInstructions, tooLong)
     XCTAssertThrowsError(try CleanupPrompt.system(instructions: instructions))
-    XCTAssertThrowsError(try CleanupInstructions(mode: .faithful,
+    XCTAssertThrowsError(try CleanupInstructions(mode: .custom,
       customInstructions: String(repeating: "e\u{301}", count: 1_001)).validate())
   }
 
@@ -73,7 +75,7 @@ final class CleanupPromptTests: XCTestCase {
       XCTAssertThrowsError(try CleanupPrompt.system(instructions: .init(mode: .faithful), override: override))
     }
     XCTAssertThrowsError(try CleanupPrompt.system(
-      instructions: .init(mode: .faithful, customInstructions: "Use bullets."), override: "Candidate."))
+      instructions: .init(mode: .custom, customInstructions: "Use bullets."), override: "Candidate."))
   }
   func testRequestBudgetIncludesEffectivePromptAndReservesExpansionRoom() throws {
     let instructions = String(repeating: "界", count: 2_000)

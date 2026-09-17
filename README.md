@@ -1,7 +1,7 @@
 # AeriVoice
 
 <p align="center">
-  <img src="docs/images/aerivoice-icon.png" alt="AeriVoice app icon" width="104" height="104">
+  <img src="docs/images/aerivoice-icon.png" alt="AeriVoice faceted microphone app icon" width="104" height="104">
 </p>
 
 <p align="center">
@@ -135,6 +135,7 @@ Choose a style under **AI Cleanup → Cleanup style**. Open the style chooser to
 | **Faithful** | Removes speech clutter and fixes punctuation while staying close to your wording. |
 | **Polished** (default) | Improves grammar and phrasing without losing your meaning or details. |
 | **Compose (Experimental)** | Organizes clear lists and paragraphs, resolves spoken corrections, and refines the writing. |
+| **Custom (Experimental)** | Starts with Polished cleanup and applies your own instructions. |
 
 Compose edits the current recording and inserts the finished text when you stop.
 For example, “Meet on Monday, sorry, Wednesday” keeps Wednesday; “first save the
@@ -157,15 +158,17 @@ results, evaluation limits, and remaining UI acceptance gates.
 
 ## Custom cleanup instructions (Experimental)
 
-Under **AI Cleanup → Cleanup style**, add instructions for tone, spelling,
-terminology, translation, or formatting. The same instructions apply to
-Faithful, Polished, and Compose. Leave the field empty, or choose **Clear**, to use the
-built-in style alone. Custom instructions carry the same experimental warning and
-higher-reasoning guidance as Compose.
+Under **AI Cleanup → Cleanup style**, choose **Custom** to reveal the instructions
+editor. Add instructions for tone, spelling, terminology, translation, or formatting
+on top of Polished cleanup. Instructions apply only while Custom is selected;
+switching to Faithful, Polished, or Compose hides the editor and keeps your text
+saved for later. Leave the field empty, or choose **Clear**, to use Polished cleanup.
+Custom instructions carry the same experimental warning and higher-reasoning
+guidance as Compose.
 
 Instructions are saved locally and sent to your selected cleanup provider with
-each dictation. They are not included in routine diagnostic logs. The limit is
-2,000 characters; over-limit edits remain visible but are not saved. Changes made
+each dictation in Custom. They are not included in routine diagnostic logs. The
+limit is 2,000 characters; over-limit edits remain visible but are not saved. Changes made
 while recording apply to the next dictation. Offline mode disables AI cleanup
 and these controls.
 
@@ -186,12 +189,12 @@ available in Settings.
 <details>
 <summary>Verify your download</summary>
 
-Download `AeriVoice-v0.1.0-beta.8-arm64.dmg` and its `.sha256` file from
+Download `AeriVoice-v0.1.0-beta.9-arm64.dmg` and its `.sha256` file from
 [GitHub Releases](https://github.com/DanielOu1208/aerivoice/releases), then run
 this in your download directory before opening the DMG:
 
 ```sh
-shasum -a 256 -c AeriVoice-v0.1.0-beta.8-arm64.dmg.sha256
+shasum -a 256 -c AeriVoice-v0.1.0-beta.9-arm64.dmg.sha256
 ```
 
 </details>

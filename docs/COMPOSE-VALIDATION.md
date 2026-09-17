@@ -11,6 +11,15 @@ clearly stated. Reasoning defaults and saved selections are unchanged. This is a
 source adoption, not an installation or deployment; known benchmark failures remain.
 Earlier no-adoption decisions below describe prior checkpoints.
 
+## Custom style release update (2026-09-17)
+
+Custom instructions now have their own **Custom (Experimental)** style, based on
+Polished cleanup. The editor appears only for Custom, and saved instructions are
+excluded from requests in Faithful, Polished, and Compose. Switching styles keeps
+the saved text; empty Custom uses the Polished prompt. Earlier benchmark examples
+combining custom instructions with Compose describe the previous implementation.
+The Compose prompt itself and saved reasoning choices are unchanged.
+
 ## Experimental source adoption (2026-09-16)
 
 The user accepted the latest rules-only balanced candidate with experimental

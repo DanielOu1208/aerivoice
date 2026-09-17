@@ -24,7 +24,7 @@
 		E10000000000000000000002 = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = AeriVoiceEvalHarness; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		E10000000000000000000003 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (main.swift, Assets.xcassets, AeriVoice.entitlements); target = E10000000000000000000030; };
+		E10000000000000000000003 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (main.swift, Assets.xcassets, AppIcon.icon, AeriVoice.entitlements); target = E10000000000000000000030; };
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A10000000000000000000010 = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (E10000000000000000000003); explicitFileTypes = {}; explicitFolders = (); path = AeriVoice; sourceTree = "<group>"; };
