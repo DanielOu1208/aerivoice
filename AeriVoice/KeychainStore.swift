@@ -4,6 +4,7 @@ import Security
 enum CredentialKind: String, CaseIterable, Sendable {
   case soniox
   case metaModelAPI
+  case xai
   case openRouter
   case groq
   case cerebras
@@ -12,6 +13,7 @@ enum CredentialKind: String, CaseIterable, Sendable {
     switch self {
     case .soniox: "Soniox"
     case .metaModelAPI: "Meta Model API"
+    case .xai: "xAI"
     case .openRouter: "OpenRouter"
     case .groq: "Groq"
     case .cerebras: "Cerebras"

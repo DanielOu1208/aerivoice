@@ -37,6 +37,9 @@ struct HarnessMain {
           "kinds": ["pipeline", "transcription", "cleanup", "conversion", "stability"],
           "modes": ["live", "controlled"],
           "optional_scenario_fields": [
+            "grok_packet_mode": ["type": "string", "values": ["captureFrames", "100ms"], "test_only": true],
+            "grok_connection_mode": ["type": "string", "values": ["cold", "ready"], "test_only": true],
+            "grok_ready_age_ms": ["type": "number", "min": 0, "max": 60_000, "requires": "ready", "test_only": true],
             "cleanup_custom_instructions": ["type": "string",
               "max_characters": CleanupInstructions.maxCustomInstructionCharacters],
             "cleanup_prompt_override": ["type": "string", "kinds": ["cleanup"],

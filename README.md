@@ -70,6 +70,7 @@ Choose transcription and cleanup separately in Settings. Cloud providers use you
 | --- | --- | --- |
 | Live transcription | <img src="docs/images/providers/soniox.png" width="24" height="24" alt=""> **Soniox** — Default | Soniox Realtime |
 | Live transcription | <img src="docs/images/providers/meta.svg" width="24" height="24" alt=""> **Meta** | Muse Voice Transcribe 1.0 |
+| Live transcription | <img src="docs/images/providers/spacex.png" width="24" height="24" alt=""> **Grok (xAI)** — Development | Grok Voice Transcribe 2.0 |
 | Live transcription | **Local** — On-device | **NVIDIA Nemotron 3.5** (English, ~611 MB) — Recommended, or **Apple Speech** (system-managed languages) |
 | AI cleanup | <img src="docs/images/providers/openrouter.svg" width="24" height="24" alt=""> **OpenRouter** — Default | Gemini 3.5 Flash Lite, Gemini 3.7 Flash, GPT-5.6 Luna · Fast, GPT-OSS 120B · Cerebras, plus a searchable catalog of compatible text models |
 | AI cleanup | <img src="docs/images/providers/cerebras.svg" width="24" height="24" alt=""> **Cerebras** | Qwen 3.8 27B |
@@ -102,6 +103,23 @@ Additional models use plain-text cleanup and the provider’s output limit. Spee
 cost, and cleanup quality vary; the ten-second cleanup deadline still applies.
 Zero data retention is required by default for these models and can be changed in
 the Provider section.
+
+### Grok transcription
+
+Available starting in beta.10.
+
+Choose **Grok** under Dictation and connect an xAI API key with API credits.
+AeriVoice uses Grok Voice Transcribe 2.0 for live transcription. The existing
+Dictionary supplies up to 100 recognition hints of 50 Unicode code points each;
+excluded entries remain saved and are listed in Dictation settings. Recognition
+hints do not guarantee exact spelling. Chinese and mixed-language quality require
+evaluation; do not assume language support from the presence of the provider.
+
+AeriVoice can reuse a prepared connection for up to 30 seconds after it becomes
+ready. Buffered audio catches up at up to 1.35× real time before returning to
+normal pacing; the audio samples are sent unchanged.
+
+See [Grok validation](docs/GROK-VALIDATION.md) for test and benchmark status.
 
 ## Local and offline dictation
 
@@ -189,12 +207,12 @@ available in Settings.
 <details>
 <summary>Verify your download</summary>
 
-Download `AeriVoice-v0.1.0-beta.9-arm64.dmg` and its `.sha256` file from
+Download `AeriVoice-v0.1.0-beta.10-arm64.dmg` and its `.sha256` file from
 [GitHub Releases](https://github.com/DanielOu1208/aerivoice/releases), then run
 this in your download directory before opening the DMG:
 
 ```sh
-shasum -a 256 -c AeriVoice-v0.1.0-beta.9-arm64.dmg.sha256
+shasum -a 256 -c AeriVoice-v0.1.0-beta.10-arm64.dmg.sha256
 ```
 
 </details>
@@ -255,3 +273,5 @@ pull requests; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Source code and original AeriVoice artwork use the [MIT License](LICENSE).
 Provider logos belong to their respective owners; see [artwork credits](docs/ARTWORK.md).
+The SpaceX mark is sourced from its official favicon; see
+[provider asset attribution](AeriVoice/ProviderIcons-LICENSE.txt).

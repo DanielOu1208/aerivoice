@@ -31,6 +31,7 @@ extension DictationCoordinatorTests {
       values: [
         .soniox: hasSonioxKey ? "soniox-key" : nil,
         .metaModelAPI: hasMetaKey ? "meta-key" : nil,
+        .xai: "xai-test-key",
         .openRouter: "openrouter-key",
         .groq: hasGroqKey ? "groq-key" : nil,
         .cerebras: hasCerebrasKey ? "cerebras-key" : nil,
@@ -196,6 +197,29 @@ extension DictationCoordinatorTests {
   final class FakeTranscriber: RealtimeTranscribing {
     var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
     var onError: ((Error) -> Void)?
+    var onAudioSent: ((Int) -> Void)?
+    var reportsAudioSends = false
+    var onFlush: (() -> Void)?
+    var flushCount = 0
+    var invalidationCount = 0
+    var preparationCount = 0
+    var waitsForSendResolution = false
+    private var sendContinuation: CheckedContinuation<Void, Never>?
+    var hasPendingSend: Bool { sendContinuation != nil }
+    func resolveSend() {
+      sendContinuation?.resume()
+      sendContinuation = nil
+    }
+    func invalidatePreparedConnection() { invalidationCount += 1 }
+    func prepareConnection(configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String]) async -> Bool {
+      preparationCount += 1
+      return true
+    }
+    func flushAudio() async throws {
+      flushCount += 1
+      onFlush?()
+      if reportsAudioSends { onAudioSent?(sentFrames.reduce(0) { $0 + $1.audio.count }) }
+    }
     var didCancel = false
     var didConnect = false
     var lastConfiguration: TranscriptionConfiguration?
@@ -237,6 +261,10 @@ extension DictationCoordinatorTests {
 
     func send(_ frame: RealtimeAudioFrame) async throws {
       sentFrames.append(frame)
+      if waitsForSendResolution {
+        await withCheckedContinuation { sendContinuation = $0 }
+        return
+      }
       guard !sentFirstUpdate else { return }
       sentFirstUpdate = true
       onTranscript?(
@@ -431,6 +459,7 @@ extension DictationCoordinatorTests {
     var terminalResult: BenchmarkTerminalResult?
     var failureStage: BenchmarkFailureStage?
     var failureCategory: BenchmarkFailureCategory?
+    var failureHTTPStatus: Int?
     var transcriptionConfiguration: TranscriptionConfiguration?
 
     func begin(
@@ -468,6 +497,7 @@ extension DictationCoordinatorTests {
       terminalResult = result
       failureStage = stage
       failureCategory = category
+      failureHTTPStatus = httpStatus
       isRecording = false
     }
 

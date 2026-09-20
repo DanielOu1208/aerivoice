@@ -5,6 +5,58 @@ import XCTest
 
 @MainActor
 final class RealtimeTranscriptionRouterTests: XCTestCase {
+  func testPreparationSurvivesConnectAndFlushAndSendsAreForwarded() async throws {
+    let grok = RouterClientSpy()
+    grok.reportsAudioSends = true
+    let router = RealtimeTranscriptionRouter(grok: grok)
+    let configuration = TranscriptionConfiguration(provider: .grok)
+    var events: [String] = []
+    var bytes = 0
+    router.onConnectionEvent = { events.append($0) }
+    router.onAudioSent = { bytes += $0 }
+    let prepared = await router.prepareConnection(configuration: configuration, apiKey: "test", vocabulary: [])
+    XCTAssertTrue(prepared)
+    XCTAssertTrue(router.hasPreparedConnection)
+    XCTAssertEqual(events, ["preparationReady"])
+    try await router.connect(configuration: configuration, apiKey: "test", vocabulary: [], sessionID: DictationSessionID())
+    XCTAssertEqual(grok.cancelCount, 0)
+    XCTAssertTrue(router.reportsAudioSends)
+    grok.onAudioSent?(8)
+    XCTAssertEqual(bytes, 8)
+    try await router.flushAudio()
+    XCTAssertEqual(grok.flushCount, 1)
+    _ = try await router.finish()
+    let preparedAgain = await router.prepareConnection(configuration: configuration, apiKey: "test", vocabulary: [])
+    XCTAssertTrue(preparedAgain)
+    router.cancel()
+    XCTAssertFalse(router.hasPreparedConnection)
+    grok.onAudioSent?(4)
+    XCTAssertEqual(bytes, 8)
+  }
+
+  func testSwitchingAwayFromGrokInvalidatesStandby() async throws {
+    let grok = RouterClientSpy()
+    let router = RealtimeTranscriptionRouter(soniox: RouterClientSpy(), grok: grok)
+    _ = await router.prepareConnection(configuration: TranscriptionConfiguration(provider: .grok), apiKey: "test", vocabulary: [])
+    try await router.connect(configuration: TranscriptionConfiguration(provider: .soniox), apiKey: "test", vocabulary: [], sessionID: DictationSessionID())
+    XCTAssertFalse(router.hasPreparedConnection)
+  }
+  func testRoutesGrokWithVocabularyAndNoFallback() async throws {
+    let soniox = RouterClientSpy()
+    let meta = RouterClientSpy()
+    let grok = RouterClientSpy()
+    let router = RealtimeTranscriptionRouter(soniox: soniox, meta: meta, grok: grok)
+    try await router.connect(configuration: TranscriptionConfiguration(provider: .grok),
+      apiKey: "xai-test", vocabulary: ["AeriVoice"], sessionID: DictationSessionID())
+    XCTAssertEqual(grok.connection?.vocabulary, ["AeriVoice"])
+    XCTAssertEqual(grok.connection?.configuration.modelID, "grok-voice-transcribe-2.0")
+    XCTAssertNil(soniox.connection)
+    XCTAssertNil(meta.connection)
+    grok.finishResult = "Grok text"
+    let result = try await router.finish()
+    XCTAssertEqual(result, "Grok text")
+  }
+
   func testRoutesMetaSessionWithoutConnectingSoniox() async throws {
     let soniox = RouterClientSpy()
     let meta = RouterClientSpy()
@@ -142,6 +194,19 @@ private final class RouterClientSpy: RealtimeTranscribing {
 
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
+  var onAudioSent: ((Int) -> Void)?
+  var onConnectionEvent: ((String) -> Void)?
+  var reportsAudioSends = false
+  var hasPreparedConnection = false
+  var flushCount = 0
+  func flushAudio() async throws { flushCount += 1 }
+  func prepareConnection(configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String]) async -> Bool {
+    hasPreparedConnection = true
+    onConnectionEvent?("preparationReady")
+    return true
+  }
+  func invalidatePreparedConnection() { hasPreparedConnection = false }
+  func cancelActiveConnection() {}
   var connection: Connection?
   var connectError: Error?
   var sentFrames: [RealtimeAudioFrame] = []
@@ -163,5 +228,5 @@ private final class RouterClientSpy: RealtimeTranscribing {
     sentAudio.append(frame.audio)
   }
   func finish() async throws -> String { finishResult }
-  func cancel() { cancelCount += 1 }
+  func cancel() { cancelCount += 1; invalidatePreparedConnection() }
 }

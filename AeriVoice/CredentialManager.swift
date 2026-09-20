@@ -39,6 +39,14 @@ struct LiveCredentialValidator: CredentialValidating {
         RealtimeAudioFrame(
           audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
       do { _ = try await client.finish() } catch AppError.emptyTranscript {}
+    case .xai:
+      let client = GrokRealtimeClient()
+      defer { client.cancel() }
+      try await client.connect(
+        configuration: TranscriptionConfiguration(provider: .grok), apiKey: value,
+        vocabulary: [], sessionID: DictationSessionID())
+      try await client.send(RealtimeAudioFrame(audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
+      do { _ = try await client.finish() } catch AppError.emptyTranscript {}
     case .metaModelAPI:
       let client = MetaRealtimeClient()
       defer { client.cancel() }
@@ -63,6 +71,7 @@ enum LegacyCredentialImportError: LocalizedError {
 
 @MainActor
 final class CredentialManager: ObservableObject {
+  var onCredentialChange: ((CredentialKind) -> Void)?
   @Published private var statuses: [CredentialKind: CredentialStatus]
 
   private let store: CredentialStoring
@@ -144,6 +153,7 @@ final class CredentialManager: ObservableObject {
         try store.save(trimmed, for: kind)
         self.storedCredentialKinds.insert(kind)
         self.finishValidation(.saved, kind: kind, generation: generation)
+        self.onCredentialChange?(kind)
       } catch is CancellationError {
         self?.restoreStoredStatusIfCurrent(kind: kind, generation: generation)
       } catch {
@@ -183,6 +193,7 @@ final class CredentialManager: ObservableObject {
         _ = try store.addIfMissing(value, for: kind)
         self.storedCredentialKinds.insert(kind)
         self.finishValidation(.saved, kind: kind, generation: generation)
+        self.onCredentialChange?(kind)
       } catch is CancellationError {
         self?.restoreStoredStatusIfCurrent(kind: kind, generation: generation)
       } catch {
@@ -203,6 +214,7 @@ final class CredentialManager: ObservableObject {
       try store.remove(kind)
       storedCredentialKinds.remove(kind)
       statuses[kind] = .missing
+      onCredentialChange?(kind)
     } catch {
       statuses[kind] = .error(error.localizedDescription)
     }

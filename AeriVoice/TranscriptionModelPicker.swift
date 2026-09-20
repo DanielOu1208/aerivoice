@@ -1,12 +1,12 @@
 import SwiftUI
 
 enum TranscriptionChoice: String, CaseIterable, Identifiable {
-  case soniox, meta, nemotron, apple
+  case soniox, meta, grok, nemotron, apple
 
   var id: Self { self }
   var localModel: LocalTranscriptionModel? {
     switch self {
-    case .soniox, .meta: nil
+    case .soniox, .meta, .grok: nil
     case .nemotron: .nemotron
     case .apple: .apple
     }
@@ -15,6 +15,7 @@ enum TranscriptionChoice: String, CaseIterable, Identifiable {
     switch self {
     case .soniox: .soniox
     case .meta: .meta
+    case .grok: .grok
     case .nemotron, .apple: .local
     }
   }
@@ -24,6 +25,7 @@ enum TranscriptionChoice: String, CaseIterable, Identifiable {
     switch provider {
     case .soniox: self = .soniox
     case .meta: self = .meta
+    case .grok: self = .grok
     case .local: self = localModel == .apple ? .apple : .nemotron
     }
   }
@@ -50,7 +52,7 @@ struct TranscriptionModelPicker: View {
       }, set: { model.selectTranscriptionChoice($0) }
     )) {
       Section("Cloud") {
-        choices([.soniox, .meta])
+        choices([.soniox, .meta, .grok])
       }
       Section("On this Mac") {
         choices([.nemotron, .apple])

@@ -25,6 +25,23 @@ AeriVoice sets Meta's zero-data-retention override for every session. Meta's
 current account controls, enforcement, abuse monitoring, and terms remain
 controlled by Meta; review them before enabling this provider.
 
+### xAI (Grok)
+
+When Grok is selected, AeriVoice streams microphone audio as 16 kHz mono PCM
+to xAI's `grok-voice-transcribe-2.0` model. Your xAI API key is sent in the
+Authorization header. Up to 100 eligible dictionary terms are sent as URL
+query parameters to help recognition; terms longer than 50 Unicode code points
+are excluded. The Dictionary displays exclusions without deleting saved terms.
+When Grok is selected and the app is awake and unlocked, AeriVoice may prepare
+one authenticated connection for up to 30 seconds after launch, wake, selection,
+configuration changes, or successful dictation. This sends the key and eligible
+dictionary terms before dictation, but no microphone audio or synthetic silence.
+The unused connection expires without a background reconnect loop and is
+discarded on lock, sleep, Offline mode, cancellation, or relevant settings changes.
+Keys, request URLs, and provider response bodies are not written to AeriVoice
+diagnostics. xAI's current retention and account policies apply; AeriVoice does
+not request or claim a zero-data-retention guarantee for this provider.
+
 ### OpenRouter, Groq, or Cerebras
 
 After the selected transcription provider finalizes a transcript, AeriVoice
@@ -49,7 +66,7 @@ warm-up request when dictation starts. That request contains no audio or
 transcript text and is limited to at most one attempt per minute.
 
 Provider pricing, retention, abuse monitoring, and privacy terms can change.
-Review the current Soniox, Meta, OpenRouter, Groq, and Cerebras policies for your accounts.
+Review the current Soniox, Meta, xAI, OpenRouter, Groq, and Cerebras policies for your accounts.
 
 ## Data stored on the Mac
 

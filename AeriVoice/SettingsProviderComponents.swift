@@ -65,6 +65,7 @@ struct ProviderIcon: View {
     switch kind {
     case .soniox: "ProviderSoniox"
     case .metaModelAPI: "ProviderMeta"
+    case .xai: "ProviderSpaceX"
     case .openRouter: "ProviderOpenRouter"
     case .groq: "ProviderGroq"
     case .cerebras: "ProviderCerebras"
@@ -123,7 +124,7 @@ struct ProviderAccountRow: View {
   var body: some View {
     HStack(spacing: 10) {
       ProviderIcon(kind: kind)
-      Text(kind.label)
+      Text(kind == .xai ? "Grok (xAI)" : kind.label)
       if kind == .groq { ExperimentalBadge() }
       Spacer(minLength: 8)
       ProviderConnectionControls(model: model, kind: kind)

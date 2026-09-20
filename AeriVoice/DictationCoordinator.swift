@@ -71,6 +71,7 @@ final class DictationCoordinator: ObservableObject {
   private var targetCaptureTask: Task<TextInsertionTarget?, Never>?
   private var stopTaskID: UUID?
   private var drainTaskID: UUID?
+  var onSuccessfulSessionCompletion: (() -> Void)?
 
   var canCancel: Bool {
     switch phase {
@@ -126,6 +127,10 @@ final class DictationCoordinator: ObservableObject {
       DispatchQueue.main.async { self?.enqueue(data) }
     }
     transcriber.onTranscript = { [weak self] update in self?.updateTranscript(update) }
+    transcriber.onAudioSent = { [weak self] count in
+      guard let self, self.sessionID != nil else { return }
+      self.benchmark.recordAudioSent(bytes: count)
+    }
     transcriber.onError = { [weak self] error in
       guard let self, let id = self.sessionID else { return }
       let stage: BenchmarkFailureStage =
@@ -136,6 +141,17 @@ final class DictationCoordinator: ObservableObject {
 
   private var sessionVocabulary: [String] = []
   private let localReadiness: () -> Bool
+
+  func prepareTranscriptionConnection() async -> Bool {
+    guard !canCancel, !preferences.offlineMode,
+      preferences.effectiveTranscriptionProvider == .grok,
+      let key = credentials.value(for: .xai), !key.isEmpty else { return false }
+    return await transcriber.prepareConnection(
+      configuration: preferences.transcriptionConfiguration, apiKey: key,
+      vocabulary: VocabularyNormalizer.normalize(preferences.vocabulary))
+  }
+
+  func invalidatePreparedConnection() { transcriber.invalidatePreparedConnection() }
 
   func prepareForLaunch(microphoneAuthorized: Bool) {
     guard !launchPreparationAttempted, preferences.onboardingComplete,
@@ -238,6 +254,7 @@ final class DictationCoordinator: ObservableObject {
   }
 
   func cancel() {
+    invalidatePreparedConnection()
     inserter.invalidatePendingRestoration()
     launchPreparationTask?.cancel()
     launchPreparationTask = nil
@@ -449,10 +466,13 @@ final class DictationCoordinator: ObservableObject {
       }
       drain()
       if let drainTask { await drainTask.value }
+      guard sessionID == id, !Task.isCancelled else { return }
+      try await transcriber.flushAudio()
+      guard sessionID == id, !Task.isCancelled else { return }
       benchmark.mark(.audioQueueDrained)
-      guard sessionID == id else { return }
       benchmark.mark(.sttFinalizeStarted)
       let raw = try await transcriber.finish()
+      guard sessionID == id, !Task.isCancelled else { return }
       benchmark.mark(.sttFinalized)
       benchmark.recordRawCharacters(raw.count)
       guard sessionID == id else { return }
@@ -532,6 +552,7 @@ final class DictationCoordinator: ObservableObject {
         notch.hide(after: .seconds(2))
       }
       finishSession(id: id, preserveRestoration: result == .pasteSent)
+      if result == .pasteSent { onSuccessfulSessionCompletion?() }
     } catch AppError.emptyTranscript {
       benchmark.finish(
         .emptyTranscript, stage: .sttFinalize, category: .emptyTranscript, httpStatus: nil)
@@ -581,7 +602,10 @@ final class DictationCoordinator: ObservableObject {
           try await self.transcriber.send(
             RealtimeAudioFrame(
               audio: data, queuedBytesAfterFrame: self.bufferedBytes))
-          self.benchmark.recordAudioSent(bytes: data.count)
+          guard self.sessionID == id, !Task.isCancelled else { break }
+          if !self.transcriber.reportsAudioSends {
+            self.benchmark.recordAudioSent(bytes: data.count)
+          }
         } catch {
           guard self.sessionID == id else { break }
           self.fail(error, id: id, stage: .sttStream)
@@ -746,11 +770,14 @@ final class DictationCoordinator: ObservableObject {
     if let error = error as? ProviderHTTPError {
       return (.provider, error.statusCode)
     }
+    if let error = error as? GrokTransportError {
+      return (error.isProviderRejection ? .provider : .network, error.httpStatus)
+    }
     if error is CleanupNetworkError { return (.network, nil) }
     if error is URLError { return (.network, nil) }
     if let error = error as? AppError {
       switch error {
-      case .missingSonioxKey, .missingMetaModelAPIKey, .missingOpenRouterKey, .missingGroqKey,
+      case .missingSonioxKey, .missingMetaModelAPIKey, .missingXAIKey, .missingOpenRouterKey, .missingGroqKey,
         .missingCerebrasKey:
         return (.missingCredential, nil)
       case .microphoneUnavailable: return (.microphonePermission, nil)
