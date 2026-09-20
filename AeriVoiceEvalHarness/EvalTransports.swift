@@ -2,13 +2,14 @@ import Foundation
 
 /// Responds below the real clients: handshakes, JSON encoding and parsing still run in production code.
 @MainActor
-final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport {
+final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport, GrokWebSocketTransport {
   private let provider: TranscriptionProvider
   private let script: ControlledResponses
   private let text: String
   private var messages: [URLSessionWebSocketTask.Message] = []
   private var waiter: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
   private var cancelled = false
+  private var created = false
   private var sentPartial = false
   private var normalClosePending = false
 
@@ -27,17 +28,27 @@ final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport
         if script.fault == "malformed_stt" { enqueue(.string("invalid-json")); return }
         if provider == .soniox {
           try enqueue(["tokens": [["text": text, "is_final": false]]])
+        } else if provider == .grok {
+          try enqueue(["type": "transcript.partial", "text": text, "start": 0, "duration": 0.25,
+                       "is_final": false, "speech_final": false])
         } else { try enqueue(["type": "transcript", "transcript": text, "final": false]) }
       }
     case .string(let value):
       let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any]
-      let finishing = provider == .soniox ? value.isEmpty : object?["type"] as? String == "endStream"
+      let finishing: Bool
+      switch provider {
+      case .soniox: finishing = value.isEmpty
+      case .grok: finishing = object?["type"] as? String == "audio.done"
+      default: finishing = object?["type"] as? String == "endStream"
+      }
       if finishing {
         if script.fault == "finalize_timeout" { return }
         try await Task.sleep(for: .milliseconds(script.finalizeDelayMs ?? 0))
         guard !cancelled else { throw CancellationError() }
         if provider == .soniox {
           try enqueue(["tokens": [["text": text, "is_final": true]], "finished": true])
+        } else if provider == .grok {
+          try enqueue(["type": "transcript.done", "text": text])
         } else {
           try enqueue(["type": "transcript", "transcript": text, "final": true])
           normalClosePending = true
@@ -54,6 +65,13 @@ final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport
 
   func receive() async throws -> URLSessionWebSocketTask.Message {
     if cancelled { throw CancellationError() }
+    if provider == .grok, !created {
+      created = true
+      try await Task.sleep(for: .milliseconds(script.connectDelayMs ?? 0))
+      guard !cancelled else { throw CancellationError() }
+      if script.fault == "connection" { throw URLError(.cannotConnectToHost) }
+      try enqueue(["type": "transcript.created"])
+    }
     if !messages.isEmpty { return messages.removeFirst() }
     if normalClosePending {
       throw MetaWebSocketTransportError(underlying: URLError(.networkConnectionLost),
@@ -131,6 +149,10 @@ final class EvalHTTPProtocol: URLProtocol, @unchecked Sendable {
 final class EvalTranscriber: RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
+  var onAudioSent: ((Int) -> Void)?
+  var onConnectionEvent: ((String) -> Void)?
+  var reportsAudioSends: Bool { client.reportsAudioSends }
+  var hasPreparedConnection: Bool { client.hasPreparedConnection }
   let client: RealtimeTranscribing
   private let events: EvalEvents
   private(set) var rawText = ""
@@ -145,6 +167,24 @@ final class EvalTranscriber: RealtimeTranscribing {
       self.onTranscript?(update)
     }
     client.onError = { [weak self] error in self?.onError?(error) }
+    client.onAudioSent = { [weak self] count in
+      guard let self else { return }
+      self.recordSent(count, actualWrite: true)
+      self.onAudioSent?(count)
+    }
+    client.onConnectionEvent = { [weak self] name in
+      guard let self else { return }
+      let allowed = ["preparationStarted", "preparationReady", "preparationExpired", "preparationFailed",
+                     "preparationInvalidated", "preparationHit", "preparationMiss", "audioDoneSent"]
+      guard allowed.contains(name) else { return }
+      self.events.emit("connection_event", ["name": name])
+      self.onConnectionEvent?(name)
+    }
+  }
+  private func recordSent(_ count: Int, actualWrite: Bool) {
+    sentBytes += count
+    events.emit("audio_sent", ["bytes": count, "cumulative_bytes": sentBytes,
+                               "actual_transport_write": actualWrite])
   }
   func reset() { rawText = ""; sentBytes = 0 }
   func connect(configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String], sessionID: DictationSessionID) async throws {
@@ -154,8 +194,18 @@ final class EvalTranscriber: RealtimeTranscribing {
   func send(_ frame: RealtimeAudioFrame) async throws {
     activeOperations += 1; defer { activeOperations -= 1 }
     try await client.send(frame)
-    sentBytes += frame.audio.count
+    if !client.reportsAudioSends { recordSent(frame.audio.count, actualWrite: false) }
   }
+  func flushAudio() async throws {
+    activeOperations += 1; defer { activeOperations -= 1 }
+    try await client.flushAudio()
+  }
+  func prepareConnection(configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String]) async -> Bool {
+    activeOperations += 1; defer { activeOperations -= 1 }
+    return await client.prepareConnection(configuration: configuration, apiKey: apiKey, vocabulary: vocabulary)
+  }
+  func invalidatePreparedConnection() { client.invalidatePreparedConnection() }
+  func cancelActiveConnection() { client.cancelActiveConnection() }
   func finish() async throws -> String {
     activeOperations += 1; defer { activeOperations -= 1 }
     let text = try await client.finish()

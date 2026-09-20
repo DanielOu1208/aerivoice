@@ -41,6 +41,9 @@ final class EvalRunner {
       "instrumentation_cpu_included": true, "audio_hardware": false, "desktop_insertion": false,
       "cleanup_bypassed": scenario.kind == "transcription" || scenario.offlineMode == true,
       "offline_mode": scenario.offlineMode == true,
+      "grok_packet_mode": scenario.grokPacketMode ?? "captureFrames",
+      "grok_connection_mode": scenario.grokConnectionMode ?? "cold",
+      "grok_ready_age_ms": scenario.grokReadyAgeMs ?? 0,
     ]
     if ["cleanup", "pipeline", "stability"].contains(scenario.kind), scenario.offlineMode != true {
       let plainText = scenario.model.provider == .openRouter && scenario.model.isOpenRouterCatalogModel
@@ -90,11 +93,16 @@ final class EvalRunner {
     let audio = AudioCaptureService(makeEngine: { engine }, currentRoute: { route })
     let soniox: SonioxRealtimeClient
     let meta: MetaRealtimeClient
-    if scenario.live { soniox = SonioxRealtimeClient(); meta = MetaRealtimeClient() }
-    else {
+    let grok: GrokRealtimeClient
+    if scenario.live {
+      soniox = SonioxRealtimeClient()
+      meta = MetaRealtimeClient()
+      grok = GrokRealtimeClient(packetPolicy: scenario.grokPacketPolicy)
+    } else {
       let script = scenario.script
       let text = scenario.scriptedTranscript
       soniox = SonioxRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .soniox, script: script, text: text) })
+      grok = GrokRealtimeClient(packetPolicy: scenario.grokPacketPolicy, makeTransport: { _ in EvalScriptedSocket(provider: .grok, script: script, text: text) })
       meta = MetaRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .meta, script: script, text: text) })
     }
     let localRuntime = LocalSpeechRuntime()
@@ -153,7 +161,7 @@ final class EvalRunner {
       appleClient = EvalControlledLocalClient(text: scenario.scriptedTranscript, script: scenario.script)
     }
     let transcriber = EvalTranscriber(client: RealtimeTranscriptionRouter(
-      soniox: soniox, meta: meta, local: localClient, apple: appleClient), events: events)
+      soniox: soniox, meta: meta, grok: grok, local: localClient, apple: appleClient), events: events)
     let cleaner = makeCleaner()
     let benchmark = EvalBenchmark(events: events)
     let lifecycle = EvalLifecycle(events: events)
@@ -202,6 +210,21 @@ final class EvalRunner {
       try checkDeadline()
       events.setSession(index)
       transcriber.reset(); receiver.reset(); engine.resetForSession()
+      if scenario.grokReady {
+        guard let key = credentials.value(for: .xai), !key.isEmpty else { throw EvalError.missingCredential }
+        events.emit("connection_preparation_started")
+        let preparationStart = events.elapsedMS
+        let succeeded = await transcriber.prepareConnection(configuration: preferences.transcriptionConfiguration,
+          apiKey: key, vocabulary: scenario.vocabulary ?? [])
+        events.emit("connection_preparation_finished", ["succeeded": succeeded,
+          "duration_ms": events.elapsedMS - preparationStart, "included_in_activation_latency": false])
+        let ageStart = events.elapsedMS
+        let until = ageStart + (scenario.grokReadyAgeMs ?? 0)
+        try await waitUntil { self.events.elapsedMS >= until }
+        events.emit("connection_ready_age_finished", ["duration_ms": events.elapsedMS - ageStart,
+          "requested_age_ms": scenario.grokReadyAgeMs ?? 0,
+          "available_before_activation": transcriber.hasPreparedConnection])
+      }
       let start = events.elapsedMS
       events.emit("session_started", ["index": index])
       resources.sample("session_baseline")

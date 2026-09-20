@@ -1,3 +1,25 @@
+SpaceX provider mark
+===================
+
+Assets: Assets.xcassets/ProviderSpaceX.imageset/icon.png and
+        ../docs/images/providers/spacex.png
+Source: https://www.spacex.com/assets/favicon-spacex.ico
+Referenced by: https://www.spacex.com/
+Retrieved: September 19, 2026
+
+The official 48 x 48 favicon supplies the white SpaceX mark on black. Its
+48 x 48 representation is converted to PNG without resizing or added padding.
+The mark is used to identify the Grok (xAI) provider, not to imply endorsement.
+SpaceX and its mark belong to their respective owner. This third-party brand
+asset is not covered by AeriVoice's or LobeHub's MIT license; no permissive
+license is asserted for it.
+
+LobeHub provider icons
+=====================
+
+The following license applies to the LobeHub-derived Meta, OpenRouter,
+Cerebras, and Groq provider icons, not to the SpaceX or Soniox brand assets.
+
 MIT License
 
 Copyright (c) 2023 LobeHub

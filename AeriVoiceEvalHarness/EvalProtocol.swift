@@ -12,6 +12,9 @@ struct EvalScenario: Decodable {
   let audioPath: String?
   let transcript: String?
   let transcriptionProvider: String?
+  let grokPacketMode: String?
+  let grokConnectionMode: String?
+  let grokReadyAgeMs: Double?
   let offlineMode: Bool?
   let localModel: String?
   let appleLocale: String?
@@ -38,6 +41,8 @@ struct EvalScenario: Decodable {
 
   var live: Bool { mode == "live" }
   var provider: TranscriptionProvider { TranscriptionProvider(rawValue: transcriptionProvider ?? "soniox")! }
+  var grokPacketPolicy: GrokAudioPacketPolicy { grokPacketMode == "100ms" ? .milliseconds100 : .captureFrames }
+  var grokReady: Bool { grokConnectionMode == "ready" }
   var localEngine: LocalTranscriptionModel { LocalTranscriptionModel(rawValue: localModel ?? "nemotron")! }
   var model: CleanupModel { CleanupModel(rawValue: cleanupModel ?? "qwen-3.8-27b")! }
   var configuration: CleanupConfiguration {
@@ -74,6 +79,15 @@ struct EvalScenario: Decodable {
       CleanupModel(rawValue: cleanupModel ?? "qwen-3.8-27b") != nil,
       CleanupMode(rawValue: cleanupMode ?? "Faithful") != nil
     else { throw EvalError.invalidScenario }
+    if grokPacketMode != nil || grokConnectionMode != nil || grokReadyAgeMs != nil {
+      guard provider == .grok, ["transcription", "pipeline", "stability"].contains(kind), offlineMode != true
+      else { throw EvalError.invalidScenario }
+      if let grokPacketMode, !["captureFrames", "100ms"].contains(grokPacketMode) { throw EvalError.invalidScenario }
+      if let grokConnectionMode, !["cold", "ready"].contains(grokConnectionMode) { throw EvalError.invalidScenario }
+      if let age = grokReadyAgeMs {
+        guard grokReady, age.isFinite, age >= 0, age <= 60_000 else { throw EvalError.invalidScenario }
+      }
+    }
     guard LocalTranscriptionModel(rawValue: localModel ?? "nemotron") != nil else { throw EvalError.invalidScenario }
     if provider != .local,
        localModel != nil || appleLocale != nil || localModelPath != nil || localModelVariant != nil {
@@ -230,6 +244,10 @@ func evalFailure(_ error: Error) -> String {
   if let error = error as? EvalError { return error.rawValue }
   if error is CancellationError { return "cancelled" }
   if error is ProviderHTTPError { return "provider_http" }
+  if let error = error as? GrokTransportError {
+    if error.httpStatus != nil { return "provider_http" }
+    return error.isProviderRejection ? "provider" : "network"
+  }
   if error is CleanupNetworkError || error is URLError { return "network" }
   if error is DecodingError { return "malformed_response" }
   if let error = error as? AppError {

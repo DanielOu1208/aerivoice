@@ -104,6 +104,15 @@ struct DictationSettingsPage: View {
       }
       Section {
         VocabularyTagEditor(vocabulary: $preferences.vocabulary)
+        if preferences.effectiveTranscriptionProvider == .grok {
+          Text("Grok uses up to 100 dictionary terms, each up to 50 characters. Spelling is not guaranteed.")
+            .font(.caption).foregroundStyle(.secondary)
+          let excluded = GrokVocabulary(VocabularyNormalizer.normalize(preferences.vocabulary)).excluded
+          if !excluded.isEmpty {
+            Text("Not sent to Grok (\(excluded.count)): " + excluded.joined(separator: ", "))
+              .font(.caption).foregroundStyle(.orange)
+          }
+        }
       } header: {
         SettingsHelpLabel(
           title: "Dictionary",
@@ -265,6 +274,7 @@ struct ProviderSettingsPage: View {
         Group {
           ProviderAccountRow(model: model, kind: .soniox)
           ProviderAccountRow(model: model, kind: .metaModelAPI)
+          ProviderAccountRow(model: model, kind: .xai)
         }
         .disabled(model.preferences.offlineMode || model.changingOfflineMode)
         LocalProviderAccountRow(model: model)

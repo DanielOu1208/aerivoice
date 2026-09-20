@@ -60,6 +60,17 @@ final class AppModel: ObservableObject {
 
   private let shortcutMonitor = GlobalShortcutMonitor()
   private var cancellables = Set<AnyCancellable>()
+  private lazy var grokPreparation = GrokPreparationController(
+    initiallyLocked: true,
+    eligible: { [weak self] in
+      guard let self else { return false }
+      return self.preferences.onboardingComplete && !self.preferences.offlineMode
+        && !self.changingOfflineMode && !self.coordinator.canCancel
+        && self.preferences.effectiveTranscriptionProvider == .grok
+        && self.credentialManager.status(for: .xai) == .saved
+    },
+    prepare: { [weak self] in await self?.coordinator.prepareTranscriptionConnection() ?? false },
+    discard: { [weak self] in self?.coordinator.invalidatePreparedConnection() })
 
   init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
     let preferences = AppPreferences()
@@ -104,7 +115,15 @@ final class AppModel: ObservableObject {
         enabled, recordingGeneration: preferences?.diagnosticsGeneration)
     }
     capturesModifierSides = preferences.shortcut?.distinguishesModifierSides == true
-    preferences.onTranscriptionProviderChange = { [weak self] in self?.prewarmTranscription() }
+    preferences.onTranscriptionProviderChange = { [weak self] in
+      self?.grokPreparation.invalidate()
+      self?.prewarmTranscription()
+    }
+    preferences.onVocabularyChange = { [weak self] in self?.grokConfigurationChanged() }
+    credentialManager.onCredentialChange = { [weak self] kind in
+      if kind == .xai { self?.grokConfigurationChanged() }
+    }
+    coordinator.onSuccessfulSessionCompletion = { [weak self] in self?.grokPreparation.request() }
     preferences.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
     preferences.objectWillChange
       .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
@@ -139,6 +158,7 @@ final class AppModel: ObservableObject {
       .sink { [weak self] _ in
         guard let self else { return }
         self.credentialManager.refreshStoredCredentials()
+        self.refreshTranscriptionSessionEligibility()
         self.permissionRefresh += 1
         guard !self.capturingShortcut, !self.changingOfflineMode, AXIsProcessTrusted(), let shortcut = self.preferences.shortcut else { return }
         self.shortcutMonitor.start(
@@ -201,6 +221,7 @@ final class AppModel: ObservableObject {
   func setOfflineMode(_ enabled: Bool, selecting provider: TranscriptionProvider? = nil) {
     guard enabled != preferences.offlineMode, canChangeOfflineMode else { return }
     changingOfflineMode = true
+    grokPreparation.invalidate()
     shortcutMonitor.stop()
     // Persist the restriction before asynchronous cancellation, including a possible quit.
     if enabled { preferences.setOfflineMode(true) }
@@ -336,6 +357,8 @@ final class AppModel: ObservableObject {
     localModel.select(usesLocal && preferences.localTranscriptionModel == .nemotron)
     appleSpeech.select(usesLocal && preferences.localTranscriptionModel == .apple,
                        localeIdentifier: preferences.appleSpeechLocale)
+    grokPreparation.request()
+    if preferences.effectiveTranscriptionProvider == .grok, !grokPreparation.isEligible { return }
     guard !preferences.offlineMode, !changingOfflineMode, !usesLocal else { return }
     let runtime = runtimeDiagnostics
     let token = runtime.beginPreparation(network: true)
@@ -345,6 +368,33 @@ final class AppModel: ObservableObject {
         runtime?.finishPreparation(token, result: success ? .prepared : .failed)
       }
     }
+  }
+
+  private func grokConfigurationChanged() {
+    grokPreparation.invalidate()
+    grokPreparation.request()
+  }
+
+  func transcriptionWillSleep() { grokPreparation.setSleeping(true) }
+
+  func transcriptionDidWake() {
+    refreshTranscriptionSessionEligibility()
+    grokPreparation.setSleeping(false)
+    prewarmTranscription()
+  }
+
+  func transcriptionLockChanged(_ locked: Bool) { grokPreparation.setLocked(locked) }
+
+  func stopTranscriptionPreparation() { grokPreparation.stop() }
+
+  func refreshTranscriptionSessionEligibility() {
+    // An unavailable session state fails closed; waking does not imply unlocking.
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+      session[kCGSessionOnConsoleKey as String] as? Bool == true else {
+      grokPreparation.setLocked(true)
+      return
+    }
+    grokPreparation.setLocked(session["CGSSessionScreenIsLocked"] as? Bool == true)
   }
 
   func clearCompletedBenchmarkHistory() {
@@ -357,6 +407,7 @@ final class AppModel: ObservableObject {
     switch kind {
     case .soniox: nil
     case .metaModelAPI: nil
+    case .xai: nil
     case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
     case .groq: preferences.cleanupConfiguration(for: .groq)
     case .cerebras: preferences.cleanupConfiguration(for: .cerebras)

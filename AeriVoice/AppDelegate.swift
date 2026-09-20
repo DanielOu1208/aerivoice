@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     model.runtimeDiagnostics.menuConfigured()
     configureNotifications()
     observeLifecycle()
+    model.refreshTranscriptionSessionEligibility()
     model.coordinator.prepareForLaunch(
       microphoneAuthorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
     model.prewarmTranscription()
@@ -46,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    model.stopTranscriptionPreparation()
     model.coordinator.cancel()
     model.runtimeDiagnostics.terminate()
     model.benchmarkRecorder.flushBeforeTermination()
@@ -115,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) {
       [weak self] _ in
       Task { @MainActor in
+        self?.model.transcriptionWillSleep()
         self?.model.coordinator.cancel()
         self?.model.runtimeDiagnostics.willSleep()
       }
@@ -124,12 +127,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       Task { @MainActor in
         guard let self else { return }
         self.model.runtimeDiagnostics.didWake()
-        self.model.prewarmTranscription()
+        self.model.transcriptionDidWake()
       }
     }
     DistributedNotificationCenter.default().addObserver(
       forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
-    ) { [weak self] _ in Task { @MainActor in self?.model.coordinator.cancel() } }
+    ) { [weak self] _ in
+      Task { @MainActor in
+        self?.model.transcriptionLockChanged(true)
+        self?.model.coordinator.cancel()
+      }
+    }
+    DistributedNotificationCenter.default().addObserver(
+      forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
+    ) { [weak self] _ in Task { @MainActor in self?.model.refreshTranscriptionSessionEligibility() } }
+    workspace.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) {
+      [weak self] _ in Task { @MainActor in
+        self?.model.transcriptionLockChanged(true)
+        self?.model.coordinator.cancel()
+      }
+    }
+    workspace.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main) {
+      [weak self] _ in Task { @MainActor in self?.model.refreshTranscriptionSessionEligibility() }
+    }
   }
 
   @objc private func toggle() {

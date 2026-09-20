@@ -21,9 +21,11 @@ final class ModelTests: XCTestCase {
   }
 
   func testTranscriptionProviderCatalogAndCapabilities() {
-    XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta, .local])
+    XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta, .grok, .local])
     XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v5")
     XCTAssertEqual(TranscriptionProvider.meta.modelID, "muse-voice-transcribe-1.0")
+    XCTAssertEqual(TranscriptionProvider.grok.modelID, "grok-voice-transcribe-2.0")
+    XCTAssertEqual(TranscriptionProvider.grok.credentialKind, .xai)
     XCTAssertEqual(TranscriptionProvider.soniox.credentialKind, .soniox)
     XCTAssertEqual(TranscriptionProvider.meta.credentialKind, .metaModelAPI)
     XCTAssertEqual(TranscriptionProvider.soniox.connectedBufferLimitBytes, 512_000)

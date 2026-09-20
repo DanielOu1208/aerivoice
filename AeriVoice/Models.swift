@@ -39,6 +39,7 @@ struct RealtimeAudioFrame: Equatable, Sendable {
 enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendable {
   case soniox
   case meta
+  case grok
   case local
 
   var id: Self { self }
@@ -47,6 +48,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "Soniox"
     case .meta: "Meta"
+    case .grok: "Grok"
     case .local: "Local"
     }
   }
@@ -55,6 +57,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "Soniox Realtime"
     case .meta: "Muse Voice Transcribe 1.0"
+    case .grok: "Grok Voice Transcribe 2.0"
     case .local: "Nemotron 3.5 — English"
     }
   }
@@ -63,6 +66,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: "stt-rt-v5"
     case .meta: "muse-voice-transcribe-1.0"
+    case .grok: "grok-voice-transcribe-2.0"
     case .local: "nemotron-3.5-asr-0.6b-560ms"
     }
   }
@@ -71,6 +75,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: .soniox
     case .meta: .metaModelAPI
+    case .grok: .xai
     case .local: nil
     }
   }
@@ -79,6 +84,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox: .missingSonioxKey
     case .meta: .missingMetaModelAPIKey
+    case .grok: .missingXAIKey
     case .local: .provider("Download the Local model in Dictation settings.")
     }
   }
@@ -86,7 +92,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
   var connectedBufferLimitBytes: Int {
     switch self {
     case .soniox: 512_000
-    case .meta: 160_000
+    case .meta, .grok: 160_000
     case .local: 160_000
     }
   }
@@ -595,13 +601,36 @@ extension AudioCapturing {
 protocol RealtimeTranscribing: AnyObject {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)? { get set }
   var onError: ((Error) -> Void)? { get set }
+  var reportsAudioSends: Bool { get }
+  var onAudioSent: ((Int) -> Void)? { get set }
+  var onConnectionEvent: ((String) -> Void)? { get set }
+  var hasPreparedConnection: Bool { get }
+  func prepareConnection(
+    configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String]
+  ) async -> Bool
+  func invalidatePreparedConnection()
+  func cancelActiveConnection()
   func connect(
     configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String],
     sessionID: DictationSessionID
   ) async throws
   func send(_ frame: RealtimeAudioFrame) async throws
+  func flushAudio() async throws
   func finish() async throws -> String
   func cancel()
+}
+
+extension RealtimeTranscribing {
+  var reportsAudioSends: Bool { false }
+  var onAudioSent: ((Int) -> Void)? { get { nil } set {} }
+  var onConnectionEvent: ((String) -> Void)? { get { nil } set {} }
+  var hasPreparedConnection: Bool { false }
+  func prepareConnection(
+    configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String]
+  ) async -> Bool { false }
+  func invalidatePreparedConnection() {}
+  func cancelActiveConnection() { cancel() }
+  func flushAudio() async throws {}
 }
 
 protocol CleaningText: Sendable {
@@ -770,6 +799,7 @@ struct NotchState: Equatable, Sendable {
 enum AppError: LocalizedError {
   case missingSonioxKey
   case missingMetaModelAPIKey
+  case missingXAIKey
   case missingOpenRouterKey
   case missingGroqKey
   case missingCerebrasKey
@@ -783,6 +813,7 @@ enum AppError: LocalizedError {
     switch self {
     case .missingSonioxKey: "Add and verify a Soniox API key in Settings."
     case .missingMetaModelAPIKey: "Add and verify a Meta Model API key in Settings."
+    case .missingXAIKey: "Add and verify an xAI API key in Settings."
     case .missingOpenRouterKey: "Add and verify an OpenRouter API key in Settings."
     case .missingGroqKey: "Add and verify a Groq API key in Settings."
     case .missingCerebrasKey: "Add and verify a Cerebras API key in Settings."

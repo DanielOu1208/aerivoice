@@ -363,6 +363,8 @@ struct CredentialEditorView: View {
     switch kind {
     case .soniox:
       "Realtime speech transcription through Soniox. Select Soniox under Dictation to use this key."
+    case .xai:
+      "Grok Voice Transcribe 2.0 through xAI. Requires an xAI API key and API credits."
     case .metaModelAPI:
       "Muse Voice Transcribe through Meta Model API. AeriVoice requests Zero Data Retention for every stream."
     case .openRouter:

@@ -5,6 +5,63 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorTests: XCTestCase {
+  func testOldStopCannotFlushNewSessionAfterSuspendedDrainFails() async throws {
+    let fixture = makeFixture(transcriptionProvider: .grok)
+    fixture.transcriber.waitsForSendResolution = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.transcriber.hasPendingSend }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .processing }
+    fixture.transcriber.emitError(AppError.provider("old session failed"))
+    try await waitUntil { if case .error = fixture.coordinator.phase { return true }; return false }
+    fixture.transcriber.waitsForSendResolution = false
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.transcriber.resolveSend()
+    for _ in 0..<30 { await Task.yield() }
+    XCTAssertEqual(fixture.transcriber.flushCount, 0)
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.audioQueueDrained))
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    fixture.coordinator.cancel()
+  }
+
+  func testAggregatedAudioCountsOnlyTransportSendsAndFlushesBeforeDrained() async throws {
+    let fixture = makeFixture(transcriptionProvider: .grok)
+    fixture.transcriber.reportsAudioSends = true
+    fixture.transcriber.onFlush = {
+      XCTAssertEqual(fixture.benchmark.audioBytesSent, 0)
+      XCTAssertFalse(fixture.benchmark.milestones.contains(.audioQueueDrained))
+    }
+    var completedAfterCleanup = false
+    fixture.coordinator.onSuccessfulSessionCompletion = {
+      completedAfterCleanup = true
+      XCTAssertFalse(fixture.coordinator.canCancel)
+    }
+    fixture.coordinator.toggle()
+    try await waitUntil { !fixture.transcriber.sentFrames.isEmpty }
+    XCTAssertEqual(fixture.benchmark.audioBytesSent, 0)
+    fixture.coordinator.toggle()
+    try await waitUntil { completedAfterCleanup }
+    XCTAssertEqual(fixture.transcriber.flushCount, 1)
+    XCTAssertEqual(fixture.benchmark.audioBytesSent, fixture.benchmark.audioBytes)
+    XCTAssertTrue(fixture.benchmark.milestones.contains(.audioQueueDrained))
+    fixture.coordinator.cancel()
+  }
+
+  func testIdleCancellationInvalidatesPreparationAndPreparationDoesNotCapture() async throws {
+    let fixture = makeFixture(transcriptionProvider: .grok)
+    let prepared = await fixture.coordinator.prepareTranscriptionConnection()
+    XCTAssertTrue(prepared)
+    XCTAssertEqual(fixture.transcriber.preparationCount, 1)
+    XCTAssertFalse(fixture.audio.didStart)
+    fixture.coordinator.cancel()
+    XCTAssertEqual(fixture.transcriber.invalidationCount, 1)
+    fixture.preferences.setOfflineMode(true)
+    let offlinePrepared = await fixture.coordinator.prepareTranscriptionConnection()
+    XCTAssertFalse(offlinePrepared)
+    XCTAssertEqual(fixture.transcriber.preparationCount, 1)
+  }
+
   func testLocalPreparationDoesNotStartCaptureOrConnect() async throws {
     let fixture = makeFixture(transcriptionProvider: .local, hasSonioxKey: false, hasMetaKey: false, localReady: false)
     fixture.coordinator.toggle()
@@ -494,6 +551,21 @@ final class DictationCoordinatorTests: XCTestCase {
       XCTAssertFalse(fixture.audio.didStart)
       XCTAssertFalse(fixture.muter.didMute)
       XCTAssertTrue(fixture.transcriber.didCancel)
+    }
+  }
+
+  func testGrokFailuresPreserveSafeCategoriesWithoutTreatingSocketCodesAsHTTP() async throws {
+    let cases: [(Int?, BenchmarkFailureCategory, Int?)] = [
+      (401, .provider, 401), (429, .provider, 429), (1013, .provider, nil),
+      (1006, .network, nil), (nil, .network, nil),
+    ]
+    for (status, category, httpStatus) in cases {
+      let fixture = makeFixture(transcriptionProvider: .grok, connectError: GrokTransportError(status: status))
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.benchmark.terminalResult == .failed }
+      XCTAssertEqual(fixture.benchmark.failureStage, .sttSetup)
+      XCTAssertEqual(fixture.benchmark.failureCategory, category)
+      XCTAssertEqual(fixture.benchmark.failureHTTPStatus, httpStatus)
     }
   }
 

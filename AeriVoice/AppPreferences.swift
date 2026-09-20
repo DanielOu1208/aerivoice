@@ -116,7 +116,13 @@ final class AppPreferences: ObservableObject {
       defaults.set(catalogRequiresZeroDataRetention, forKey: Key.catalogRequiresZeroDataRetention)
     }
   }
-  @Published var vocabulary: String { didSet { defaults.set(vocabulary, forKey: Key.vocabulary) } }
+  var onVocabularyChange: (() -> Void)?
+  @Published var vocabulary: String {
+    didSet {
+      defaults.set(vocabulary, forKey: Key.vocabulary)
+      if oldValue != vocabulary { onVocabularyChange?() }
+    }
+  }
   @Published var muteOutput: Bool { didSet { defaults.set(muteOutput, forKey: Key.muteOutput) } }
   @Published var soundCues: Bool { didSet { defaults.set(soundCues, forKey: Key.soundCues) } }
   @Published var restoreClipboard: Bool {
