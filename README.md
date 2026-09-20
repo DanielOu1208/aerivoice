@@ -106,7 +106,7 @@ the Provider section.
 
 ### Grok transcription
 
-Available on this development branch; not included in the published beta.9 release.
+Available starting in beta.10.
 
 Choose **Grok** under Dictation and connect an xAI API key with API credits.
 AeriVoice uses Grok Voice Transcribe 2.0 for live transcription. The existing
@@ -207,12 +207,12 @@ available in Settings.
 <details>
 <summary>Verify your download</summary>
 
-Download `AeriVoice-v0.1.0-beta.9-arm64.dmg` and its `.sha256` file from
+Download `AeriVoice-v0.1.0-beta.10-arm64.dmg` and its `.sha256` file from
 [GitHub Releases](https://github.com/DanielOu1208/aerivoice/releases), then run
 this in your download directory before opening the DMG:
 
 ```sh
-shasum -a 256 -c AeriVoice-v0.1.0-beta.9-arm64.dmg.sha256
+shasum -a 256 -c AeriVoice-v0.1.0-beta.10-arm64.dmg.sha256
 ```
 
 </details>
