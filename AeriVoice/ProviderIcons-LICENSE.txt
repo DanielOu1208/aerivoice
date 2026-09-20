@@ -8,17 +8,39 @@ Referenced by: https://www.spacex.com/
 Retrieved: September 19, 2026
 
 The official 48 x 48 favicon supplies the white SpaceX mark on black. Its
-48 x 48 representation is converted to PNG without resizing or added padding.
+48 x 48 representation is scaled proportionally into a 96 x 96 black tile
+with 9 pixels of clear space on every side. Only the tile corners are rounded;
+the complete original mark remains visible. The same PNG is used in the docs.
 The mark is used to identify the Grok (xAI) provider, not to imply endorsement.
 SpaceX and its mark belong to their respective owner. This third-party brand
 asset is not covered by AeriVoice's or LobeHub's MIT license; no permissive
 license is asserted for it.
 
+Official OpenRouter and Cerebras marks
+======================================
+
+OpenRouter: https://github.com/OpenRouterTeam/sign-in-with-openrouter/blob/main/public/openrouter-logo-light.svg
+Brand guidance: https://openrouter.ai/brand
+Cerebras: https://www.cerebras.ai/company/press-kit
+Press kit: https://cdn.sanity.io/files/e4qjo92p/production/047798c0db861ade2a18320e534c00f05883a180.zip
+Source file: Cerebras C logo.svg
+Retrieved: September 20, 2026
+
+The official SVG paths and colors are preserved, scaled proportionally and
+placed on white rounded tiles. OpenRouter uses its Grape light-background
+mark (#7624F4). Native PNGs are rendered from the corresponding docs SVGs.
+These third-party brand assets are not covered by AeriVoice's or LobeHub's
+MIT license; no permissive license is asserted for them.
+
+Soniox: https://soniox.com/icons/favicon-96x96.png
+The official favicon is a third-party brand asset, not covered by AeriVoice's
+or LobeHub's MIT license.
+
 LobeHub provider icons
 =====================
 
-The following license applies to the LobeHub-derived Meta, OpenRouter,
-Cerebras, and Groq provider icons, not to the SpaceX or Soniox brand assets.
+The following license applies to the LobeHub-derived Meta and Groq
+provider icons, not to the SpaceX, Soniox, OpenRouter, or Cerebras brand assets.
 
 MIT License
 

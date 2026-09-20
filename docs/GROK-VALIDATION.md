@@ -64,6 +64,53 @@ then timed out on one retry. The new icon's asset mapping, 48×48 source image,
 and light/dark render were verified, but its final in-app appearance remains
 unverified. No authentication or preference changes were made during that check.
 
+## RC review follow-up (September 20)
+
+A full review against beta.9 used the ultra-code-quality-review guide, including
+routing, credentials, offline/lock/sleep lifecycle, dictionary limits, audio
+pacing, final transcript assembly, and harness accounting.
+
+The major finding was two representations of an active Grok connection: a fresh
+connection lived inside the client while a prepared connection delegated to a
+second complete client. The correction separates one socket session from the
+owner of prepared and active sessions, so both modes share the same execution
+path. Transcript semantics, packet selection, catch-up limits, and timeouts are
+preserved. Unbounded polling in affected tests was replaced with bounded waits that fail
+locally instead of hanging. A duplicate finish request now preserves the
+original in-flight session in both fresh and prepared modes; obsolete finish
+cleanup cannot clear a replacement session. Both cases have regression tests.
+
+The icon audit identified clipped SpaceX clearspace and OpenRouter's dark-theme
+lime mark on a white tile. Cerebras's official press kit confirms the ring-shaped
+C; the update uses its supplied geometry. Provider assets retain their brand
+identity, with appropriate contrast and padding. See [artwork provenance](ARTWORK.md).
+
+An independent follow-up source review found no remaining Major or Blocker
+findings. All 41 focused client/preparation tests passed. Native AppKit renders
+at 24 and 72 pixels were inspected in light and dark appearances with the same
+rounded clipping used by Settings. OpenRouter's solid-mark contrast against
+white improved from 1.18:1 to 6.31:1. No existing production file crossed the
+1,000-line threshold; the client/session responsibilities are separate.
+
+The full Debug suite passed 472 tests with three opt-in live-test skips and no
+failures; static analysis passed. Release app build/analysis and all 21 controlled
+harness checks passed (Grok 8, local 7, Apple 4, model provenance 2).
+
+The matched live regression completed 12/12 calls without errors or retries:
+three fixed language clips × fresh/prepared modes × previous/new RC harnesses.
+All six prepared calls adopted their ready connection; all six fresh calls used
+the expected fresh path. Actual-write byte totals and flush/finalization ordering
+passed. This is a small functional regression check, not a new speed or accuracy
+claim. The new Release harness SHA-256 is
+`6dc854f55bdac67cd7b53af53f37eaad22571bbbb4d1a49f9e0a9f3f2cfcd946`.
+Live microphone/paste acceptance remains a separate gate.
+
+| Severity | Location | Finding and correction |
+| --- | --- | --- |
+| Major, fixed | `GrokRealtimeClient.swift` / `GrokRealtimeSession.swift` | Recursive client ownership required two lifecycle representations. One concrete session now owns every active stream, reducing cancellation and finalization paths. |
+| Minor, fixed | `GrokRealtimeClientTests.swift` | Unbounded yield loops could hang on regressions. Deadline-bounded waits now report a test failure. |
+| Visual, fixed | Provider assets / `docs/ARTWORK.md` | SpaceX clipping and OpenRouter contrast corrected; Cerebras paths replaced with the official supplied geometry. |
+
 ## Matched packet and connection experiment
 
 Three fixed English, Chinese, and mixed-language clips, five repetitions each,

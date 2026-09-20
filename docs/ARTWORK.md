@@ -49,15 +49,31 @@ respective owners. They are not original AeriVoice artwork or an endorsement.
 | --- | --- |
 | `images/providers/soniox.png` | [Soniox's official favicon](https://soniox.com/icons/favicon-96x96.png), retrieved September 7, 2026; unchanged |
 | `images/providers/meta.svg` | Lobe Icons `meta-color.svg` |
-| `images/providers/openrouter.svg` | Lobe Icons `openrouter-color.svg` |
-| `images/providers/cerebras.svg` | Lobe Icons `cerebras-color.svg` |
+| `images/providers/spacex.png` | [SpaceX's official favicon](https://www.spacex.com/assets/favicon-spacex.ico), retrieved September 19, 2026 |
+| `images/providers/openrouter.svg` | [OpenRouter's official light-background mark](https://github.com/OpenRouterTeam/sign-in-with-openrouter/blob/main/public/openrouter-logo-light.svg), retrieved September 20, 2026 |
+| `images/providers/cerebras.svg` | `Cerebras C logo.svg` from the [official press kit](https://www.cerebras.ai/company/press-kit), retrieved September 20, 2026 |
 | `images/providers/groq.svg` | Lobe Icons `groq.svg` |
 
-The four SVGs come from [Lobe Icons at commit a94750e](https://github.com/lobehub/lobe-icons/tree/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons).
+Meta and Groq come from [Lobe Icons at commit a94750e](https://github.com/lobehub/lobe-icons/tree/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons).
 They retain the source paths and brand colors, with a white rounded backing and
 padding for contrast in light and dark GitHub themes. Unspecified/current colors
 are fixed to dark ink for standalone image rendering. Lobe Icons is MIT licensed;
 its copyright and license are included in
 [`images/providers/LICENSE-LobeHub.txt`](images/providers/LICENSE-LobeHub.txt).
-Soniox's favicon is a third-party brand asset and is not covered by AeriVoice's
-MIT license.
+
+OpenRouter and Cerebras preserve their official SVG paths and colors with
+proportional scaling and white rounded backings. OpenRouter uses Grape
+(`#7624F4`) as specified for light backgrounds in its [brand guidance](https://openrouter.ai/brand).
+Cerebras retains the multi-ring C supplied in its
+[press-kit archive](https://cdn.sanity.io/files/e4qjo92p/production/047798c0db861ade2a18320e534c00f05883a180.zip).
+The corresponding native PNGs are rendered from these documentation SVGs.
+
+SpaceX's complete 48 × 48 favicon is proportionally scaled into a 96 × 96 black
+tile with 9 pixels of clear space on each side, protecting the mark from the
+native icon's rounded clipping. The app and README use the same PNG. The SpaceX
+mark identifies the Grok (xAI) provider at Daniel's direction.
+
+SpaceX, Soniox, OpenRouter, and Cerebras assets are third-party brand assets and
+are not covered by AeriVoice's or LobeHub's MIT license. No permissive license is
+asserted for these official marks. App asset notices are recorded in
+[`../AeriVoice/ProviderIcons-LICENSE.txt`](../AeriVoice/ProviderIcons-LICENSE.txt).

@@ -181,7 +181,7 @@ final class GrokRealtimeClientTests: XCTestCase {
     let repeated = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: [])
     XCTAssertTrue(repeated)
     time.advance(by: .seconds(10))
-    while !socket.cancelled { await Task.yield() }
+    guard await waitForGrokCondition({ socket.cancelled }) else { client.cancel(); return }
     XCTAssertFalse(client.hasPreparedConnection)
     XCTAssertEqual(events.filter { $0 == "preparationStarted" }.count, 1)
     XCTAssertTrue(events.contains("preparationExpired"))
@@ -195,7 +195,7 @@ final class GrokRealtimeClientTests: XCTestCase {
     client.onError = { _ in XCTFail("Idle error reached dictation UI") }
     _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: ["AeriVoice"])
     old.push(#"{"type":"error","message":"private"}"#)
-    while client.hasPreparedConnection { await Task.yield() }
+    guard await waitForGrokCondition({ !client.hasPreparedConnection }) else { client.cancel(); return }
     try await connect(client)
     _ = try await client.finish()
   }
@@ -248,7 +248,7 @@ final class GrokRealtimeClientTests: XCTestCase {
     try await client.send(frame)
     time.pausePacing = true
     let pending = Task { try await client.send(frame) }
-    while time.waiterCount == 0 { await Task.yield() }
+    guard await waitForGrokCondition({ time.waiterCount > 0 }) else { pending.cancel(); client.cancel(); return }
     client.cancelActiveConnection()
     try await connect(client)
     time.advance(by: .milliseconds(100))
@@ -301,7 +301,7 @@ final class GrokRealtimeClientTests: XCTestCase {
     XCTAssertTrue(client.hasPreparedConnection)
     XCTAssertFalse(socket.cancelled)
     time.advance(by: .seconds(1))
-    while !socket.cancelled { await Task.yield() }
+    guard await waitForGrokCondition({ socket.cancelled }) else { client.cancel(); return }
     XCTAssertFalse(client.hasPreparedConnection)
   }
 
@@ -312,7 +312,7 @@ final class GrokRealtimeClientTests: XCTestCase {
     client.onError = { _ in XCTFail("Standby transcript error reached UI") }
     _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: [])
     socket.push(#"{"type":"transcript.partial","text":"unexpected","start":0,"duration":1,"is_final":true,"speech_final":true}"#)
-    while !socket.cancelled { await Task.yield() }
+    guard await waitForGrokCondition({ socket.cancelled }) else { client.cancel(); return }
     XCTAssertFalse(client.hasPreparedConnection)
   }
 
@@ -490,11 +490,60 @@ final class GrokRealtimeClientTests: XCTestCase {
     let client = GrokRealtimeClient(makeTransport: { _ in socket })
     try await connect(client)
     let finishing = Task { try await client.finish() }
-    while !socket.sent.contains(#"{"type":"audio.done"}"#) { await Task.yield() }
+    guard await waitForGrokCondition({ socket.sent.contains(#"{"type":"audio.done"}"#) }) else { finishing.cancel(); client.cancel(); return }
     finishing.cancel()
     do { _ = try await finishing.value; XCTFail("Expected cancellation") }
     catch { XCTAssertTrue(error is CancellationError) }
     XCTAssertTrue(socket.cancelled)
+  }
+
+  func testDuplicateFinishPreservesOriginalColdAndPreparedSession() async throws {
+    for prepare in [false, true] {
+      let socket = GrokTestSocket()
+      socket.finalText = nil
+      let client = GrokRealtimeClient(makeTransport: { _ in socket })
+      if prepare {
+        let ready = await client.prepareConnection(configuration: .init(provider: .grok),
+          apiKey: "test-key", vocabulary: ["AeriVoice"])
+        XCTAssertTrue(ready)
+      }
+      try await connect(client)
+      var finals: [String] = []
+      client.onTranscript = { finals.append($0.snapshot.displayText) }
+      let finishing = Task { try await client.finish() }
+      guard await waitForGrokCondition({ !socket.sent.isEmpty }) else {
+        finishing.cancel(); client.cancel(); return
+      }
+      do { _ = try await client.finish(); XCTFail("Expected duplicate finish rejection") }
+      catch { XCTAssertEqual(error.localizedDescription,
+        AppError.provider("Grok is not ready to finish this transcription.").localizedDescription) }
+      XCTAssertFalse(socket.cancelled)
+      socket.push(#"{"type":"transcript.done","text":"Original final."}"#)
+      let final = try await finishing.value
+      XCTAssertEqual(final, "Original final.")
+      XCTAssertEqual(finals, ["Original final."])
+      XCTAssertEqual(socket.sent, [#"{"type":"audio.done"}"#])
+      XCTAssertTrue(socket.cancelled)
+    }
+  }
+
+  func testObsoleteFinishCannotClearReplacementSession() async throws {
+    let old = GrokTestSocket()
+    old.finalText = nil
+    let next = GrokTestSocket()
+    var sockets = [old, next]
+    let client = GrokRealtimeClient(makeTransport: { _ in sockets.removeFirst() })
+    try await connect(client)
+    let finishing = Task { try await client.finish() }
+    guard await waitForGrokCondition({ !old.sent.isEmpty }) else {
+      finishing.cancel(); client.cancel(); return
+    }
+    try await connect(client)
+    do { _ = try await finishing.value; XCTFail("Expected obsolete finish cancellation") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    let final = try await client.finish()
+    XCTAssertEqual(final, "Final text.")
+    XCTAssertEqual(next.sent, [#"{"type":"audio.done"}"#])
   }
 
   func testMalformedEventFailsWithoutLeakingContents() async throws {
@@ -594,7 +643,7 @@ private final class GrokTestSocket: GrokWebSocketTransport {
     pending?.resume(throwing: CancellationError())
   }
   func waitUntilReceiving() async {
-    while waiter == nil { await Task.yield() }
+    _ = await waitForGrokCondition { self.waiter != nil }
   }
 }
 
@@ -639,4 +688,18 @@ private final class GrokTestClock {
       waiter.1.resume()
     }
   }
+}
+
+@MainActor
+private func waitForGrokCondition(_ condition: () -> Bool,
+                                  file: StaticString = #filePath, line: UInt = #line) async -> Bool {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+  while !condition() {
+    guard ContinuousClock.now < deadline else {
+      XCTFail("Timed out waiting for Grok test condition", file: file, line: line)
+      return false
+    }
+    await Task.yield()
+  }
+  return true
 }
