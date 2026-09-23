@@ -46,6 +46,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     model.runtimeDiagnostics.finishInitialization()
   }
 
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    model.stopTranscriptionPreparation()
+    model.coordinator.cancel()
+    Task { @MainActor in
+      await model.usageStats.finishPendingOperationsForTermination()
+      sender.reply(toApplicationShouldTerminate: true)
+    }
+    return .terminateLater
+  }
+
   func applicationWillTerminate(_ notification: Notification) {
     model.stopTranscriptionPreparation()
     model.coordinator.cancel()

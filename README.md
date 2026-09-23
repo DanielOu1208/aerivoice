@@ -174,6 +174,19 @@ automatically. Offline mode skips all cleanup.
 See the [Compose benchmark checkpoint](docs/COMPOSE-VALIDATION.md) for measured
 results, evaluation limits, and remaining UI acceptance gates.
 
+## Usage stats
+
+Open **Settings → Stats** for words dictated, average dictation WPM, completed
+sessions, and recording time. Choose 7 days, 30 days, or all time to see usage trends.
+Counts use final output after cleanup, including text copied to the clipboard.
+Average WPM divides total output words by total recording minutes, including pauses
+but excluding processing delay. Cleanup and language affect the count; word rates
+are not directly comparable across languages.
+
+Stats start with this version, stay on this Mac, and do not retain audio or transcript
+history. Manage collection or clear totals under **Privacy & Data → Usage stats**.
+Disabling collection preserves saved totals. Time-saved estimates are not included.
+
 ## Custom cleanup instructions (Experimental)
 
 Under **AI Cleanup → Cleanup style**, choose **Custom** to reveal the instructions

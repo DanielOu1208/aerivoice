@@ -48,6 +48,7 @@ final class AppModel: ObservableObject {
   @Published var capturesModifierSides = false
   private var capturingShortcut = false
   let preferences: AppPreferences
+  let usageStats: UsageStatsModel
   let coordinator: DictationCoordinator
   let credentialManager: CredentialManager
   let benchmarkRecorder: LatencyBenchmarkRecorder
@@ -93,12 +94,15 @@ final class AppModel: ObservableObject {
       recordingGeneration: preferences.diagnosticsGeneration,
       acceptLegacyCheckpoint: preferences.acceptsLegacyDiagnosticCheckpoint,
       writer: writer, runtime: runtime)
+    let usageStats = UsageStatsModel()
+    self.usageStats = usageStats
     self.preferences = preferences
     self.credentialManager = credentialManager
     self.benchmarkRecorder = benchmarkRecorder
     self.runtimeDiagnostics = runtime
     coordinator = DictationCoordinator(
       preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder,
+      usageStats: usageStats,
       runtimeDiagnostics: runtime,
       localReadiness: {
         if preferences.localTranscriptionModel == .apple {

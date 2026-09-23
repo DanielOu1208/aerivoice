@@ -4,6 +4,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
   case general
   case dictation
   case cleanup
+  case stats
   case providers
   case privacy
 
@@ -14,6 +15,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     case .general: "General"
     case .dictation: "Dictation"
     case .cleanup: "AI Cleanup"
+    case .stats: "Stats"
     case .providers: "Providers"
     case .privacy: "Privacy & Data"
     }
@@ -37,18 +39,9 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     case .general: "gearshape"
     case .dictation: "waveform"
     case .cleanup: "wand.and.stars"
+    case .stats: "chart.bar"
     case .providers: "key"
     case .privacy: "hand.raised"
-    }
-  }
-
-  var color: Color {
-    switch self {
-    case .general: .gray
-    case .dictation: .blue
-    case .cleanup: .purple
-    case .providers: .orange
-    case .privacy: .indigo
     }
   }
 
@@ -93,7 +86,7 @@ struct SettingsSidebar: View {
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(.white)
           .frame(width: 25, height: 25)
-          .background(destination.color.gradient, in: RoundedRectangle(cornerRadius: 6))
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
       }
       .padding(.vertical, 2)
       .tag(destination)
@@ -138,6 +131,8 @@ struct SettingsDetail: View {
       DictationSettingsPage(model: model, selection: $navigation.selection)
     case .cleanup:
       CleanupSettingsPage(model: model)
+    case .stats:
+      UsageStatsPage(stats: model.usageStats) { navigation.selection = .privacy }
     case .providers:
       ProviderSettingsPage(model: model)
     case .privacy:

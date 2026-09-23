@@ -42,6 +42,10 @@ final class DictationCoordinator: ObservableObject {
   private let muter: OutputMuting
   private let inserter: TextInserting
   private let notch: NotchPresenting
+  private let usageStats: UsageStatsRecording?
+  private var usageSession: UsageSession?
+  private var captureStartedAt: ContinuousClock.Instant?
+  private var recordingSeconds: Double = 0
   private let benchmark: LatencyBenchmarkRecording
   private let readiness: DictationReadinessChecking
   private let cuePlayer: SoundCuePlaying
@@ -87,6 +91,7 @@ final class DictationCoordinator: ObservableObject {
     cleaner: CleaningText = CleanupClientRouter(), muter: OutputMuting = OutputMuteController(),
     inserter: TextInserting? = nil, notch: NotchPresenting = NotchPresenter(),
     benchmark: LatencyBenchmarkRecording = LatencyBenchmarkRecorder(),
+    usageStats: UsageStatsRecording? = nil,
     readiness: DictationReadinessChecking = SystemDictationReadiness(),
     cuePlayer: SoundCuePlaying = SoundCuePlayer(),
     runtimeDiagnostics: RuntimeDiagnosticsRecorder? = nil,
@@ -115,6 +120,7 @@ final class DictationCoordinator: ObservableObject {
       })
     self.notch = notch
     self.benchmark = benchmark
+    self.usageStats = usageStats
     self.readiness = readiness
     self.cuePlayer = cuePlayer
     self.runtimeDiagnostics = runtimeDiagnostics
@@ -273,6 +279,8 @@ final class DictationCoordinator: ObservableObject {
     targetCaptureTask?.cancel()
     targetCaptureTask = nil
     stopTaskID = nil
+    if let session = usageSession { usageStats?.discard(session) }
+    usageSession = nil
     sessionID = nil
     drainTask?.cancel()
     drainTask = nil
@@ -366,6 +374,9 @@ final class DictationCoordinator: ObservableObject {
     notch.present(state: state)
     let id = DictationSessionID()
     sessionID = id
+    usageSession = usageStats?.begin()
+    captureStartedAt = nil
+    recordingSeconds = 0
     bufferedAudio.removeAll(keepingCapacity: true)
     bufferedBytes = 0
     connected = false
@@ -392,6 +403,7 @@ final class DictationCoordinator: ObservableObject {
       audioStarting = false
       audioStopped = false
       if usedPreparation { benchmark.mark(.preparedAudioEngineUsed) }
+      captureStartedAt = .now
       benchmark.mark(.captureStarted)
     } catch {
       guard lifecycleGeneration == generation, sessionID == id, !Task.isCancelled else { return }
@@ -521,6 +533,15 @@ final class DictationCoordinator: ObservableObject {
       let result = await inserter.insert(finalText, into: target)
       guard sessionID == id else { return }
       benchmark.mark(.insertionFinished)
+      switch result {
+      case .pasteSent, .copied:
+        if let session = usageSession {
+          usageStats?.complete(session, words: UsageWordCounter.count(finalText),
+                               recordingSeconds: recordingSeconds, at: Date())
+          usageSession = nil
+        }
+      case .failed, .cancelled: break
+      }
       switch result {
       case .pasteSent:
         benchmark.finish(.pasteSent, stage: nil, category: nil, httpStatus: nil)
@@ -665,6 +686,11 @@ final class DictationCoordinator: ObservableObject {
   private func stopAudioIfNeeded(playCue: Bool) {
     guard !audioStopped || audioStarting else { return }
     audioStopped = true
+    if let started = captureStartedAt {
+      let duration = started.duration(to: .now).components
+      recordingSeconds = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
+      captureStartedAt = nil
+    }
     if audioStarting {
       startTask?.cancel()
       audio.cancelStart()
@@ -731,6 +757,8 @@ final class DictationCoordinator: ObservableObject {
     connected = false
     bufferedAudio.removeAll()
     bufferedBytes = 0
+    if let session = usageSession { usageStats?.discard(session) }
+    usageSession = nil
     sessionID = nil
     activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
