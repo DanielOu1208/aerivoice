@@ -121,6 +121,7 @@ final class TextInsertionService: TextInserting {
   }
 
   func invalidatePendingRestoration() { restoration.invalidate() }
+  func finishPendingRestoration() async { await restoration.finishPendingRestoration() }
 
   func captureTarget() -> Task<TextInsertionTarget?, Never> {
     let changeCount = pasteboard.changeCount

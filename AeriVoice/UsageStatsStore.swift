@@ -8,8 +8,7 @@ actor UsageStatsStore {
         return URL(fileURLWithPath: directory).appending(path: "totals-v1.json")
       }
     #endif
-    return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "AeriVoice/UsageStats/totals-v1.json")
+    return AppStoragePaths.applicationSupport.appending(path: "UsageStats/totals-v1.json")
   }
 
   enum StoreError: Error { case unsupportedOrInvalidData }

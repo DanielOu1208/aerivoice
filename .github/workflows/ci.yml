@@ -36,6 +36,7 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=NO \
             test
 
       - name: Run static analysis
@@ -47,7 +48,13 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=NO \
             analyze
+
+      - name: Validate update feed tooling
+        run: |
+          bash -n scripts/release-local.sh
+          python3 -m unittest discover -s scripts/tests -v
 
       - name: Build Release
         run: |

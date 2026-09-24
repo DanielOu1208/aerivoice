@@ -76,6 +76,8 @@ final class DictationCoordinator: ObservableObject {
   private var stopTaskID: UUID?
   private var drainTaskID: UUID?
   var onSuccessfulSessionCompletion: (() -> Void)?
+  /// Closed before an updater restart; all start paths converge on toggle().
+  var acceptsNewSessions = true
 
   var canCancel: Bool {
     switch phase {
@@ -186,7 +188,7 @@ final class DictationCoordinator: ObservableObject {
   func toggle() {
     switch phase {
     case .idle, .success, .error:
-      guard startTask == nil else { return }
+      guard acceptsNewSessions, startTask == nil else { return }
       inserter.invalidatePendingRestoration()
       let transcriptionConfiguration = preferences.transcriptionConfiguration
       skipsCleanup = preferences.offlineMode
@@ -241,6 +243,20 @@ final class DictationCoordinator: ObservableObject {
     case .starting, .recording: return audioStopped ? nil : lifecycleGeneration
     case .processing, .cleaning, .inserting: return nil
     }
+  }
+
+  func finishForUpdateRestart() async {
+    acceptsNewSessions = false
+    if canCancel {
+      for await phase in $phase.values {
+        switch phase {
+        case .starting, .recording, .processing, .cleaning, .inserting: continue
+        default: break
+        }
+        break
+      }
+    }
+    await inserter.finishPendingRestoration()
   }
 
   func finishHeldDictation(lifecycleGeneration: UUID) {

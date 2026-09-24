@@ -45,6 +45,17 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     }
   }
 
+  var color: Color {
+    switch self {
+    case .general: .gray
+    case .dictation: .blue
+    case .cleanup: .purple
+    case .stats: .green
+    case .providers: .orange
+    case .privacy: .indigo
+    }
+  }
+
   @MainActor static func recommended(for model: AppModel) -> Self {
     if model.preferences.shortcut == nil { return .general }
     if !model.transcriptionReady
@@ -86,7 +97,7 @@ struct SettingsSidebar: View {
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(.white)
           .frame(width: 25, height: 25)
-          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+          .background(destination.color.gradient, in: RoundedRectangle(cornerRadius: 6))
       }
       .padding(.vertical, 2)
       .tag(destination)

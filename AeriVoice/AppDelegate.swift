@@ -47,6 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    if model.updater.restartPending || model.updater.stage == .installing {
+      model.updater.beginRestart()
+      Task { @MainActor in
+        await model.finishForUpdateRestart()
+        sender.reply(toApplicationShouldTerminate: true)
+      }
+      return .terminateLater
+    }
     model.stopTranscriptionPreparation()
     model.coordinator.cancel()
     Task { @MainActor in
@@ -92,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
     let dictationItem = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
     dictationItem.isEnabled = !model.changingOfflineMode
+      && (!model.updater.restartPending || model.coordinator.canCancel)
     let offlineItem = menu.addItem(withTitle: "Offline mode", action: #selector(toggleOfflineMode), keyEquivalent: "")
     offlineItem.state = model.preferences.offlineMode && !model.changingOfflineMode ? .on : .off
     offlineItem.isEnabled = model.canChangeOfflineMode
@@ -102,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
     menu.addItem(.separator())
     menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+    let updateItem = menu.addItem(withTitle: model.updater.menuTitle,
+                                 action: #selector(checkForUpdates), keyEquivalent: "")
+    updateItem.isEnabled = model.updater.canCheck
+    updateItem.toolTip = model.updater.status
     menu.addItem(.separator())
     menu.addItem(
       withTitle: "Quit AeriVoice", action: #selector(quit), keyEquivalent: "q")
@@ -118,7 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     center.delegate = self
     let action = UNNotificationAction(identifier: "OPEN_SETTINGS_ACTION", title: "Open Settings")
     center.setNotificationCategories([
-      UNNotificationCategory(identifier: "OPEN_SETTINGS", actions: [action], intentIdentifiers: [])
+      UNNotificationCategory(identifier: "OPEN_SETTINGS", actions: [action], intentIdentifiers: []),
+      UNNotificationCategory(identifier: UpdateNotifications.category, actions: [
+        UNNotificationAction(identifier: UpdateNotifications.action, title: "Review Update", options: [.foreground])
+      ], intentIdentifiers: [])
     ])
   }
 
@@ -174,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   }
   @objc private func cancel() { model.coordinator.cancel() }
   @objc private func quit() { NSApp.terminate(nil) }
+  @objc private func checkForUpdates() { model.updater.checkForUpdates() }
 
   @objc private func openSettings() {
     if model.preferences.onboardingComplete, !model.readinessComplete {
@@ -222,6 +239,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
     NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
+    model.updater.setSettingsActive(!needsOnboarding)
+  }
+
+  func windowDidBecomeKey(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+    model.updater.setSettingsActive(!settingsShowsOnboarding)
+  }
+
+  func windowDidResignKey(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+    model.updater.setSettingsActive(false)
   }
 
   func windowWillClose(_ notification: Notification) {
@@ -230,6 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     model.settingsWindowWillClose.send()
     if let sheet = window.attachedSheet { window.endSheet(sheet) }
     setSettingsWindowVisible(false)
+    model.updater.setSettingsActive(false)
   }
 
   private func setSettingsWindowVisible(_ isVisible: Bool) {
@@ -287,6 +316,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
   nonisolated func userNotificationCenter(
     _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
   ) async {
+    if response.notification.request.identifier == UpdateNotifications.identifier,
+      response.actionIdentifier == UNNotificationDefaultActionIdentifier
+        || response.actionIdentifier == UpdateNotifications.action {
+      await MainActor.run { self.model.updater.openUpdateFromNotification() }
+      return
+    }
     if response.actionIdentifier == "OPEN_SETTINGS_ACTION" {
       await MainActor.run { self.openSettings() }
     }

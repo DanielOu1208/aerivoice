@@ -68,6 +68,19 @@ transcript text and is limited to at most one attempt per minute.
 Provider pricing, retention, abuse monitoring, and privacy terms can change.
 Review the current Soniox, Meta, xAI, OpenRouter, Groq, and Cerebras policies for your accounts.
 
+## App updates
+
+Automatic update checks request the signed feed at
+`https://aerivoice.app/updates/appcast.xml`. You can turn off automatic checks in
+Settings and check manually. Update downloads connect to GitHub Releases and its
+asset delivery hosts after you choose to download. These services receive normal
+connection information such as your IP address and the updater's HTTP user agent.
+Sparkle system profiling is disabled. Checks do not send audio, transcripts,
+dictionary contents, provider credentials, or local usage statistics. Release
+notes are embedded in the signed feed. Installing an update requires your choice;
+automatic download and installation are disabled. Offline mode blocks update
+checks and downloads as well as other AeriVoice network requests.
+
 ## Data stored on the Mac
 
 - Provider API keys are stored in the macOS Keychain under the AeriVoice bundle

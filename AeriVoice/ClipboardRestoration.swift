@@ -76,6 +76,7 @@ final class ClipboardRestoration {
   private(set) var preparedSnapshot: ClipboardSnapshot?
   private var task: Task<Void, Never>?
   private var report: Report?
+  private var terminationWaiters: [CheckedContinuation<Void, Never>] = []
 
   init(
     board: NSPasteboard, timing: Timing = Timing(),
@@ -100,6 +101,21 @@ final class ClipboardRestoration {
     let completion = report
     report = nil
     completion?(.cancelled)
+    let waiters = terminationWaiters
+    terminationWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
+  /// Give an already-dispatched paste its normal verification window before an
+  /// update exits the process. A stalled destination must not block termination.
+  func finishPendingRestoration() async {
+    guard task != nil, let id = generation else { return }
+    let deadline = Task { [weak self, timing] in
+      do { try await Task.sleep(for: timing.timeout) } catch { return }
+      self?.invalidate(ifCurrent: id)
+    }
+    await withCheckedContinuation { terminationWaiters.append($0) }
+    deadline.cancel()
   }
 
   func invalidate(ifCurrent id: UUID) {

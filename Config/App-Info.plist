@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>SUFeedURL</key><string>$(AERIVOICE_UPDATE_FEED_URL)</string>
+  <key>SUPublicEDKey</key><string>$(AERIVOICE_UPDATE_PUBLIC_KEY)</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>SUAutomaticallyUpdate</key><false/>
+  <key>SUAllowsAutomaticUpdates</key><false/>
+  <key>SUEnableSystemProfiling</key><false/>
+  <key>SUEnableJavaScript</key><false/>
+  <key>SURequireSignedFeed</key><true/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>AeriVoiceReleaseVersion</key><string>$(AERIVOICE_RELEASE_VERSION)</string>
+  <key>AeriVoiceSourceRevision</key><string>$(AERIVOICE_SOURCE_REVISION)</string>
+</dict>
+</plist>

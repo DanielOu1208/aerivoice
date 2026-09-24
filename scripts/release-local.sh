@@ -48,6 +48,36 @@ if ! security find-identity -v -p codesigning | grep -Fq "\"$signing_identity\""
   exit 1
 fi
 
+sparkle_bin="${AERIVOICE_SPARKLE_BIN:-}"
+sparkle_account="${AERIVOICE_SPARKLE_ACCOUNT:-com.danielou.AeriVoice.sparkle}"
+release_notes="${AERIVOICE_RELEASE_NOTES:-}"
+previous_appcast="${AERIVOICE_PREVIOUS_APPCAST:-}"
+initial_feed="${AERIVOICE_INITIAL_FEED:-0}"
+if [[ ! -x "$sparkle_bin/generate_appcast" || ! -x "$sparkle_bin/sign_update" || ! -x "$sparkle_bin/generate_keys" ]]; then
+  echo "AERIVOICE_SPARKLE_BIN must point to the pinned Sparkle 2.10.0 bin directory." >&2
+  exit 64
+fi
+if [[ ! -s "$release_notes" || "$release_notes" != *.txt ]]; then
+  echo "AERIVOICE_RELEASE_NOTES must point to nonempty plain-text .txt notes." >&2
+  exit 64
+fi
+history_args=()
+if [[ -n "$previous_appcast" && "$initial_feed" == 0 && -f "$previous_appcast" ]]; then
+  history_args=(--previous "$previous_appcast")
+  "$sparkle_bin/sign_update" --account "$sparkle_account" --verify "$previous_appcast"
+elif [[ -z "$previous_appcast" && "$initial_feed" == 1 ]]; then
+  history_args=(--initial-feed)
+else
+  echo "Set AERIVOICE_PREVIOUS_APPCAST, or AERIVOICE_INITIAL_FEED=1 for the first-ever feed only." >&2
+  exit 64
+fi
+# Only the public half is exported; signing tools keep the private key in Keychain.
+update_public_key="$("$sparkle_bin/generate_keys" --account "$sparkle_account" -p)"
+if [[ -z "$update_public_key" ]]; then
+  echo "No Sparkle public key found for the configured Keychain account." >&2
+  exit 1
+fi
+
 marketing_version="${release_version%%-*}"
 tag="v$release_version"
 commit="$(git rev-parse HEAD)"
@@ -72,7 +102,8 @@ cleanup() {
 trap cleanup EXIT
 
 archive_path="$release_tmp/AeriVoice.xcarchive"
-app_path="$archive_path/Products/Applications/AeriVoice.app"
+export_path="$release_tmp/export"
+app_path="$export_path/AeriVoice.app"
 app_zip="$release_tmp/AeriVoice.zip"
 dmg_stage="$release_tmp/dmg"
 release_output="$release_tmp/output"
@@ -92,7 +123,9 @@ xcodebuild \
   ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$marketing_version" \
   CURRENT_PROJECT_VERSION="$build_number" \
-  INFOPLIST_KEY_AeriVoiceSourceRevision="$commit" \
+  AERIVOICE_SOURCE_REVISION="$commit" \
+  AERIVOICE_RELEASE_VERSION="$release_version" \
+  AERIVOICE_UPDATE_PUBLIC_KEY="$update_public_key" \
   DEVELOPMENT_TEAM="$development_team" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$signing_identity" \
@@ -100,8 +133,21 @@ xcodebuild \
   OTHER_CODE_SIGN_FLAGS="--timestamp" \
   archive
 
+# Export re-signs nested Sparkle services with the application's Developer ID.
+export_options="$release_tmp/ExportOptions.plist"
+python3 - "$export_options" "$development_team" "$signing_identity" <<'PYEXPORT'
+import plistlib
+import sys
+with open(sys.argv[1], 'wb') as output:
+    plistlib.dump({'method': 'developer-id', 'signingStyle': 'manual',
+                  'teamID': sys.argv[2], 'signingCertificate': sys.argv[3],
+                  'stripSwiftSymbols': False}, output)
+PYEXPORT
+xcodebuild -exportArchive -archivePath "$archive_path" \
+  -exportPath "$export_path" -exportOptionsPlist "$export_options"
+
 if [[ ! -d "$app_path" ]]; then
-  echo "Archive did not contain AeriVoice.app." >&2
+  echo "Export did not contain AeriVoice.app." >&2
   exit 1
 fi
 
@@ -120,26 +166,26 @@ fi
 
 signature_details="$(codesign -dvvv "$app_path" 2>&1)"
 if ! grep -Fqx "Authority=$signing_identity" <<< "$signature_details"; then
-  echo "The archived app is not signed by the requested Developer ID identity." >&2
+  echo "The exported app is not signed by the requested Developer ID identity." >&2
   exit 1
 fi
 if ! grep -Fqx "TeamIdentifier=$development_team" <<< "$signature_details"; then
-  echo "The archived app does not use the requested development team." >&2
+  echo "The exported app does not use the requested development team." >&2
   exit 1
 fi
 if ! grep -Eq '^CodeDirectory .*flags=.*\(runtime\)' <<< "$signature_details"; then
-  echo "The archived app does not have the hardened-runtime signature flag." >&2
+  echo "The exported app does not have the hardened-runtime signature flag." >&2
   exit 1
 fi
 
 entitlements_path="$release_tmp/AeriVoice.entitlements.plist"
 codesign -d --entitlements "$entitlements_path" --xml "$app_path" 2>/dev/null
 if [[ "$(plutil -extract 'com\.apple\.security\.device\.audio-input' raw "$entitlements_path" 2>/dev/null || true)" != "true" ]]; then
-  echo "The archived app is missing its audio-input entitlement." >&2
+  echo "The exported app is missing its audio-input entitlement." >&2
   exit 1
 fi
 if [[ "$(plutil -extract 'com\.apple\.security\.get-task-allow' raw "$entitlements_path" 2>/dev/null || true)" == "true" ]]; then
-  echo "The archived app unexpectedly allows debugger attachment." >&2
+  echo "The exported app unexpectedly allows debugger attachment." >&2
   exit 1
 fi
 
@@ -165,6 +211,12 @@ xcrun stapler staple "$dmg_path"
 xcrun stapler validate "$dmg_path"
 codesign --verify --verbose=2 "$dmg_path"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+
+python3 "$script_dir/generate-update-feed.py" \
+  --dmg "$dmg_path" --app "$app_path" --notes "$release_notes" \
+  --version "$release_version" --build "$build_number" \
+  --sparkle-bin "$sparkle_bin" --account "$sparkle_account" \
+  --output "$release_output/appcast.xml" "${history_args[@]}"
 
 if [[ ! -d "$archive_path/dSYMs/AeriVoice.app.dSYM" ]]; then
   echo "Archive did not contain AeriVoice.app.dSYM." >&2

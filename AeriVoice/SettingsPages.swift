@@ -46,6 +46,7 @@ struct GeneralSettingsPage: View {
             get: { preferences.launchAtLogin },
             set: { preferences.setLaunchAtLogin($0) }))
       }
+      UpdateSettingsSection(updater: model.updater)
     }
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)

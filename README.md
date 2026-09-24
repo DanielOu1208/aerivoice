@@ -230,7 +230,11 @@ shasum -a 256 -c AeriVoice-v0.1.0-beta.10-arm64.dmg.sha256
 
 </details>
 
-Updates are manual—check GitHub Releases for new versions.
+AeriVoice checks for signed updates automatically and asks before downloading or
+installing them. Use **Check for Updates…** to check manually; automatic checks
+can be disabled in Settings. Offline mode pauses update checks and downloads.
+The public update track includes beta releases. Versions without the built-in
+updater need one final manual installation from GitHub Releases.
 
 ## Privacy and security
 

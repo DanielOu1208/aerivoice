@@ -8,8 +8,7 @@ actor LatencyBenchmarkStore {
   static let activeFilename = "active-interaction-v1.json"
   static let retentionDays = 365
   static var defaultDirectoryURL: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appending(path: "AeriVoice/Benchmarks", directoryHint: .isDirectory)
+    AppStoragePaths.applicationSupport.appending(path: "Benchmarks", directoryHint: .isDirectory)
   }
 
   let directoryURL: URL

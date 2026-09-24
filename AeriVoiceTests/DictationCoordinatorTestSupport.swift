@@ -399,6 +399,11 @@ extension DictationCoordinatorTests {
   final class FakeInserter: TextInserting, @unchecked Sendable {
     var invalidations = 0
     func invalidatePendingRestoration() { invalidations += 1 }
+    var pendingRestoration: CheckedContinuation<Void, Never>?
+    var suspendRestoration = false
+    func finishPendingRestoration() async {
+      if suspendRestoration { await withCheckedContinuation { pendingRestoration = $0 } }
+    }
     var insertedText: String?
     var suspendInsert = false
     var pendingInsert: CheckedContinuation<Void, Never>?

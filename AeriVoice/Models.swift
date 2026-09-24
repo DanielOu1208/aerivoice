@@ -751,10 +751,12 @@ protocol TextInserting: Sendable {
   func captureTarget() -> Task<TextInsertionTarget?, Never>
   func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult
   func invalidatePendingRestoration()
+  func finishPendingRestoration() async
 }
 
 extension TextInserting {
   func invalidatePendingRestoration() {}
+  func finishPendingRestoration() async {}
 }
 
 enum InsertionResult: Equatable, Sendable {
