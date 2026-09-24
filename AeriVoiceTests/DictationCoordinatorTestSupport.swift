@@ -6,6 +6,7 @@ import XCTest
 extension DictationCoordinatorTests {
   func makeFixture(
     transcriptionProvider: TranscriptionProvider = .soniox,
+    usageStats: UsageStatsRecording? = nil,
     hasSonioxKey: Bool = true, hasMetaKey: Bool = true, hasGroqKey: Bool = true,
     hasCerebrasKey: Bool = true,
     cleanupProvider: CleanupProvider = .openRouter, cleanupError: ProviderHTTPError? = nil,
@@ -52,7 +53,7 @@ extension DictationCoordinatorTests {
     let coordinator = DictationCoordinator(
       preferences: preferences, credentials: credentials, audio: audio,
       transcriber: transcriber, cleaner: cleaner, muter: muter, inserter: inserter,
-      notch: notch, benchmark: benchmark, readiness: readiness ?? FakeReadiness(),
+      notch: notch, benchmark: benchmark, usageStats: usageStats, readiness: readiness ?? FakeReadiness(),
       cuePlayer: cuePlayer, localReadiness: { localReady })
     return CoordinatorFixture(
       preferences: preferences, coordinator: coordinator, audio: audio, transcriber: transcriber,
@@ -398,6 +399,11 @@ extension DictationCoordinatorTests {
   final class FakeInserter: TextInserting, @unchecked Sendable {
     var invalidations = 0
     func invalidatePendingRestoration() { invalidations += 1 }
+    var pendingRestoration: CheckedContinuation<Void, Never>?
+    var suspendRestoration = false
+    func finishPendingRestoration() async {
+      if suspendRestoration { await withCheckedContinuation { pendingRestoration = $0 } }
+    }
     var insertedText: String?
     var suspendInsert = false
     var pendingInsert: CheckedContinuation<Void, Never>?

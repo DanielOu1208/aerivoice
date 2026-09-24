@@ -4,6 +4,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
   case general
   case dictation
   case cleanup
+  case stats
   case providers
   case privacy
 
@@ -14,6 +15,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     case .general: "General"
     case .dictation: "Dictation"
     case .cleanup: "AI Cleanup"
+    case .stats: "Stats"
     case .providers: "Providers"
     case .privacy: "Privacy & Data"
     }
@@ -37,6 +39,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     case .general: "gearshape"
     case .dictation: "waveform"
     case .cleanup: "wand.and.stars"
+    case .stats: "chart.bar"
     case .providers: "key"
     case .privacy: "hand.raised"
     }
@@ -47,6 +50,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
     case .general: .gray
     case .dictation: .blue
     case .cleanup: .purple
+    case .stats: .green
     case .providers: .orange
     case .privacy: .indigo
     }
@@ -138,6 +142,8 @@ struct SettingsDetail: View {
       DictationSettingsPage(model: model, selection: $navigation.selection)
     case .cleanup:
       CleanupSettingsPage(model: model)
+    case .stats:
+      UsageStatsPage(stats: model.usageStats) { navigation.selection = .privacy }
     case .providers:
       ProviderSettingsPage(model: model)
     case .privacy:

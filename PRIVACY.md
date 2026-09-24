@@ -68,6 +68,19 @@ transcript text and is limited to at most one attempt per minute.
 Provider pricing, retention, abuse monitoring, and privacy terms can change.
 Review the current Soniox, Meta, xAI, OpenRouter, Groq, and Cerebras policies for your accounts.
 
+## App updates
+
+Automatic update checks request the signed feed at
+`https://aerivoice.app/updates/appcast.xml`. You can turn off automatic checks in
+Settings and check manually. Update downloads connect to GitHub Releases and its
+asset delivery hosts after you choose to download. These services receive normal
+connection information such as your IP address and the updater's HTTP user agent.
+Sparkle system profiling is disabled. Checks do not send audio, transcripts,
+dictionary contents, provider credentials, or local usage statistics. Release
+notes are embedded in the signed feed. Installing an update requires your choice;
+automatic download and installation are disabled. Offline mode blocks update
+checks and downloads as well as other AeriVoice network requests.
+
 ## Data stored on the Mac
 
 - Provider API keys are stored in the macOS Keychain under the AeriVoice bundle
@@ -88,6 +101,16 @@ Review the current Soniox, Meta, xAI, OpenRouter, Groq, and Cerebras policies fo
   delivery or restoration. Detected secure fields and secure keyboard-input mode copy with a warning
   instead of receiving an automatic Paste. Copies you make after dictation stops
   are preserved; if the clipboard changed, the transcript is not copied over it.
+- Usage stats are enabled by default and stored only on this Mac in
+  `~/Library/Application Support/AeriVoice/UsageStats/totals-v1.json`. They contain
+  daily aggregate final-output word counts, completed dictation counts, and recording
+  durations. Language-aware word counting happens in memory; no audio, transcript,
+  provider history, or destination-app details are saved in stats. Pasted and
+  clipboard-only output count once; cancelled, failed, and empty sessions do not.
+  Collection starts with this version and does not import old diagnostics.
+  **Privacy & Data → Collect usage stats** pauses collection without deleting totals.
+  **Clear Stats…** removes all usage totals, including pending contributions from an
+  active dictation. Daily totals remain until cleared and are never uploaded.
 - Optional performance diagnostics are disabled by default. When enabled, they are stored in
   `~/Library/Application Support/AeriVoice/Benchmarks` with user-only file
   permissions.

@@ -64,8 +64,15 @@ struct TranscriptionModelPicker: View {
 
   @ViewBuilder private func choices(_ choices: [TranscriptionChoice]) -> some View {
     ForEach(choices) { choice in
-      Text(choice.title).tag(choice)
-        .disabled(preferences.offlineMode && choice.localModel != nil && !isInstalled(choice))
+      Group {
+        if let kind = choice.provider.credentialKind {
+          ProviderMenuLabel(title: choice.title, kind: kind)
+        } else {
+          Label(choice.title, systemImage: choice == .apple ? "apple.logo" : "desktopcomputer")
+        }
+      }
+      .tag(choice)
+      .disabled(preferences.offlineMode && choice.localModel != nil && !isInstalled(choice))
     }
   }
 

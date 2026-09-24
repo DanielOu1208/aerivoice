@@ -42,7 +42,7 @@ struct OnboardingProviderSetup: View {
         } else {
           ProviderSelectionRow(
             model: model, kind: preferences.effectiveTranscriptionProvider.credentialKind,
-            allowsRemoval: false, allowsLocalManagement: false
+            allowsRemoval: false, allowsLocalManagement: false, showsProviderIcon: false
           ) {
             TranscriptionModelPicker(model: model)
           }

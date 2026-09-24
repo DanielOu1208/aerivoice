@@ -36,6 +36,7 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=NO \
             test
 
       - name: Run static analysis
@@ -47,7 +48,13 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=NO \
             analyze
+
+      - name: Validate release tooling
+        run: |
+          bash -n scripts/release-local.sh
+          python3 -m unittest discover -s scripts/tests -v
 
       - name: Build Release
         run: |
@@ -58,9 +65,22 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/aerivoice-release-build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
+
+      - name: Validate branded DMG
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aerivoice-dmg-tools"
+          dmg_python="$RUNNER_TEMP/aerivoice-dmg-tools/bin/python"
+          "$dmg_python" -m pip install --require-hashes --only-binary=:all: -r scripts/dmg/requirements.txt
+          "$dmg_python" scripts/build-dmg.py build \
+            --app "$RUNNER_TEMP/aerivoice-release-build/AeriVoice.app" \
+            --output "$RUNNER_TEMP/AeriVoice-preview.dmg"
+          "$dmg_python" scripts/test-dmg-layout.py \
+            --app "$RUNNER_TEMP/aerivoice-release-build/AeriVoice.app" \
+            --dmg "$RUNNER_TEMP/AeriVoice-preview.dmg"
 
       - name: Check local evaluation scenarios and model records
         run: |

@@ -10,8 +10,7 @@ final class OpenRouterCatalogStore: ObservableObject {
 
   static let refreshInterval: TimeInterval = 24 * 60 * 60
   static var defaultCacheURL: URL {
-    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-      .appending(path: "com.danielou.AeriVoice/openrouter-catalog-v1.json")
+    AppStoragePaths.caches.appending(path: "openrouter-catalog-v1.json")
   }
 
   private let cacheURL: URL?

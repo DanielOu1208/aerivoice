@@ -5,6 +5,45 @@ import XCTest
 
 @MainActor
 final class ClipboardRestorationTests: XCTestCase {
+  func testUpdateTerminationDrainWaitsForVerifiedClipboardRestoration() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    let target = try await fixture.capture()
+    _ = await fixture.service.insert(fixture.dictation, into: target)
+    await fixture.service.finishPendingRestoration()
+    XCTAssertEqual(fixture.outcomes, [.restored])
+    XCTAssertEqual(fixture.board.string(forType: .string), "previous clipboard")
+  }
+
+  func testUpdateTerminationDrainDoesNotOverwriteNewUserCopy() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    let target = try await fixture.capture()
+    _ = await fixture.service.insert(fixture.dictation, into: target)
+    fixture.board.clearContents()
+    fixture.board.setString("new user copy", forType: .string)
+    await fixture.service.finishPendingRestoration()
+    XCTAssertEqual(fixture.outcomes, [.superseded])
+    XCTAssertEqual(fixture.board.string(forType: .string), "new user copy")
+  }
+
+  func testUpdateTerminationDrainTimesOutBlockedDestinationRead() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    let gate = RestorationReadGate()
+    var target = try await fixture.capture()
+    let source = try XCTUnwrap(target.verification)
+    target.verification = TextVerificationSource(
+      prepare: source.prepare, read: { await gate.read() }, isCurrent: source.isCurrent)
+    _ = await fixture.service.insert(fixture.dictation, into: target)
+    let start = ContinuousClock.now
+    await fixture.service.finishPendingRestoration()
+    XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+    XCTAssertEqual(fixture.outcomes, [.cancelled])
+    XCTAssertEqual(fixture.board.string(forType: .string), fixture.dictation)
+    await gate.release()
+  }
+
   func testReplacementUsesUTF16AndRejectsNoOpInvalidAndOversizedStates() {
     let original = "👋 old suffix"
     let range = (original as NSString).range(of: "old")
@@ -251,6 +290,12 @@ final class ClipboardRestorationTests: XCTestCase {
     }
     XCTAssertTrue(condition(), "Timed out waiting for restoration")
   }
+}
+
+private actor RestorationReadGate {
+  private var pending: CheckedContinuation<TextEditState?, Never>?
+  func read() async -> TextEditState? { await withCheckedContinuation { pending = $0 } }
+  func release() { pending?.resume(returning: nil); pending = nil }
 }
 
 @MainActor

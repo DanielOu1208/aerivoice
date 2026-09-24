@@ -17,9 +17,8 @@ actor LocalModelAssets {
   }
 
   nonisolated static let manifest = LocalModelManifest.nemotron
-  nonisolated static let defaultDirectory = FileManager.default.urls(
-    for: .applicationSupportDirectory, in: .userDomainMask
-  )[0].appendingPathComponent("AeriVoice/LocalModels/nemotron-3.5-latin-560ms", isDirectory: true)
+  nonisolated static let defaultDirectory = AppStoragePaths.applicationSupport
+    .appending(path: "LocalModels/nemotron-3.5-latin-560ms", directoryHint: .isDirectory)
 
   enum AssetError: LocalizedError {
     case busy, invalidManifest, notInstalled, unsafePath, invalidResponse, corruptFile(String), unexpectedFile(String)

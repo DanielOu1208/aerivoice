@@ -26,8 +26,9 @@ struct GeneralSettingsPage: View {
         }
       }
       Section("Recording feedback") {
-        Toggle("Mute audio output while recording", isOn: $preferences.muteOutput)
-        Toggle("Play start, stop, and error cues", isOn: $preferences.soundCues)
+        Toggle("Mute audio while recording", isOn: $preferences.muteOutput)
+        Toggle("Play recording sounds", isOn: $preferences.soundCues)
+          .help("Play a sound when recording starts, stops, or encounters an error.")
       }
       Section("Clipboard") {
         SettingsControlRow(
@@ -45,6 +46,7 @@ struct GeneralSettingsPage: View {
             get: { preferences.launchAtLogin },
             set: { preferences.setLaunchAtLogin($0) }))
       }
+      UpdateSettingsSection(updater: model.updater)
     }
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)
@@ -77,7 +79,10 @@ struct DictationSettingsPage: View {
   var body: some View {
     Form {
       Section("Transcription") {
-        ProviderSelectionRow(model: model, kind: preferences.effectiveTranscriptionProvider.credentialKind) {
+        ProviderSelectionRow(
+          model: model, kind: preferences.effectiveTranscriptionProvider.credentialKind,
+          showsProviderIcon: false
+        ) {
           TranscriptionModelPicker(model: model)
         }
         .id(preferences.effectiveTranscriptionProvider)
@@ -166,12 +171,15 @@ struct CleanupSettingsPage: View {
         }
       }
       Section("Provider") {
-        ProviderSelectionRow(model: model, kind: preferences.cleanupProvider.credentialKind) {
+        ProviderSelectionRow(
+          model: model, kind: preferences.cleanupProvider.credentialKind, showsProviderIcon: false
+        ) {
           Picker("Provider", selection: $preferences.cleanupProvider) {
             ForEach(CleanupProvider.allCases, id: \.self) { provider in
-              Text(
-                provider.isExperimental
-                  ? "\(provider.displayName) — Experimental" : provider.displayName
+              ProviderMenuLabel(
+                title: provider.isExperimental
+                  ? "\(provider.displayName) — Experimental" : provider.displayName,
+                kind: provider.credentialKind
               )
               .tag(provider)
             }
@@ -294,11 +302,14 @@ struct ProviderSettingsPage: View {
 struct PrivacySettingsPage: View {
   @ObservedObject var model: AppModel
   @ObservedObject private var preferences: AppPreferences
+  @ObservedObject private var usageStats: UsageStatsModel
   @State private var confirmsBenchmarkClear = false
+  @State private var confirmsStatsClear = false
 
   init(model: AppModel) {
     self.model = model
     self.preferences = model.preferences
+    self.usageStats = model.usageStats
   }
 
   var body: some View {
@@ -328,6 +339,23 @@ struct PrivacySettingsPage: View {
         }
         Button("Open Privacy & Security…") { openPrivacySettings() }
       }
+      Section {
+        Toggle("Collect usage stats", isOn: Binding(
+          get: { usageStats.enabled },
+          set: { usageStats.setEnabled($0) }
+        ))
+        Button("Clear Stats…", role: .destructive) { confirmsStatsClear = true }
+        if let error = usageStats.storageError {
+          Label(error, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.orange)
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      } header: {
+        Text("Usage stats")
+      } footer: {
+        Text("Only aggregate counts and timings are stored on this Mac. No audio or transcript text is saved.")
+      }
       Section("Performance diagnostics") {
         SettingsControlRow(
           title: "Log performance measurements",
@@ -345,6 +373,12 @@ struct PrivacySettingsPage: View {
     }
     .formStyle(.grouped)
     .contentMargins(.top, -8, for: .scrollContent)
+    .alert("Clear usage stats?", isPresented: $confirmsStatsClear) {
+      Button("Cancel", role: .cancel) {}
+      Button("Clear Stats", role: .destructive) { usageStats.clear() }
+    } message: {
+      Text("This permanently removes usage totals stored on this Mac. Your collection setting stays the same.")
+    }
     .alert("Clear completed performance history?", isPresented: $confirmsBenchmarkClear) {
       Button("Cancel", role: .cancel) {}
       Button("Clear History", role: .destructive) { model.clearCompletedBenchmarkHistory() }

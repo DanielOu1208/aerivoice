@@ -58,11 +58,9 @@ struct SettingsControlRow<Control: View>: View {
   }
 }
 
-struct ProviderIcon: View {
-  let kind: CredentialKind
-
-  private var assetName: String {
-    switch kind {
+extension CredentialKind {
+  var providerIconAssetName: String {
+    switch self {
     case .soniox: "ProviderSoniox"
     case .metaModelAPI: "ProviderMeta"
     case .xai: "ProviderSpaceX"
@@ -71,9 +69,30 @@ struct ProviderIcon: View {
     case .cerebras: "ProviderCerebras"
     }
   }
+}
+
+struct ProviderMenuLabel: View {
+  let title: String
+  let kind: CredentialKind
 
   var body: some View {
-    Image(assetName)
+    Label {
+      Text(title)
+    } icon: {
+      Image(kind.providerIconAssetName)
+        .resizable()
+        .scaledToFit()
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+    }
+  }
+}
+
+struct ProviderIcon: View {
+  let kind: CredentialKind
+
+  var body: some View {
+    Image(kind.providerIconAssetName)
       .resizable()
       .scaledToFit()
       .frame(width: 24, height: 24)
@@ -87,12 +106,20 @@ struct ProviderSelectionRow<Selection: View>: View {
   let kind: CredentialKind?
   var allowsRemoval = true
   var allowsLocalManagement = true
+  var showsProviderIcon = true
   @ViewBuilder var selection: () -> Selection
 
   var body: some View {
     HStack(spacing: 8) {
-      if let kind { ProviderIcon(kind: kind) }
-      else { Image(systemName: "desktopcomputer").frame(width: 24, height: 24).accessibilityHidden(true) }
+      if showsProviderIcon {
+        if let kind {
+          ProviderIcon(kind: kind)
+        } else {
+          Image(systemName: "desktopcomputer")
+            .frame(width: 24, height: 24)
+            .accessibilityHidden(true)
+        }
+      }
       selection()
         .labelsHidden()
         .pickerStyle(.menu)
@@ -122,7 +149,7 @@ struct ProviderAccountRow: View {
   let kind: CredentialKind
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 8) {
       ProviderIcon(kind: kind)
       Text(kind == .xai ? "Grok (xAI)" : kind.label)
       if kind == .groq { ExperimentalBadge() }
@@ -138,7 +165,7 @@ struct LocalProviderAccountRow: View {
   @State private var showsSetup = false
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 8) {
       Image(systemName: "desktopcomputer")
         .frame(width: 24, height: 24).accessibilityHidden(true)
       Text("Local models")

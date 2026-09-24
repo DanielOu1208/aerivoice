@@ -47,6 +47,15 @@ final class ShortcutRecorderNSView: NSView {
   var displayName = "Click and press a shortcut" { didSet { needsDisplay = true } }
   private var capturedModifierFlags: NSEvent.ModifierFlags = []
 
+  override func isAccessibilityElement() -> Bool { true }
+  override func accessibilityRole() -> NSAccessibility.Role? { .button }
+  override func accessibilityLabel() -> String? { "Activation shortcut" }
+  override func accessibilityValue() -> Any? { isCapturing ? "Press shortcut…" : displayName }
+  override func accessibilityHelp() -> String? {
+    "Press to record a keyboard shortcut. Press Escape to cancel."
+  }
+  override func accessibilityPerformPress() -> Bool { window?.makeFirstResponder(self) ?? false }
+
   override var acceptsFirstResponder: Bool { true }
   override var intrinsicContentSize: NSSize { NSSize(width: 250, height: 34) }
 

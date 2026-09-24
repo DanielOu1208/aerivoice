@@ -48,6 +48,8 @@ final class AppModel: ObservableObject {
   @Published var capturesModifierSides = false
   private var capturingShortcut = false
   let preferences: AppPreferences
+  let usageStats: UsageStatsModel
+  let updater = AppUpdater()
   let coordinator: DictationCoordinator
   let credentialManager: CredentialManager
   let benchmarkRecorder: LatencyBenchmarkRecorder
@@ -93,12 +95,15 @@ final class AppModel: ObservableObject {
       recordingGeneration: preferences.diagnosticsGeneration,
       acceptLegacyCheckpoint: preferences.acceptsLegacyDiagnosticCheckpoint,
       writer: writer, runtime: runtime)
+    let usageStats = UsageStatsModel()
+    self.usageStats = usageStats
     self.preferences = preferences
     self.credentialManager = credentialManager
     self.benchmarkRecorder = benchmarkRecorder
     self.runtimeDiagnostics = runtime
     coordinator = DictationCoordinator(
       preferences: preferences, credentials: credentials, benchmark: benchmarkRecorder,
+      usageStats: usageStats,
       runtimeDiagnostics: runtime,
       localReadiness: {
         if preferences.localTranscriptionModel == .apple {
@@ -133,6 +138,16 @@ final class AppModel: ObservableObject {
     localModel.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
     appleSpeech.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
     coordinator.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+    updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+    updater.$restartPending.sink { [weak coordinator] pending in
+      coordinator?.acceptsNewSessions = !pending
+    }.store(in: &cancellables)
+    Publishers.CombineLatest4(preferences.$onboardingComplete, preferences.$offlineMode,
+                              $changingOfflineMode, coordinator.$phase)
+      .sink { [weak updater] setup, offline, changing, phase in
+        updater?.updateContext(setupComplete: setup, offline: offline,
+                               changingOffline: changing, dictationIdle: phase == .idle)
+      }.store(in: &cancellables)
     credentialManager.objectWillChange.sink { [weak self] in
       self?.objectWillChange.send()
     }.store(in: &cancellables)
@@ -228,7 +243,11 @@ final class AppModel: ObservableObject {
     for kind in CredentialKind.allCases { credentialManager.cancelValidation(kind) }
     preferences.openRouterCatalog.cancelRefresh()
     Task { @MainActor in
-      await AppNetworkPolicy.shared.setOffline(enabled)
+      if enabled {
+        async let appNetwork: Void = AppNetworkPolicy.shared.setOffline(true)
+        async let updateNetwork: Void = updater.prepareForOffline()
+        _ = await (appNetwork, updateNetwork)
+      } else { await AppNetworkPolicy.shared.setOffline(false) }
       if enabled { await localModel.cancelDownloadAndWait() }
       else {
         // Restore network access before selecting a cloud provider. Keep controls
@@ -242,6 +261,14 @@ final class AppModel: ObservableObject {
         shortcutMonitor.start(definition: shortcut, activationMode: preferences.shortcutActivationMode)
       }
     }
+  }
+
+  func finishForUpdateRestart() async {
+    updater.beginRestart()
+    // Do not cancel the live pipeline, including the destination-app insertion.
+    await coordinator.finishForUpdateRestart()
+    stopTranscriptionPreparation()
+    await usageStats.finishPendingOperationsForTermination()
   }
 
   func beginShortcutCapture() {

@@ -52,6 +52,7 @@ enum EvalError: Error { case invalidScenario }
             "xcrun", "swiftc", "-swift-version", "6", "-parse-as-library",
             "-target", f"{platform.machine()}-apple-macos26.0",
             str(REPO / "AeriVoice/AppNetworkPolicy.swift"),
+            str(REPO / "AeriVoice/AppStoragePaths.swift"),
             str(REPO / "AeriVoice/LocalModelManifest.swift"),
             str(REPO / "AeriVoice/LocalModelAssets.swift"),
             str(REPO / "AeriVoiceEvalHarness/EvalLocalModel.swift"),

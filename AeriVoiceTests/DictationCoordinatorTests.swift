@@ -5,6 +5,53 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorTests: XCTestCase {
+  func testUpdateRestartGateBlocksEveryDictationStartEntryPoint() async {
+    let fixture = makeFixture()
+    fixture.coordinator.acceptsNewSessions = false
+    fixture.coordinator.toggle()
+    XCTAssertNil(fixture.coordinator.shortcutPressed())
+    XCTAssertNil(fixture.coordinator.holdShortcutPressed())
+    await Task.yield()
+    XCTAssertEqual(fixture.coordinator.phase, .idle)
+    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+  }
+
+  func testUpdateRestartGateStillAllowsActiveDictationToFinishInsertion() async throws {
+    let fixture = makeFixture()
+    let generation = try XCTUnwrap(fixture.coordinator.holdShortcutPressed())
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.acceptsNewSessions = false
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: generation)
+    try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
+    XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
+    fixture.coordinator.toggle()
+    XCTAssertEqual(fixture.coordinator.phase, .success)
+  }
+
+  func testUpdateRestartWaitsForInsertionAndClipboardTail() async throws {
+    let fixture = makeFixture()
+    fixture.inserter.suspendInsert = true
+    fixture.inserter.suspendRestoration = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    var drained = false
+    let restart = Task { await fixture.coordinator.finishForUpdateRestart(); drained = true }
+    await Task.yield()
+    XCTAssertFalse(drained)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.inserter.pendingInsert != nil }
+    XCTAssertFalse(drained)
+    fixture.inserter.pendingInsert?.resume()
+    try await waitUntil { fixture.inserter.pendingRestoration != nil }
+    XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
+    XCTAssertFalse(drained, "Paste dispatch must not end the restoration drain")
+    fixture.inserter.pendingRestoration?.resume()
+    await restart.value
+    XCTAssertTrue(drained)
+  }
+
   func testOldStopCannotFlushNewSessionAfterSuspendedDrainFails() async throws {
     let fixture = makeFixture(transcriptionProvider: .grok)
     fixture.transcriber.waitsForSendResolution = true

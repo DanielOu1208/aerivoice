@@ -12,11 +12,13 @@ extension AppModel {
 
   var canChangeOfflineMode: Bool {
     !coordinator.canCancel && !changingOfflineMode && !appleSpeech.isDownloading
+      && updater.canEnterOffline
       && (preferences.offlineMode || selectedLocalAssetsInstalled)
   }
 
   var offlineModeExplanation: String {
     if changingOfflineMode { return "Switching mode…" }
+    if !updater.canEnterOffline { return "Finish or cancel update preparation to switch modes." }
     if coordinator.canCancel { return "Finish or cancel dictation to switch modes." }
     if appleSpeech.isDownloading { return "Wait for the Apple language download to finish." }
     if preferences.offlineMode { return "Uses local transcription. AI cleanup is off." }
