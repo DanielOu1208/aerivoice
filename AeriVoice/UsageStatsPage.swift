@@ -92,7 +92,7 @@ struct UsageStatsPage: View {
     } else {
       let labeledDates = Set(chartTicks(summary.points))
       VStack(alignment: .leading, spacing: 10) {
-        Text(summary.monthly ? "Words by month" : "Words by day")
+        Text(summary.granularity.caption)
           .font(.caption)
           .foregroundStyle(.secondary)
         Chart(summary.points) { point in
@@ -100,16 +100,14 @@ struct UsageStatsPage: View {
                   y: .value("Words", point.words), width: .ratio(0.65))
             .foregroundStyle(Color.accentColor)
             .cornerRadius(3)
-            .accessibilityLabel(point.date.formatted(
-              Date.FormatStyle(date: .abbreviated, time: .omitted,
-                               calendar: UsageCalendar.calendar, timeZone: .gmt)))
+            .accessibilityLabel(bucketLabel(point.date, granularity: summary.granularity))
             .accessibilityValue("\(point.words.formatted()) words")
         }
         .chartXAxis {
           AxisMarks { value in
             if let key = value.as(String.self), labeledDates.contains(key),
               let date = UsageCalendar.date(for: key) {
-              AxisValueLabel { Text(axisLabel(date, monthly: summary.monthly)) }
+              AxisValueLabel { Text(bucketLabel(date, granularity: summary.granularity, axis: true)) }
             }
           }
         }
@@ -127,12 +125,13 @@ struct UsageStatsPage: View {
   }
 
   private func dateRange(_ summary: UsageSummary) -> String {
-    guard let first = summary.points.first?.date, let last = summary.points.last?.date else {
-      return ""
+    let style = Date.IntervalFormatStyle(calendar: UsageCalendar.calendar, timeZone: .gmt).year()
+    let range = summary.start..<summary.end
+    switch summary.granularity {
+    case .daily: return range.formatted(style.month(.abbreviated).day())
+    case .monthly: return range.formatted(style.month(.abbreviated))
+    case .yearly: return range.formatted(style)
     }
-    let style = Date.IntervalFormatStyle(calendar: UsageCalendar.calendar, timeZone: .gmt)
-      .month(.abbreviated).year()
-    return (first..<last).formatted(summary.monthly ? style : style.day())
   }
 
   // Categorical civil dates keep bars and labels aligned regardless of the Mac's time zone.
@@ -144,13 +143,22 @@ struct UsageStatsPage: View {
     }
   }
 
-  private func axisLabel(_ date: Date, monthly: Bool) -> String {
+  private func bucketLabel(_ date: Date, granularity: UsageBucketGranularity,
+                           axis: Bool = false) -> String {
     var style = Date.FormatStyle()
     style.calendar = UsageCalendar.calendar
     style.timeZone = .gmt
-    if period == .week { return date.formatted(style.weekday(.abbreviated)) }
-    return date.formatted(monthly ? style.month(.abbreviated).year(.twoDigits)
-                          : style.month(.abbreviated).day())
+    switch granularity {
+    case .daily:
+      if axis && period == .week { return date.formatted(style.weekday(.abbreviated)) }
+      if axis { return date.formatted(style.month(.abbreviated).day()) }
+      return date.formatted(style.month(.abbreviated).day().year())
+    case .monthly:
+      return date.formatted(style.month(.abbreviated).year())
+    case .yearly(let years):
+      let firstYear = UsageCalendar.calendar.component(.year, from: date)
+      return years == 1 ? "\(firstYear)" : "\(firstYear)–\(firstYear + years - 1)"
+    }
   }
 
   private func metric(_ title: String, value: String) -> some View {

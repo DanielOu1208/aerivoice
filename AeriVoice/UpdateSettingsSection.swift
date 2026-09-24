@@ -13,7 +13,7 @@ struct UpdateSettingsSection: View {
           Spacer(minLength: 8)
           Text(updater.status)
             .font(.caption).foregroundStyle(.secondary)
-          Button(updater.menuTitle, action: updater.checkForUpdates)
+          Button(updater.menuTitle) { updater.checkForUpdates() }
             .disabled(!updater.canCheck)
             .fixedSize()
         }
@@ -23,10 +23,10 @@ struct UpdateSettingsSection: View {
         }
       }
       Toggle("Automatically check for updates", isOn: Binding(
-        get: { updater.automaticallyChecks }, set: updater.setAutomaticallyChecks))
+        get: { updater.automaticallyChecks }, set: { updater.setAutomaticallyChecks($0) }))
         .disabled(!updater.isEnabled)
       Toggle("Show update alerts", isOn: Binding(
-        get: { updater.showsAlerts }, set: updater.setShowsAlerts))
+        get: { updater.showsAlerts }, set: { updater.setShowsAlerts($0) }))
         .disabled(!updater.isEnabled || !updater.automaticallyChecks)
         .help("Show notifications and update prompts. Turning this off keeps quiet notices in the menu and Settings.")
     }

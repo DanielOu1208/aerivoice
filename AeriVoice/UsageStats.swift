@@ -103,10 +103,26 @@ struct UsageChartPoint: Identifiable {
   var id: Date { date }
 }
 
+enum UsageBucketGranularity: Equatable {
+  case daily
+  case monthly
+  case yearly(yearsPerBucket: Int)
+
+  var caption: String {
+    switch self {
+    case .daily: "Words by day"
+    case .monthly: "Words by month"
+    case .yearly(let years): years == 1 ? "Words by year" : "Words per \(years) years"
+    }
+  }
+}
+
 struct UsageSummary {
   let totals: UsageTotals
   let points: [UsageChartPoint]
-  let monthly: Bool
+  let granularity: UsageBucketGranularity
+  let start: Date
+  let end: Date
 }
 
 enum UsageCalendar {
@@ -135,32 +151,63 @@ enum UsageCalendar {
   static func summary(_ data: UsageStatsData, period: UsagePeriod, now: Date = Date(),
                       timeZone: TimeZone = .current) -> UsageSummary {
     let today = date(for: dayKey(now, timeZone: timeZone))!
+    let records = data.days.compactMap { key, totals -> (day: Date, totals: UsageTotals)? in
+      guard let day = date(for: key) else { return nil }
+      return (day, totals)
+    }
     let start: Date
+    let end: Date
     if let count = period.dayCount {
       start = calendar.date(byAdding: .day, value: 1 - count, to: today)!
+      end = today
     } else {
-      start = data.days.keys.compactMap { date(for: $0) }.min() ?? today
+      // Clock corrections and travel can leave saved civil dates after today.
+      start = min(today, records.map(\.day).min() ?? today)
+      end = max(today, records.map(\.day).max() ?? today)
     }
-    let monthly = period == .all
-      && (calendar.dateComponents([.day], from: start, to: today).day ?? 0) >= 90
+    let granularity: UsageBucketGranularity
+    let component: Calendar.Component
+    let step: Int
+    let firstBucket: Date
+    let pointCount: Int
+    let daySpan = calendar.dateComponents([.day], from: start, to: end).day!
+    let firstMonth = calendar.dateInterval(of: .month, for: start)!.start
+    let lastMonth = calendar.dateInterval(of: .month, for: end)!.start
+    let monthCount = calendar.dateComponents([.month], from: firstMonth, to: lastMonth).month! + 1
+    if daySpan < 90 {
+      granularity = .daily
+      component = .day
+      step = 1
+      firstBucket = start
+      pointCount = daySpan + 1
+    } else if monthCount <= 120 {
+      granularity = .monthly
+      component = .month
+      step = 1
+      firstBucket = firstMonth
+      pointCount = monthCount
+    } else {
+      let yearCount = calendar.component(.year, from: end) - calendar.component(.year, from: start) + 1
+      step = (yearCount + 119) / 120
+      granularity = .yearly(yearsPerBucket: step)
+      component = .year
+      firstBucket = calendar.dateInterval(of: .year, for: start)!.start
+      pointCount = (yearCount + step - 1) / step
+    }
+
     var totals = UsageTotals()
-    var buckets: [Date: Int] = [:]
-    for (key, value) in data.days {
-      guard let day = date(for: key), day >= start,
-        period == .all || day <= today else { continue }
-      guard totals.merge(value) else { continue }
-      let bucket = monthly ? calendar.dateInterval(of: .month, for: day)!.start : day
+    var wordsByBucket = Array(repeating: 0, count: pointCount)
+    for record in records {
+      guard record.day >= start, record.day <= end, totals.merge(record.totals) else { continue }
+      let offset = calendar.dateComponents([component], from: firstBucket, to: record.day)
+        .value(for: component)!
       // Nonnegative bucket counts cannot exceed the checked running total.
-      buckets[bucket, default: 0] += value.words
+      wordsByBucket[offset / step] += record.totals.words
     }
-    var points: [UsageChartPoint] = []
-    var cursor = monthly ? calendar.dateInterval(of: .month, for: start)!.start : start
-    // Include future civil dates in all-time after traveling west or correcting a clock.
-    let end = max(today, buckets.keys.max() ?? today)
-    while cursor <= end {
-      points.append(UsageChartPoint(date: cursor, words: buckets[cursor, default: 0]))
-      cursor = calendar.date(byAdding: monthly ? .month : .day, value: 1, to: cursor)!
+    let points = wordsByBucket.enumerated().map { index, words in
+      UsageChartPoint(date: calendar.date(byAdding: component, value: index * step, to: firstBucket)!,
+                      words: words)
     }
-    return UsageSummary(totals: totals, points: points, monthly: monthly)
+    return UsageSummary(totals: totals, points: points, granularity: granularity, start: start, end: end)
   }
 }

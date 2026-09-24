@@ -120,6 +120,7 @@ def build(args):
     require(not destination.exists(), 'Use a fresh output directory; completed fixtures are never overwritten')
     require(args.build_a > 0 and args.build_b > args.build_a, 'Require 0 < build A < build B')
     require(args.identity.startswith('Developer ID Application: '), 'Developer ID Application identity required')
+    run(args.dmg_python, ROOT / 'scripts/build-dmg.py', 'check')
     tools = Path(args.sparkle_bin).resolve()
     for name in ('generate_appcast', 'sign_update', 'generate_keys'):
         require(os.access(tools / name, os.X_OK), 'Missing Sparkle tool ' + name)
@@ -167,11 +168,9 @@ def build(args):
             run('xcrun', 'stapler', 'staple', app)
             run('xcrun', 'stapler', 'validate', app)
             run('spctl', '--assess', '--type', 'execute', '--verbose=4', app)
-        stage = directory / 'dmg-stage'
-        stage.mkdir()
-        run('ditto', app, stage / app.name)
         dmg = public / f'AeriVoice-QA-{label}-{number}.dmg'
-        run('hdiutil', 'create', '-volname', PRODUCT, '-srcfolder', stage, '-format', 'UDZO', dmg)
+        run(args.dmg_python, ROOT / 'scripts/build-dmg.py', 'build',
+            '--app', app, '--volume-name', PRODUCT, '--output', dmg)
         run('codesign', '--force', '--timestamp', '--sign', args.identity, dmg)
         if not args.no_notary:
             notarize(dmg, args.notary_profile)
@@ -269,6 +268,8 @@ def main():
     builder.add_argument('--notary-profile', default='AeriVoiceNotary')
     builder.add_argument('--sparkle-bin', default=str(SPARKLE))
     builder.add_argument('--packages', default='/tmp/aerivoice-updater-packages')
+    builder.add_argument('--dmg-python', default=os.environ.get('AERIVOICE_DMG_PYTHON', 'python3'),
+                         help='Python from the venv containing the pinned DMG requirements')
     builder.set_defaults(function=build)
     selector = actions.add_parser('select', help='Atomically select which feed the local server returns')
     selector.add_argument('--output', required=True)

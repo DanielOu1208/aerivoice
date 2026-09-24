@@ -49,6 +49,8 @@ if ! security find-identity -v -p codesigning | grep -Fq "\"$signing_identity\""
 fi
 
 sparkle_bin="${AERIVOICE_SPARKLE_BIN:-}"
+dmg_python="${AERIVOICE_DMG_PYTHON:-python3}"
+"$dmg_python" "$script_dir/build-dmg.py" check
 sparkle_account="${AERIVOICE_SPARKLE_ACCOUNT:-com.danielou.AeriVoice.sparkle}"
 release_notes="${AERIVOICE_RELEASE_NOTES:-}"
 previous_appcast="${AERIVOICE_PREVIOUS_APPCAST:-}"
@@ -105,7 +107,6 @@ archive_path="$release_tmp/AeriVoice.xcarchive"
 export_path="$release_tmp/export"
 app_path="$export_path/AeriVoice.app"
 app_zip="$release_tmp/AeriVoice.zip"
-dmg_stage="$release_tmp/dmg"
 release_output="$release_tmp/output"
 dmg_name="AeriVoice-$tag-arm64.dmg"
 dmg_path="$release_output/$dmg_name"
@@ -196,15 +197,8 @@ xcrun stapler staple "$app_path"
 xcrun stapler validate "$app_path"
 spctl --assess --type execute --verbose=4 "$app_path"
 
-mkdir -p "$dmg_stage"
-ditto "$app_path" "$dmg_stage/AeriVoice.app"
-ln -s /Applications "$dmg_stage/Applications"
-hdiutil create \
-  -volname AeriVoice \
-  -srcfolder "$dmg_stage" \
-  -format UDZO \
-  -ov \
-  "$dmg_path"
+"$dmg_python" "$script_dir/build-dmg.py" build \
+  --app "$app_path" --volume-name AeriVoice --output "$dmg_path"
 codesign --force --timestamp --sign "$signing_identity" "$dmg_path"
 xcrun notarytool submit "$dmg_path" --keychain-profile "$notary_profile" --wait
 xcrun stapler staple "$dmg_path"

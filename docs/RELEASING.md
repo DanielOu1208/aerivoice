@@ -26,6 +26,7 @@ notary credentials must never be stored in GitHub.
 Start from a clean release commit that passed CI. The tag version may include a
 prerelease suffix; the app's marketing version remains the numeric prefix.
 Configure the Sparkle environment described below before running this command.
+Set up the pinned DMG packaging environment below as well.
 
 ```sh
 export AERIVOICE_DEVELOPMENT_TEAM='YOUR_TEAM_ID'
@@ -56,6 +57,53 @@ Before publishing:
 Create a draft prerelease first. Changing repository visibility, enabling the
 public security settings, pushing the release tag, and publishing the release
 are separate explicit approval steps.
+
+## Branded installation window
+
+Both release and isolated updater QA images use `scripts/build-dmg.py`. The helper
+packages an existing app with a light Finder background, fixed icon placement,
+and an Applications shortcut. It does not open Finder, install an app, sign, or
+publish anything. Window geometry lives in `scripts/dmg/layout.json`; the native
+Swift renderer beside it generates 1× and 2× artwork, combined into a Retina TIFF.
+The 640×420 size describes the Finder window bounds, including its title bar.
+
+Install the exact packaging dependencies once in a dedicated Python 3.11+ venv:
+
+```sh
+python3 -m venv "$HOME/Library/Caches/AeriVoice/dmg-tools"
+export AERIVOICE_DMG_PYTHON="$HOME/Library/Caches/AeriVoice/dmg-tools/bin/python"
+"$AERIVOICE_DMG_PYTHON" -m pip install --require-hashes --only-binary=:all: \
+  -r scripts/dmg/requirements.txt
+"$AERIVOICE_DMG_PYTHON" scripts/build-dmg.py check
+```
+
+The build never installs dependencies automatically. The release script accepts
+`AERIVOICE_DMG_PYTHON`; the QA fixture builder also accepts `--dmg-python` (use this
+explicit flag with `aqua-run`, which does not inherit arbitrary environment).
+
+Preview the window using any existing local app build and a fresh output path:
+
+```sh
+"$AERIVOICE_DMG_PYTHON" scripts/build-dmg.py build \
+  --app /path/to/AeriVoice.app --output /tmp/AeriVoice-preview.dmg
+"$AERIVOICE_DMG_PYTHON" scripts/test-dmg-layout.py \
+  --app /path/to/AeriVoice.app --dmg /tmp/AeriVoice-preview.dmg
+open /tmp/AeriVoice-preview.dmg
+```
+
+Preview DMGs are unsigned. A release performs layout generation before DMG
+signing, notarization, stapling, checksums, and Sparkle feed generation. Never edit
+an already signed image. Packaging verifies copied app bytes, permissions, and
+symlinks, then verifies a signed app again after all layout changes. Do not set
+Finder flags on the app bundle (including hiding its extension): this adds
+`com.apple.FinderInfo`, which fails strict code-signature validation. Existing
+outputs, including symlinks, are rejected.
+
+Before accepting artwork, inspect a fresh mount in light and dark appearance:
+heading, instruction, both native icons and filenames, arrow, and footer must be
+readable and unclipped. Confirm the Applications shortcut opens `/Applications`.
+Use an isolated QA app for upgrade testing; do not replace the production install
+with a preview. CI builds and inspects an unsigned DMG after its Release build.
 
 ## Signed in-app updates (Sparkle 2.10.0)
 

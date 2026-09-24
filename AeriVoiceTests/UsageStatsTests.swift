@@ -289,10 +289,78 @@ final class UsageStatsTests: XCTestCase {
     data.days["2026-01-01", default: UsageTotals()].add(words: 10, recordingSeconds: 5)
     data.days["2026-01-31", default: UsageTotals()].add(words: 20, recordingSeconds: 5)
     let summary = UsageCalendar.summary(data, period: .all, now: date("2026-09-21"), timeZone: .gmt)
-    XCTAssertTrue(summary.monthly)
+    XCTAssertEqual(summary.granularity, .monthly)
     XCTAssertEqual(summary.points.count, 9)
     XCTAssertEqual(summary.points.first?.words, 30)
     XCTAssertNil(UsageCalendar.date(for: "2026-02-31"))
+  }
+
+  func testAllTimeIncludesFutureUsageAfterClockCorrection() {
+    let data = UsageStatsData(days: [
+      "2026-09-23": UsageTotals(words: 10, dictations: 1),
+      "2030-09-23": UsageTotals(words: 20, dictations: 1)
+    ])
+    let summary = UsageCalendar.summary(data, period: .all, now: date("2026-09-23"), timeZone: .gmt)
+    XCTAssertEqual(summary.granularity, .monthly)
+    XCTAssertEqual(summary.points.count, 49)
+    XCTAssertEqual(summary.totals.words, 30)
+    XCTAssertEqual(summary.points.reduce(0) { $0 + $1.words }, summary.totals.words)
+    XCTAssertEqual(summary.points.first?.words, 10)
+    XCTAssertEqual(summary.points.last?.words, 20)
+    for period in [UsagePeriod.week, .month] {
+      let recent = UsageCalendar.summary(data, period: period, now: date("2026-09-23"), timeZone: .gmt)
+      XCTAssertEqual(recent.granularity, .daily)
+      XCTAssertEqual(recent.points.count, period.dayCount)
+      XCTAssertEqual(recent.totals.words, 10)
+    }
+  }
+
+  func testFutureOnlyUsageUsesFullDisplaySpan() {
+    let data = UsageStatsData(days: ["2030-09-23": UsageTotals(words: 20, dictations: 1)])
+    let summary = UsageCalendar.summary(data, period: .all, now: date("2026-09-23"), timeZone: .gmt)
+    XCTAssertEqual(summary.granularity, .monthly)
+    XCTAssertEqual(summary.points.count, 49)
+    XCTAssertEqual(summary.points.last?.words, 20)
+    XCTAssertEqual(summary.points.reduce(0) { $0 + $1.words }, 20)
+  }
+
+  func testAllTimeGranularityBoundaries() {
+    for (lastDay, expected, count) in [
+      ("2026-03-31", UsageBucketGranularity.daily, 90),
+      ("2026-04-01", .monthly, 4),
+      ("2035-12-31", .monthly, 120),
+      ("2036-01-01", .yearly(yearsPerBucket: 1), 11),
+      ("2145-12-31", .yearly(yearsPerBucket: 1), 120),
+      ("2146-01-01", .yearly(yearsPerBucket: 2), 61)
+    ] {
+      let data = UsageStatsData(days: [
+        "2026-01-01": UsageTotals(words: 10, dictations: 1),
+        lastDay: UsageTotals(words: 20, dictations: 1)
+      ])
+      let summary = UsageCalendar.summary(data, period: .all, now: date("2026-01-01"), timeZone: .gmt)
+      XCTAssertEqual(summary.granularity, expected, lastDay)
+      XCTAssertEqual(summary.points.count, count, lastDay)
+      XCTAssertEqual(summary.points.reduce(0) { $0 + $1.words }, 30, lastDay)
+    }
+  }
+
+  func testExtremeAcceptedDatesKeepAllWordsInBoundedBuckets() {
+    let data = UsageStatsData(days: [
+      "0001-01-01": UsageTotals(words: 10, dictations: 1),
+      "2026-09-23": UsageTotals(words: 20, dictations: 1),
+      "9999-12-31": UsageTotals(words: 30, dictations: 1),
+      "100000-01-01": UsageTotals(words: 40, dictations: 1)
+    ])
+    XCTAssertTrue(data.isValid)
+    let summary = UsageCalendar.summary(data, period: .all, now: date("2026-09-23"), timeZone: .gmt)
+    XCTAssertEqual(summary.granularity, .yearly(yearsPerBucket: 834))
+    XCTAssertEqual(summary.granularity.caption, "Words per 834 years")
+    XCTAssertLessThanOrEqual(summary.points.count, 120)
+    XCTAssertEqual(summary.totals.words, 100)
+    XCTAssertEqual(summary.points.reduce(0) { $0 + $1.words }, summary.totals.words)
+    XCTAssertEqual(summary.points.first?.words, 10)
+    XCTAssertEqual(summary.points.last?.words, 40)
+    XCTAssertEqual(Set(summary.points.map(\.date)).count, summary.points.count)
   }
 
   private func date(_ day: String) -> Date {
