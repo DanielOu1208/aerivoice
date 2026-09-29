@@ -288,6 +288,37 @@ final class GroqCleanupClientTests: XCTestCase {
     XCTAssertEqual(result.text, output)
   }
 
+  func testCompletionStatusAndRefusalAreCheckedEvenWithValidJSON() async throws {
+    let cases: [(String?, String?, Bool)] = [
+      (nil, nil, true), ("stop", nil, true), ("length", nil, false),
+      ("content_filter", nil, false), ("stop", "Cannot comply", false),
+    ]
+    for (finishReason, refusal, accepted) in cases {
+      GroqURLProtocolStub.handler = { request in
+        var message: [String: Any] = ["content": #"{"text":"Cleaned."}"#]
+        message["refusal"] = refusal
+        var choice: [String: Any] = ["message": message]
+        choice["finish_reason"] = finishReason
+        let data = try JSONSerialization.data(withJSONObject: ["choices": [choice]])
+        return (
+          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+      }
+      do {
+        let result = try await GroqCleanupClient(session: makeSession()).clean(
+          "raw", mode: .faithful,
+          configuration: CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none),
+          apiKey: "test-key")
+        XCTAssertTrue(accepted, "Unexpected acceptance: \(String(describing: finishReason)), \(String(describing: refusal))")
+        XCTAssertEqual(result.text, "Cleaned.")
+      } catch {
+        XCTAssertFalse(accepted, "Unexpected rejection: \(error)")
+        let providerError = try XCTUnwrap(error as? ProviderHTTPError)
+        XCTAssertEqual(providerError.statusCode, 200)
+        XCTAssertEqual(providerError.cleanupMetrics?.selectedProvider, "Groq")
+      }
+    }
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [GroqURLProtocolStub.self]

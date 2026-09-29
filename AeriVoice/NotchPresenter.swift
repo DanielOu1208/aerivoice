@@ -7,16 +7,7 @@ final class NotchViewModel: ObservableObject {
   @Published var state = NotchState(phase: .idle)
   @Published var reservedTopHeight: CGFloat = 0
   @Published var contentBandHeight = NotchGeometry.externalFallbackHeight
-  @Published var contentVisible = false
-}
-
-private struct PanelFrameAnimation {
-  let plan: NotchTransitionPlan
-  let generation: Int
-  let startFrame: CGRect
-  let targetFrame: CGRect
-  let screenFrame: CGRect
-  let startTime: TimeInterval
+  @Published var isPresented = false
 }
 
 @MainActor
@@ -32,13 +23,7 @@ enum NotchPanelPinning {
 
   static func keepOrderedWhileHidden(_ panel: NSPanel) {
     panel.alphaValue = 0
-    panel.orderFrontRegardless()
-  }
-
-  static func openingFrame(
-    panelAlpha: CGFloat, currentFrame: CGRect, collapsedFrame: CGRect
-  ) -> CGRect {
-    panelAlpha == 0 ? collapsedFrame : currentFrame
+    if !panel.isVisible { panel.orderFrontRegardless() }
   }
 }
 
@@ -47,27 +32,32 @@ final class NotchPresenter: NSObject, NotchPresenting {
   private let model: NotchViewModel
   private let panel: NSPanel
   private var hideTask: Task<Void, Never>?
-  private var pendingTransitionCompletionTask: Task<Void, Never>?
   private var panelDisplayLink: CADisplayLink?
-  private var panelFrameAnimation: PanelFrameAnimation?
+  private var motion: NotchMotion?
+  private var visibleSample = NotchMotionSample(size: .zero, contentOpacity: 0)
+  private let renderingView: NotchRenderingView
   private var activeGeometry: NotchGeometry?
   private var presentationGeneration = 0
   private var transitionGeneration = 0
   private var targetVisible = false
+  #if DEBUG
+    private var benchmark: NotchBenchmarkMetrics?
+  #endif
 
   override init() {
     let model = NotchViewModel()
     self.model = model
+    let hostingView = NSHostingView(rootView: NotchContentView(model: model))
+    hostingView.sizingOptions = []
+    hostingView.safeAreaRegions = []
+    renderingView = NotchRenderingView(content: hostingView)
     panel = NSPanel(
       contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered,
       defer: false)
     super.init()
     configurePanel()
 
-    let hostingView = NSHostingView(rootView: NotchContentView(model: model))
-    hostingView.sizingOptions = []
-    hostingView.safeAreaRegions = []
-    panel.contentView = hostingView
+    panel.contentView = renderingView
     prewarmPanel()
     NotificationCenter.default.addObserver(
       self, selector: #selector(screenParametersChanged(_:)),
@@ -85,10 +75,7 @@ final class NotchPresenter: NSObject, NotchPresenting {
     let wasTargetVisible = targetVisible
     targetVisible = true
 
-    guard !wasTargetVisible else {
-      panel.orderFrontRegardless()
-      return
-    }
+    guard !wasTargetVisible else { return }
     guard let (screen, geometry) = resolveGeometry() else {
       targetVisible = false
       return
@@ -96,16 +83,15 @@ final class NotchPresenter: NSObject, NotchPresenting {
     activeGeometry = geometry
     updateLayout(for: geometry)
 
-    let collapsedFrame = NotchFrameInterpolator.collapsedFrame(
+    let collapsedFrame = NotchPanelGeometry.collapsedFrame(
       for: geometry, screenFrame: screen.frame)
-    let startFrame = NotchPanelPinning.openingFrame(
-      panelAlpha: panel.alphaValue, currentFrame: panel.frame, collapsedFrame: collapsedFrame)
-    if panel.alphaValue == 0 { model.contentVisible = false }
-    panel.setFrame(startFrame, display: false)
+    if panel.alphaValue == 0 {
+      visibleSample = NotchMotionSample(size: collapsedFrame.size, contentOpacity: 0)
+    }
+    model.isPresented = true
     panel.alphaValue = 1
-    panel.orderFrontRegardless()
-    beginTransition(
-      isOpening: true, from: startFrame, to: geometry.frame, screenFrame: screen.frame)
+    if !panel.isVisible { panel.orderFrontRegardless() }
+    beginTransition(isOpening: true, to: geometry.frame.size)
   }
 
   func hide(after delay: Duration) {
@@ -117,6 +103,33 @@ final class NotchPresenter: NSObject, NotchPresenting {
       self.beginHide()
     }
   }
+
+  #if DEBUG
+    /// Candidate-only synthetic rendering exercise. Caller owns writing the returned JSON.
+    /// Shows generic statuses only and never starts dictation, microphone, or a provider.
+    static func runSyntheticBenchmark(cycles: Int = 30) async throws -> Data {
+      let presenter = NotchPresenter()
+      presenter.benchmark = NotchBenchmarkMetrics()
+      defer {
+        presenter.stopTransition()
+        presenter.hideTask?.cancel()
+        presenter.panel.close()
+      }
+      for _ in 0..<max(0, cycles) {
+        presenter.present(state: NotchState(phase: .recording))
+        try await Task.sleep(for: .milliseconds(320))
+        presenter.present(state: NotchState(phase: .processing))
+        try await Task.sleep(for: .milliseconds(40))
+        presenter.beginHide()
+        try await Task.sleep(for: .milliseconds(220))
+      }
+      var metrics = presenter.benchmark ?? NotchBenchmarkMetrics()
+      metrics.cycles = max(0, cycles)
+      metrics.hiddenDisplayLinkStopped = presenter.panelDisplayLink == nil
+      metrics.hiddenPulsePaused = !presenter.model.isPresented
+      return try JSONEncoder().encode(metrics)
+    }
+  #endif
 
   private func configurePanel() {
     panel.level = .statusBar
@@ -131,9 +144,10 @@ final class NotchPresenter: NSObject, NotchPresenting {
   private func prewarmPanel() {
     guard let (screen, geometry) = resolveGeometry() else { return }
     updateLayout(for: geometry)
-    let collapsedFrame = NotchFrameInterpolator.collapsedFrame(
-      for: geometry, screenFrame: screen.frame)
-    panel.setFrame(collapsedFrame, display: false)
+    visibleSample = NotchMotionSample(
+      size: NotchPanelGeometry.collapsedFrame(for: geometry, screenFrame: screen.frame).size,
+      contentOpacity: 0)
+    renderingView.render(visibleSample)
     panel.contentView?.layoutSubtreeIfNeeded()
     pinHiddenPanel()
   }
@@ -141,101 +155,72 @@ final class NotchPresenter: NSObject, NotchPresenting {
   private func beginHide() {
     guard targetVisible else { return }
     targetVisible = false
-    let screen = panel.screen ?? resolveGeometry()?.0
-    guard let screen else {
-      activeGeometry = nil
+    guard let screen = panel.screen ?? resolveGeometry()?.0 else {
+      stopTransition()
       pinHiddenPanel()
       return
     }
     let geometry = activeGeometry ?? NotchGeometry.calculate(for: screen)
-    activeGeometry = geometry
-    let targetFrame = NotchFrameInterpolator.collapsedFrame(
-      for: geometry, screenFrame: screen.frame)
     beginTransition(
-      isOpening: false, from: panel.frame, to: targetFrame, screenFrame: screen.frame)
+      isOpening: false,
+      to: NotchPanelGeometry.collapsedFrame(for: geometry, screenFrame: screen.frame).size)
   }
 
-  private func beginTransition(
-    isOpening: Bool, from startFrame: CGRect, to targetFrame: CGRect, screenFrame: CGRect
-  ) {
-    stopTransition()
+  private func beginTransition(isOpening: Bool, to targetSize: CGSize) {
+    let now = CACurrentMediaTime()
+    // Core Animation continues between callbacks. Sample its common clock before
+    // replacing the old animations, rather than reusing a previous callback's value.
+    stopTransition(at: now)
     transitionGeneration += 1
-    let generation = transitionGeneration
     let plan = NotchTransitionPlan(
       isOpening: isOpening,
       reducesMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-    animateContent(for: plan)
-
-    if plan.reducesMotion {
-      panel.setFrame(targetFrame, display: true)
-      pendingTransitionCompletionTask = Task { @MainActor [weak self] in
-        do {
-          try await Task.sleep(for: .seconds(plan.duration))
-        } catch {
-          return
-        }
-        self?.completeTransition(plan, generation: generation)
-      }
-      return
-    }
-
-    panelFrameAnimation = PanelFrameAnimation(
-      plan: plan, generation: generation, startFrame: startFrame, targetFrame: targetFrame,
-      screenFrame: screenFrame, startTime: CACurrentMediaTime())
+    let nextMotion = NotchMotion(
+      plan: plan, generation: transitionGeneration, start: visibleSample,
+      targetSize: targetSize, startTime: now)
+    motion = nextMotion
+    visibleSample = nextMotion.sample(at: 0)
+    renderingView.animate(nextMotion)
+    #if DEBUG
+      benchmark?.transitionSetupMilliseconds += (CACurrentMediaTime() - now) * 1_000
+    #endif
     let displayLink = panel.displayLink(
       target: self, selector: #selector(advancePanelAnimation(_:)))
     panelDisplayLink = displayLink
     displayLink.add(to: .main, forMode: .common)
   }
 
-  private func animateContent(for plan: NotchTransitionPlan) {
-    if plan.reducesMotion {
-      withAnimation(.easeOut(duration: plan.duration)) {
-        model.contentVisible = plan.isOpening
-      }
-    } else if plan.isOpening {
-      withAnimation(.easeOut(duration: 0.12).delay(plan.duration * 0.25)) {
-        model.contentVisible = true
-      }
-    } else {
-      withAnimation(.easeOut(duration: plan.duration * 0.35)) {
-        model.contentVisible = false
-      }
-    }
-  }
-
   @objc private func advancePanelAnimation(_ displayLink: CADisplayLink) {
-    guard displayLink === panelDisplayLink, let animation = panelFrameAnimation else { return }
-    let elapsedTime = max(displayLink.targetTimestamp - animation.startTime, 0)
-    let frame = NotchFrameInterpolator.frame(
-      from: animation.startFrame, to: animation.targetFrame,
-      progress: animation.plan.progress(at: elapsedTime), screenFrame: animation.screenFrame)
-    panel.setFrame(frame, display: false)
-
-    guard elapsedTime >= animation.plan.duration else { return }
-    panel.setFrame(animation.targetFrame, display: true)
-    stopTransition()
-    completeTransition(animation.plan, generation: animation.generation)
+    guard displayLink === panelDisplayLink, let motion else { return }
+    let now = CACurrentMediaTime()
+    // This callback observes completion and diagnostics only. All intermediate
+    // paths and opacity are interpolated by Core Animation without app commits.
+    #if DEBUG
+      benchmark?.record(timestamp: displayLink.timestamp, renderDuration: 0)
+      defer { benchmark?.renderMilliseconds += (CACurrentMediaTime() - now) * 1_000 }
+    #endif
+    guard now - motion.startTime >= motion.plan.duration else { return }
+    guard motion.canComplete(generation: transitionGeneration, targetVisible: targetVisible)
+    else { return }
+    stopTransition(at: now)
+    if !motion.plan.isOpening { pinHiddenPanel() }
   }
 
-  private func stopTransition() {
+  private func stopTransition(at time: TimeInterval = CACurrentMediaTime()) {
     panelDisplayLink?.invalidate()
     panelDisplayLink = nil
-    panelFrameAnimation = nil
-    pendingTransitionCompletionTask?.cancel()
-    pendingTransitionCompletionTask = nil
-  }
-
-  private func completeTransition(_ plan: NotchTransitionPlan, generation: Int) {
-    guard generation == transitionGeneration, targetVisible == plan.isOpening else { return }
-    if !plan.isOpening {
-      activeGeometry = nil
-      pinHiddenPanel()
+    if let motion {
+      visibleSample = motion.sample(at: max(0, time - motion.startTime))
+      renderingView.stopAnimation(at: visibleSample)
     }
+    motion = nil
+    #if DEBUG
+      benchmark?.lastTimestamp = nil
+    #endif
   }
 
   private func pinHiddenPanel() {
-    model.contentVisible = false
+    model.isPresented = false
     NotchPanelPinning.keepOrderedWhileHidden(panel)
   }
 
@@ -247,6 +232,14 @@ final class NotchPresenter: NSObject, NotchPresenting {
   }
 
   private func updateLayout(for geometry: NotchGeometry) {
+    let frame = NotchMotion.panelFrame(expandedFrame: geometry.frame)
+    if panel.frame != frame {
+      panel.setFrame(frame, display: false)
+      #if DEBUG
+        benchmark?.panelFrameChanges += 1
+      #endif
+    }
+    renderingView.configure(expandedSize: geometry.frame.size)
     let reservedTopHeight = geometry.isExternalFallback ? 0 : geometry.physicalNotchHeight
     let contentBandHeight = geometry.frame.height - reservedTopHeight
     if model.reservedTopHeight != reservedTopHeight {
@@ -268,20 +261,53 @@ final class NotchPresenter: NSObject, NotchPresenting {
       return
     }
     updateLayout(for: geometry)
+    activeGeometry = geometry
+    visibleSample = NotchMotionSample(
+      size: targetVisible
+        ? geometry.frame.size
+        : NotchPanelGeometry.collapsedFrame(
+          for: geometry, screenFrame: screen.frame
+        ).size,
+      contentOpacity: targetVisible ? 1 : 0)
+    renderingView.render(visibleSample)
+    model.isPresented = targetVisible
     if targetVisible {
-      activeGeometry = geometry
-      panel.setFrame(geometry.frame, display: true)
       panel.alphaValue = 1
-      panel.orderFrontRegardless()
-      model.contentVisible = true
+      if !panel.isVisible { panel.orderFrontRegardless() }
     } else {
-      let collapsedFrame = NotchFrameInterpolator.collapsedFrame(
-        for: geometry, screenFrame: screen.frame)
-      panel.setFrame(collapsedFrame, display: false)
       pinHiddenPanel()
     }
   }
 }
+
+#if DEBUG
+  private struct NotchBenchmarkMetrics: Encodable {
+    var cycles = 0
+    var frames = 0
+    var panelFrameChanges = 0
+    var renderMilliseconds = 0.0
+    var transitionSetupMilliseconds = 0.0
+    var maximumFrameIntervalMilliseconds = 0.0
+    var hiddenDisplayLinkStopped = false
+    var hiddenPulsePaused = false
+    var lastTimestamp: TimeInterval?
+
+    enum CodingKeys: String, CodingKey {
+      case cycles, frames, panelFrameChanges, renderMilliseconds, transitionSetupMilliseconds
+      case maximumFrameIntervalMilliseconds, hiddenDisplayLinkStopped, hiddenPulsePaused
+    }
+
+    mutating func record(timestamp: TimeInterval, renderDuration: TimeInterval) {
+      frames += 1
+      renderMilliseconds += renderDuration * 1_000
+      if let previous = lastTimestamp {
+        maximumFrameIntervalMilliseconds = max(
+          maximumFrameIntervalMilliseconds, (timestamp - previous) * 1_000)
+      }
+      lastTimestamp = timestamp
+    }
+  }
+#endif
 
 private enum NotchStyle {
   static let normalTextOpacity = 0.72
@@ -295,22 +321,14 @@ private struct NotchContentView: View {
   @ObservedObject var model: NotchViewModel
 
   var body: some View {
-    let shape = BottomRoundedRectangle(radius: 14)
-    ZStack(alignment: .top) {
-      shape.fill(.black)
-      VStack(spacing: 0) {
-        Color.clear.frame(height: model.reservedTopHeight)
-        contentRow
-          .padding(.horizontal, 16)
-          .frame(maxWidth: .infinity)
-          .frame(height: model.contentBandHeight)
-          .opacity(model.contentVisible ? 1 : 0)
-      }
-      .clipShape(shape)
-      TopSeamGuard()
-      NotchRimOverlay(cornerRadius: 14)
+    VStack(spacing: 0) {
+      Color.clear.frame(height: model.reservedTopHeight)
+      contentRow
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
+        .frame(height: model.contentBandHeight)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
   }
 
   @ViewBuilder private var contentRow: some View {
@@ -322,12 +340,12 @@ private struct NotchContentView: View {
           .foregroundStyle(.orange)
           .lineLimit(1)
       } else if model.state.transcript.displayText.isEmpty {
-        PulsingEllipsisLabel(label: "Listening")
+        PulsingEllipsisLabel(label: "Listening", isPresented: model.isPresented)
       } else {
         LiveTranscriptLine(snapshot: model.state.transcript)
       }
     case .processing, .cleaning, .inserting:
-      PulsingEllipsisLabel(label: "Refining")
+      PulsingEllipsisLabel(label: "Refining", isPresented: model.isPresented)
     case .success:
       if let warning = model.state.warning {
         Text(warning)
@@ -357,12 +375,14 @@ private struct PulsingEllipsisLabel: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   let label: String
+  let isPresented: Bool
 
   private let cycleDuration = 1.8 / 1.75
 
   var body: some View {
     let characters = Array(label + "...")
-    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion || !isPresented)) {
+      context in
       HStack(alignment: .firstTextBaseline, spacing: 0) {
         ForEach(characters.indices, id: \.self) { index in
           Text(String(characters[index]))
@@ -429,28 +449,137 @@ private struct LiveTranscriptLine: View {
   }
 }
 
-private struct TopSeamGuard: View {
-  @Environment(\.displayScale) private var displayScale
+/// Hosts transcript content at its final size; only compositor properties change per frame.
+@MainActor
+private final class NotchRenderingView: NSView {
+  private let content: NSView
+  private let fill = CAShapeLayer()
+  private let clip = CAShapeLayer()
+  private let rim = CAShapeLayer()
 
-  var body: some View {
-    Rectangle()
-      .fill(.black)
-      .frame(height: 1 / max(displayScale, 1))
+  override var isFlipped: Bool { true }
+
+  init(content: NSView) {
+    self.content = content
+    super.init(frame: .zero)
+    wantsLayer = true
+    layer?.addSublayer(fill)
+    addSubview(content)
+    content.wantsLayer = true
+    content.layer?.mask = clip
+    layer?.addSublayer(rim)
+    fill.fillColor = NSColor.black.cgColor
+    rim.fillColor = nil
   }
-}
 
-private struct NotchRimOverlay: View {
-  @Environment(\.displayScale) private var displayScale
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-  let cornerRadius: CGFloat
-
-  private var lineWidth: CGFloat { 2 / max(displayScale, 1) }
-
-  var body: some View {
-    NotchRimShape(cornerRadius: cornerRadius, lineWidth: lineWidth)
-      .stroke(Color(nsColor: .separatorColor), lineWidth: lineWidth)
-      .allowsHitTesting(false)
+  func configure(expandedSize: CGSize) {
+    let contentFrame = CGRect(
+      x: (bounds.width - expandedSize.width) / 2, y: 0,
+      width: expandedSize.width, height: expandedSize.height)
+    if content.frame != contentFrame { content.frame = contentFrame }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    fill.frame = bounds
+    rim.frame = bounds
+    clip.frame = content.bounds
+    let scale = window?.backingScaleFactor ?? 2
+    for shape in [fill, clip, rim] { shape.contentsScale = scale }
+    rim.lineWidth = 2 / scale
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      rim.strokeColor = NSColor.separatorColor.cgColor
+    }
+    CATransaction.commit()
   }
+
+  private static let animationKey = "notchTransition"
+
+  private struct Paths {
+    let fill: CGPath
+    let rim: CGPath
+    let clip: CGPath
+  }
+
+  private func paths(for sample: NotchMotionSample) -> Paths {
+    let rect = CGRect(
+      x: (bounds.width - sample.size.width) / 2, y: 0,
+      width: sample.size.width, height: sample.size.height)
+    let shape = BottomRoundedRectangle(radius: min(14, rect.height))
+    return Paths(
+      fill: shape.path(in: rect).cgPath,
+      rim: NotchRimShape(cornerRadius: 14, lineWidth: rim.lineWidth).path(in: rect).cgPath,
+      // NSHostingView uses flipped coordinates, matching the top-anchored paths.
+      clip: shape.path(in: rect.offsetBy(dx: -content.frame.minX, dy: 0)).cgPath)
+  }
+
+  private func apply(paths: Paths, opacity: CGFloat) {
+    fill.path = paths.fill
+    rim.path = paths.rim
+    clip.path = paths.clip
+    content.layer?.opacity = Float(opacity)
+  }
+
+  func render(_ sample: NotchMotionSample) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    apply(paths: paths(for: sample), opacity: sample.contentOpacity)
+    CATransaction.commit()
+  }
+
+  func stopAnimation(at sample: NotchMotionSample) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    // Replacing the model values and removing animations in the same transaction
+    // prevents an interrupted transition from flashing its old target geometry.
+    apply(paths: paths(for: sample), opacity: sample.contentOpacity)
+    for layer in [fill, rim, clip, content.layer].compactMap({ $0 }) {
+      layer.removeAnimation(forKey: Self.animationKey)
+    }
+    CATransaction.commit()
+  }
+
+  func animate(_ motion: NotchMotion) {
+    let keyframes = motion.keyframes()
+    let paths = keyframes.map { self.paths(for: $0.sample) }
+    guard let finalPaths = paths.last, let finalSample = keyframes.last?.sample else { return }
+    let keyTimes = keyframes.map { NSNumber(value: $0.time / motion.plan.duration) }
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    // The model already has the final values when animations are removed at the
+    // end. Backwards fill holds the initial values until the shared start time.
+    apply(paths: finalPaths, opacity: finalSample.contentOpacity)
+    addAnimation(
+      to: fill, keyPath: "path", values: paths.map(\.fill), keyTimes: keyTimes, motion: motion)
+    addAnimation(
+      to: rim, keyPath: "path", values: paths.map(\.rim), keyTimes: keyTimes, motion: motion)
+    addAnimation(
+      to: clip, keyPath: "path", values: paths.map(\.clip), keyTimes: keyTimes, motion: motion)
+    if let contentLayer = content.layer {
+      addAnimation(
+        to: contentLayer, keyPath: "opacity",
+        values: keyframes.map { NSNumber(value: Double($0.sample.contentOpacity)) },
+        keyTimes: keyTimes, motion: motion)
+    }
+    CATransaction.commit()
+  }
+
+  private func addAnimation(
+    to layer: CALayer, keyPath: String, values: [Any], keyTimes: [NSNumber], motion: NotchMotion
+  ) {
+    let animation = CAKeyframeAnimation(keyPath: keyPath)
+    animation.values = values
+    animation.keyTimes = keyTimes
+    animation.calculationMode = .linear
+    animation.timingFunction = CAMediaTimingFunction(name: .linear)
+    animation.duration = motion.plan.duration
+    animation.beginTime = layer.convertTime(motion.startTime, from: nil)
+    animation.fillMode = .backwards
+    animation.isRemovedOnCompletion = true
+    layer.add(animation, forKey: Self.animationKey)
+  }
+
 }
 
 private struct NotchRimShape: Shape {

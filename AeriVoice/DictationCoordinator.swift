@@ -59,7 +59,7 @@ final class DictationCoordinator: ObservableObject {
   private var skipsCleanup = false
   private var state = NotchState(phase: .idle)
   private var bufferedAudio: [Data] = []
-  private var bufferedBytes = 0
+  private(set) var bufferedBytes = 0
   private var connected = false
   private var connectionTask: Task<Void, Never>?
   private var connectionTaskID: UUID?
@@ -114,6 +114,7 @@ final class DictationCoordinator: ObservableObject {
     self.muter = muter
     self.inserter = inserter ?? TextInsertionService(
       restoreEnabled: { [weak preferences] in preferences?.restoreClipboard == true },
+      restoreDelay: { [weak preferences] in TimeInterval(preferences?.clipboardRestoreDelay ?? 5) },
       makeRestorationReport: { [weak runtimeDiagnostics] in
         let interactionID = runtimeDiagnostics?.currentInteractionID
         return { [weak runtimeDiagnostics] outcome in
@@ -189,7 +190,7 @@ final class DictationCoordinator: ObservableObject {
     switch phase {
     case .idle, .success, .error:
       guard acceptsNewSessions, startTask == nil else { return }
-      inserter.invalidatePendingRestoration()
+      inserter.prepareForNextDictation()
       let transcriptionConfiguration = preferences.transcriptionConfiguration
       skipsCleanup = preferences.offlineMode
       let cleanupConfiguration = preferences.cleanupConfiguration
@@ -304,6 +305,7 @@ final class DictationCoordinator: ObservableObject {
     limitTask?.cancel()
     transcriber.cancel()
     stopAudioIfNeeded(playCue: false)
+    resetAudioBuffer()
     benchmark.finish(
       .cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
     runtimeDiagnostics?.sessionCleanupFinished()
@@ -770,9 +772,7 @@ final class DictationCoordinator: ObservableObject {
     cancelConnection()
     cancelDrain()
     stopAudioIfNeeded(playCue: false)
-    connected = false
-    bufferedAudio.removeAll()
-    bufferedBytes = 0
+    resetAudioBuffer()
     if let session = usageSession { usageStats?.discard(session) }
     usageSession = nil
     sessionID = nil
@@ -787,6 +787,12 @@ final class DictationCoordinator: ObservableObject {
       guard let self, self.lifecycleGeneration == generation, self.sessionID == nil else { return }
       self.phase = .idle
     }
+  }
+
+  private func resetAudioBuffer() {
+    connected = false
+    bufferedAudio.removeAll()
+    bufferedBytes = 0
   }
 
   private func showReadinessError(_ error: Error, category: BenchmarkFailureCategory) {

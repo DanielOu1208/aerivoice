@@ -157,7 +157,10 @@ struct CerebrasCleanupClient: CleaningText {
           requestEncodingMS: requestEncodingMS, networkRequestMS: networkRequestMS,
           responseDecodingMS: responseDecodingMS, networkTiming: networkTiming))
     }
-    guard let rawContent = envelope.choices.first?.message.content else {
+    guard let choice = envelope.choices.first,
+      choice.finishReason == nil || choice.finishReason == "stop",
+      choice.message.refusal == nil,
+      let rawContent = choice.message.content else {
       let responseDecodingMS = Self.elapsedMilliseconds(since: decodingStarted)
       throw ProviderHTTPError(
         statusCode: http.statusCode, message: "Cerebras returned an empty or malformed cleanup.",
@@ -167,9 +170,7 @@ struct CerebrasCleanupClient: CleaningText {
           responseDecodingMS: responseDecodingMS, networkTiming: networkTiming))
     }
 
-    let content = Self.stripThinkingTags(from: rawContent)
-    guard let json = content.data(using: .utf8),
-      let cleaned = try? JSONDecoder().decode(CerebrasCleanedText.self, from: json),
+    guard let cleaned = Self.decodeCleanedText(from: rawContent),
       !cleaned.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
       let responseDecodingMS = Self.elapsedMilliseconds(since: decodingStarted)
@@ -223,17 +224,19 @@ struct CerebrasCleanupClient: CleaningText {
     }
   }
 
-  private static func stripThinkingTags(from text: String) -> String {
-    var result = text
-    while let startRange = result.range(of: "<think>") {
-      if let endRange = result.range(of: "</think>", range: startRange.upperBound..<result.endIndex) {
-        result.removeSubrange(startRange.lowerBound..<endRange.upperBound)
-      } else {
-        result.removeSubrange(startRange.lowerBound..<result.endIndex)
-        break
-      }
+  private static func decodeCleanedText(from content: String) -> CerebrasCleanedText? {
+    let decoder = JSONDecoder()
+    if let cleaned = try? decoder.decode(CerebrasCleanedText.self, from: Data(content.utf8)) {
+      return cleaned
     }
-    return result.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    // Accept one complete leading reasoning envelope; never edit tags within JSON text.
+    let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("<think>"), let end = trimmed.range(of: "</think>") else {
+      return nil
+    }
+    let json = trimmed[end.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+    return try? decoder.decode(CerebrasCleanedText.self, from: Data(json.utf8))
   }
 
   private func metrics(
@@ -314,14 +317,11 @@ enum CerebrasTokenBudget {
   static func maxCompletionTokens(
     for text: String, systemPrompt: String = "", allowsExpansion: Bool = false
   ) throws -> Int {
-    let estimatedTokens = estimatedTokens(for: text)
-    let safetyMargin = max(128, (estimatedTokens + 3) / 4)
-    let completionTokens = min(
-      maximumCompletionTokens,
-      max(minimumCompletionTokens,
-          allowsExpansion ? estimatedTokens * 3 + safetyMargin : estimatedTokens + safetyMargin))
-    let promptTokens = systemPrompt.isEmpty ? 0 : Self.estimatedTokens(for: systemPrompt)
-    guard estimatedTokens + promptTokens + requestOverheadTokens + completionTokens <= totalTokenLimit else {
+    guard let completionTokens = CleanupTokenBudget.completionTokens(
+      for: text, systemPrompt: systemPrompt, allowsExpansion: allowsExpansion,
+      minimum: minimumCompletionTokens, maximum: maximumCompletionTokens,
+      totalLimit: totalTokenLimit, overhead: requestOverheadTokens)
+    else {
       throw AppError.provider(
         "This dictation is too long for Cerebras’s current limit. Use OpenRouter or try a shorter dictation."
       )
@@ -330,17 +330,7 @@ enum CerebrasTokenBudget {
   }
 
   static func estimatedTokens(for text: String) -> Int {
-    var asciiBytes = 0
-    var nonASCIIBytes = 0
-    for byte in text.utf8 {
-      if byte < 0x80 {
-        asciiBytes += 1
-      } else {
-        nonASCIIBytes += 1
-      }
-    }
-
-    return max(1, (asciiBytes + 3) / 4 + (nonASCIIBytes + 1) / 2)
+    CleanupTokenBudget.estimatedTokens(for: text)
   }
 }
 
@@ -407,8 +397,19 @@ private struct CerebrasResponse: Decodable {
     case timeInfo = "time_info"
   }
 
-  struct Choice: Decodable { let message: Message }
-  struct Message: Decodable { let content: String? }
+  struct Choice: Decodable {
+    let message: Message
+    let finishReason: String?
+
+    enum CodingKeys: String, CodingKey {
+      case message
+      case finishReason = "finish_reason"
+    }
+  }
+  struct Message: Decodable {
+    let content: String?
+    let refusal: String?
+  }
 }
 
 private struct CerebrasResponseMetadata: Decodable {

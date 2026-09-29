@@ -472,6 +472,86 @@ final class CerebrasCleanupClientTests: XCTestCase {
     XCTAssertEqual(result.text, output)
   }
 
+  func testCompletionStatusAndRefusalAreCheckedEvenWithValidJSON() async throws {
+    let cases: [(String?, String?, Bool)] = [
+      (nil, nil, true), ("stop", nil, true), ("length", nil, false),
+      ("content_filter", nil, false), ("stop", "Cannot comply", false),
+    ]
+    for (finishReason, refusal, accepted) in cases {
+      CerebrasURLProtocolStub.handler = { request in
+        var message: [String: Any] = ["content": #"{"text":"Cleaned."}"#]
+        message["refusal"] = refusal
+        var choice: [String: Any] = ["message": message]
+        choice["finish_reason"] = finishReason
+        let data = try JSONSerialization.data(withJSONObject: ["choices": [choice]])
+        return (
+          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+      }
+      do {
+        let result = try await CerebrasCleanupClient(session: makeSession()).clean(
+          "raw", mode: .faithful,
+          configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+          apiKey: "test-key")
+        XCTAssertTrue(accepted, "Unexpected acceptance: \(String(describing: finishReason)), \(String(describing: refusal))")
+        XCTAssertEqual(result.text, "Cleaned.")
+      } catch {
+        XCTAssertFalse(accepted, "Unexpected rejection: \(error)")
+        let providerError = try XCTUnwrap(error as? ProviderHTTPError)
+        XCTAssertEqual(providerError.statusCode, 200)
+        XCTAssertEqual(providerError.cleanupMetrics?.selectedProvider, "Cerebras")
+      }
+    }
+  }
+
+  func testLiteralThinkingTagsSurviveJSONDecodingAndLeadingEnvelopeRemoval() async throws {
+    let outputs = [
+      "Keep <think>literal</think> tags.", "Keep <think>unmatched.",
+      "Keep </think>unmatched.", "<think>one</think> and <think>two</think>",
+    ]
+    for output in outputs {
+      for prefix in ["", "  \n<think>Reasoning</think>\n"] {
+        CerebrasURLProtocolStub.handler = { request in
+          let content = try JSONSerialization.data(withJSONObject: ["text": output])
+          let response = try JSONSerialization.data(withJSONObject: [
+            "choices": [["message": ["content": prefix + String(decoding: content, as: UTF8.self)]]]
+          ])
+          return (
+            HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, response)
+        }
+        let result = try await CerebrasCleanupClient(session: makeSession()).clean(
+          "raw", mode: .faithful,
+          configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+          apiKey: "test-key")
+        XCTAssertEqual(result.text, output)
+      }
+    }
+  }
+
+  func testMalformedReasoningEnvelopesAreRejected() async throws {
+    for content in [
+      #"<think>Unclosed {"text":"Cleaned."}"#,
+      #"prefix <think>Reasoning</think>{"text":"Cleaned."}"#,
+      #"<think>One</think><think>Two</think>{"text":"Cleaned."}"#,
+    ] {
+      CerebrasURLProtocolStub.handler = { request in
+        let response = try JSONSerialization.data(withJSONObject: [
+          "choices": [["message": ["content": content]]]
+        ])
+        return (
+          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, response)
+      }
+      do {
+        _ = try await CerebrasCleanupClient(session: makeSession()).clean(
+          "raw", mode: .faithful,
+          configuration: CleanupConfiguration(model: .qwen38_27BCerebras, reasoningEffort: .none),
+          apiKey: "test-key")
+        XCTFail("Expected malformed reasoning envelope to fail")
+      } catch {
+        XCTAssertNotNil(error as? ProviderHTTPError)
+      }
+    }
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [CerebrasURLProtocolStub.self]

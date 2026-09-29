@@ -5,6 +5,20 @@ import XCTest
 
 @MainActor
 final class DictationCoordinatorTests: XCTestCase {
+  func testCancellationReleasesQueuedAudioWhileSendIsSuspended() async throws {
+    let fixture = makeFixture(audioFrameCount: 8)
+    fixture.transcriber.waitsForSendResolution = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.transcriber.hasPendingSend && fixture.coordinator.bufferedBytes > 0 }
+    fixture.coordinator.cancel()
+    XCTAssertEqual(fixture.coordinator.bufferedBytes, 0)
+    let framesBeforeRelease = fixture.transcriber.sentFrames.count
+    fixture.transcriber.resolveSend()
+    for _ in 0..<10 { await Task.yield() }
+    XCTAssertEqual(fixture.transcriber.sentFrames.count, framesBeforeRelease)
+    XCTAssertEqual(fixture.coordinator.bufferedBytes, 0)
+  }
+
   func testUpdateRestartGateBlocksEveryDictationStartEntryPoint() async {
     let fixture = makeFixture()
     fixture.coordinator.acceptsNewSessions = false

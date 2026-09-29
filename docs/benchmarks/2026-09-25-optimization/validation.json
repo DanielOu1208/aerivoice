@@ -1,0 +1,41 @@
+{
+  "base": "9f098613ebe12be70fecbedeb5a391f37bb2a743",
+  "branch": "feat/optimization-release",
+  "sourceSHA256": {
+    "AeriVoice/CerebrasCleanupClient.swift": "43e48efb7c479b6161e2364c3b8136b26dfda85955b3236c918e0ed6f2e4407b",
+    "AeriVoice/CleanupTokenBudget.swift": "c9ce2da3ab367d42b5f3c5bf2e8be6c5dc4bd74209485f118e562e739666e502",
+    "AeriVoice/ClipboardReadReceipt.swift": "3ad6dab7dd3b0410105a68105c24115eee187e20f369f939923247008ad00087",
+    "AeriVoice/ClipboardRestoration.swift": "514752fade073c9f7766f39ff116b33e5e6c937757cc4b03898232adc6024fea",
+    "AeriVoice/DictationCoordinator.swift": "12af81d6465bced1adaef3d4213d51ff5d3c743dbe63cb9f34c355b45147d49a",
+    "AeriVoice/GroqCleanupClient.swift": "8e9ad6ba7403ae815caf5aa300d5d75968d9205af381029a11e2a9d10c005237",
+    "AeriVoice/Models.swift": "c83a3dbbb45495a96869127a62c43d6b48a310acc0f03ad368ff216296def0c8",
+    "AeriVoice/NotchPresenter.swift": "3f44c1fb493ea01915d33f10bb3285196e4a6d5fc6b496d30fc10e0ea19d053a",
+    "AeriVoice/NotchTransition.swift": "7c047ad195e33a7c5d09791bbf7e632150f88490afbb83d7e52df3d700e2ec21",
+    "AeriVoice/OnboardingView.swift": "cf2ad799fc62fa082ab0224150e145a4e8ccfce85ceaba6d543c8ce1f43de258",
+    "AeriVoice/OptimizationQA.swift": "e309514bd67d943b202ee225422ee1e479f2fd9b3d4b206161d7138292058e7b",
+    "AeriVoice/SonioxRealtimeClient.swift": "7747fba232899ae035e928dd2b0a6229bb895983317d6babf699e80ed8117054",
+    "AeriVoice/TextInsertionService.swift": "7a888f6bbb441045088cb0db86b3983c8a75b0d13093ebd38bddfcf55ac4455e",
+    "AeriVoice/main.swift": "fdf90f31190d72252b3b79aa9c2dc838d0cc2ddde87922ff060107af9261d727",
+    "AeriVoiceTests/CerebrasCleanupClientTests.swift": "873a613b0e332cd4b1a920d60594cdc580ba74a993f7e55d7d6a67acb1e3aa46",
+    "AeriVoiceTests/DictationCoordinatorTests.swift": "5888d29d077e252fffc57bd320a454dd3b9a232a58aee238719d7b5dd8a04dff",
+    "AeriVoiceTests/GroqCleanupClientTests.swift": "cf19849639ad6eee4c0ae315a99fba20efb5826e96201c6b32954e7e795101af",
+    "AeriVoiceTests/ModelTests.swift": "914fc1bda5d4014bfbc394954653e44358bfe8a07ea3cca530c182f6f52ff28a",
+    "AeriVoiceTests/NotchMotionTests.swift": "0a86743fbadab9b99918ef48c4ecb0f4a7ad775b2130866a48e9395445b7bfb6",
+    "AeriVoiceTests/NotchPanelPinningTests.swift": "a8f4374d9569da97b6cb25ae61e6b4f051c08e84ae56055911f82b7d74513b09",
+    "AeriVoiceTests/ReadAwareClipboardTests.swift": "4025dc819ce32dee485456210fbe8d90542c18f2861e010742548589ee0e62d9"
+  },
+  "testSummary": {
+    "passed": 549,
+    "skipped": 3,
+    "failed": 0
+  },
+  "pythonTestsPassed": 23,
+  "releaseBuild": "passed",
+  "staticAnalysis": "passed",
+  "signedDebugQA": "verified",
+  "nativeAcceptance": "blocked: Computer Use -10005 timeoutReached selecting TextEdit twice",
+  "clipboardPromotion": "blocked: unrelated reader can restore before delayed destination; prototype remains opt-in",
+  "published": false,
+  "independentReview": "completed; revised notch no confirmed blockers; native rendering unverified",
+  "syntheticHitchGate": "passed: 95 baseline to 54 revised candidate; one clean 30-cycle Debug run per arm"
+}

@@ -1,0 +1,12 @@
+{
+  "baseline": {
+    "hitches": 95,
+    "total_ms": 1008.3300079999999,
+    "max_ms": 33.333333
+  },
+  "candidate": {
+    "hitches": 136,
+    "total_ms": 1274.991458,
+    "max_ms": 24.999875
+  }
+}

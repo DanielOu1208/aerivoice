@@ -1,0 +1,16 @@
+{
+  "baseline": {
+    "hitches": 253,
+    "total_ms": 2566.658621,
+    "max_ms": 91.666666,
+    "after_first_second": 253,
+    "after_first_second_ms": 2566.658621
+  },
+  "candidate": {
+    "hitches": 32,
+    "total_ms": 399.999738,
+    "max_ms": 108.333333,
+    "after_first_second": 32,
+    "after_first_second_ms": 399.999738
+  }
+}
