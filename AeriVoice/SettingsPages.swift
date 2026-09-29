@@ -149,6 +149,8 @@ struct DictationSettingsPage: View {
           Spacer()
           Button("Manage…") { selection = .privacy }
         }
+        InputDevicePicker(selection: $preferences.inputDevice)
+          .disabled(model.coordinator.canCancel)
       }
     }
     .formStyle(.grouped)
