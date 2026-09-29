@@ -72,7 +72,8 @@ final class AppModel: ObservableObject {
         && self.credentialManager.status(for: .xai) == .saved
     },
     prepare: { [weak self] in await self?.coordinator.prepareTranscriptionConnection() ?? false },
-    discard: { [weak self] in self?.coordinator.invalidatePreparedConnection() })
+    discard: { [weak self] in self?.coordinator.invalidatePreparedConnection() },
+    refreshInterval: GrokRealtimeClient.preparedLifetime + .seconds(1))
 
   init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
     let preferences = AppPreferences()

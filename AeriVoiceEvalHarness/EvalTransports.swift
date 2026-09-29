@@ -18,6 +18,7 @@ final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport
   }
   func resume() {}
   func invalidate() { cancel(with: .goingAway, reason: nil) }
+  func ping() async throws { if cancelled { throw CancellationError() } }
 
   func send(_ message: URLSessionWebSocketTask.Message) async throws {
     guard !cancelled else { throw CancellationError() }

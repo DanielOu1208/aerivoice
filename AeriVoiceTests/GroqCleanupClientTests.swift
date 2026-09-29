@@ -319,6 +319,26 @@ final class GroqCleanupClientTests: XCTestCase {
     }
   }
 
+  func testWarmUpOpensConnectionOnceAndSkipsAfterRecentRequest() async throws {
+    let lock = NSLock()
+    var urls: [String] = []
+    GroqURLProtocolStub.handler = { request in
+      lock.withLock { urls.append(request.url!.absoluteString) }
+      XCTAssertEqual(request.timeoutInterval, 1)
+      XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        Data()
+      )
+    }
+    let client = GroqCleanupClient(session: makeSession())
+    let configuration = CleanupConfiguration(model: .qwen38_27BGroq, reasoningEffort: .none)
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+    await client.warmUp(configuration: configuration, apiKey: "")
+    XCTAssertEqual(lock.withLock { urls }, ["https://api.groq.com/openai/v1/models"])
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [GroqURLProtocolStub.self]

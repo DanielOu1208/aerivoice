@@ -155,6 +155,20 @@ final class GrokRealtimeSession {
     terminate(.failure(CancellationError()))
   }
 
+  /// Round-trips a WebSocket ping; false when the socket is closed or does not answer in time.
+  func ping(timeout: Duration) async -> Bool {
+    guard let socket = transport, ready, !finishing else { return false }
+    // A dead socket may never answer, so the ping races a timer; the first result wins.
+    return await withCheckedContinuation { continuation in
+      let outcome = PingOutcome(continuation)
+      Task { @MainActor in outcome.resolve((try? await socket.ping()) != nil) }
+      Task { @MainActor in
+        try? await Task.sleep(for: timeout)
+        outcome.resolve(false)
+      }
+    }
+  }
+
   private func receive(_ socket: any GrokWebSocketTransport, generation id: UUID) async {
     do {
       while generation == id && !Task.isCancelled {
@@ -250,6 +264,16 @@ final class GrokRealtimeSession {
     if let error = error as? AppError { return error }
     if let error = error as? GrokTransportError { return error }
     return GrokTransportError(status: nil)
+  }
+}
+
+@MainActor
+private final class PingOutcome {
+  private var continuation: CheckedContinuation<Bool, Never>?
+  init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
+  func resolve(_ alive: Bool) {
+    continuation?.resume(returning: alive)
+    continuation = nil
   }
 }
 

@@ -16,8 +16,11 @@ struct CleanupClientRouter: CleaningText {
   }
 
   func warmUp(configuration: CleanupConfiguration, apiKey: String) async {
-    guard configuration.provider == .cerebras else { return }
-    await cerebras.warmUp(configuration: configuration, apiKey: apiKey)
+    switch configuration.provider {
+    case .openRouter: await openRouter.warmUp(configuration: configuration, apiKey: apiKey)
+    case .groq: await groq.warmUp(configuration: configuration, apiKey: apiKey)
+    case .cerebras: await cerebras.warmUp(configuration: configuration, apiKey: apiKey)
+    }
   }
 
   func clean(

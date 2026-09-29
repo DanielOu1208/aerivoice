@@ -158,6 +158,66 @@ final class GrokRealtimeClientTests: XCTestCase {
     XCTAssertTrue(events.contains("audioDoneSent"))
   }
 
+  func testLongIdlePreparedSocketIsPingedBeforeAdoption() async throws {
+    let socket = GrokTestSocket()
+    let time = GrokTestClock()
+    let client = GrokRealtimeClient(clock: time.clock, makeTransport: { _ in socket })
+    var events: [String] = []
+    client.onConnectionEvent = { events.append($0) }
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: ["AeriVoice"])
+    time.advance(by: .seconds(5))
+    XCTAssertTrue(client.hasPreparedConnection)
+    time.advance(by: .seconds(200))
+    XCTAssertTrue(client.hasPreparedConnection)
+    try await connect(client)
+    XCTAssertEqual(socket.pings, 1)
+    XCTAssertTrue(events.contains("preparationHit"))
+    client.cancel()
+  }
+
+  func testRecentPreparedSocketIsAdoptedWithoutPing() async throws {
+    let socket = GrokTestSocket()
+    let time = GrokTestClock()
+    let client = GrokRealtimeClient(clock: time.clock, makeTransport: { _ in socket })
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: ["AeriVoice"])
+    time.advance(by: .seconds(5))
+    try await connect(client)
+    XCTAssertEqual(socket.pings, 0)
+    client.cancel()
+  }
+
+  func testStalePreparedSocketIsReplacedWithFreshConnection() async throws {
+    let stale = GrokTestSocket()
+    stale.failPing = true
+    let fresh = GrokTestSocket()
+    var sockets = [stale, fresh]
+    let time = GrokTestClock()
+    let client = GrokRealtimeClient(clock: time.clock, makeTransport: { _ in sockets.removeFirst() })
+    var events: [String] = []
+    client.onConnectionEvent = { events.append($0) }
+    client.onError = { _ in XCTFail("A stale standby socket must not surface an error") }
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: ["AeriVoice"])
+    time.advance(by: .seconds(60))
+    try await connect(client)
+    XCTAssertTrue(stale.cancelled)
+    XCTAssertEqual(sockets.count, 0)
+    XCTAssertEqual(Array(events.suffix(2)), ["preparationStale", "preparationMiss"])
+    let final = try await client.finish()
+    XCTAssertEqual(final, "Final text.")
+  }
+
+  func testPreparedConnectionLastsFiveMinutes() async throws {
+    let socket = GrokTestSocket()
+    let time = GrokTestClock()
+    let client = GrokRealtimeClient(clock: time.clock, makeTransport: { _ in socket })
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: [])
+    time.advance(by: .seconds(299))
+    XCTAssertTrue(client.hasPreparedConnection)
+    time.advance(by: .seconds(1))
+    guard await waitForGrokCondition({ socket.cancelled }) else { client.cancel(); return }
+    XCTAssertFalse(client.hasPreparedConnection)
+  }
+
   func testPreparedMismatchClosesOldSocketAndConnectsFresh() async throws {
     let old = GrokTestSocket()
     let next = GrokTestSocket()
@@ -173,7 +233,7 @@ final class GrokRealtimeClientTests: XCTestCase {
   func testRepeatedPreparationDoesNotExtendExpiry() async throws {
     let socket = GrokTestSocket()
     let time = GrokTestClock()
-    let client = GrokRealtimeClient(clock: time.clock, makeTransport: { _ in socket })
+    let client = GrokRealtimeClient(preparedLifetime: .seconds(30), clock: time.clock, makeTransport: { _ in socket })
     var events: [String] = []
     client.onConnectionEvent = { events.append($0) }
     _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: [])
@@ -262,7 +322,7 @@ final class GrokRealtimeClientTests: XCTestCase {
   func testAdoptionCancelsExpiryAndResetsFirstAudioTimeline() async throws {
     let socket = GrokTestSocket()
     let time = GrokTestClock()
-    let client = GrokRealtimeClient(packetPolicy: .captureFrames, clock: time.clock, makeTransport: { _ in socket })
+    let client = GrokRealtimeClient(preparedLifetime: .seconds(30), packetPolicy: .captureFrames, clock: time.clock, makeTransport: { _ in socket })
     socket.onBinary = { time.sendTimes.append(time.current) }
     _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: ["AeriVoice"])
     time.advance(by: .seconds(29))
@@ -290,7 +350,7 @@ final class GrokRealtimeClientTests: XCTestCase {
   func testPreparationTTLStartsAfterHandshakeCompletes() async throws {
     let socket = GrokTestSocket(greeting: false)
     let time = GrokTestClock()
-    let client = GrokRealtimeClient(clock: time.clock, makeTransport: { _ in socket })
+    let client = GrokRealtimeClient(preparedLifetime: .seconds(30), clock: time.clock, makeTransport: { _ in socket })
     let preparation = Task { await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: []) }
     await socket.waitUntilReceiving()
     time.advance(by: .seconds(2))
@@ -597,6 +657,8 @@ private final class GrokTestSocket: GrokWebSocketTransport {
   var binaryFrames: [Data] = []
   var cancelled = false
   var failBinary = false
+  var failPing = false
+  var pings = 0
   var binaryAttempts = 0
   var operations: [String] = []
   var onBinary: (() -> Void)?
@@ -629,6 +691,10 @@ private final class GrokTestSocket: GrokWebSocketTransport {
     if !messages.isEmpty { return messages.removeFirst() }
     if cancelled { throw CancellationError() }
     return try await withCheckedThrowingContinuation { waiter = $0 }
+  }
+  func ping() async throws {
+    pings += 1
+    if failPing { throw GrokTransportError(status: nil) }
   }
   func push(_ text: String) {
     if let waiter {

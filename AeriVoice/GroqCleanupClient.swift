@@ -3,11 +3,19 @@ import Foundation
 struct GroqCleanupClient: CleaningText {
   private let systemPromptOverride: String?
   private let session: URLSession
+  private let warmer = CleanupConnectionWarmer()
 
   init(session: URLSession = .shared, systemPromptOverride: String? = nil) {
     self.session = session
     self.systemPromptOverride = systemPromptOverride
   }
+  func warmUp(configuration: CleanupConfiguration, apiKey: String) async {
+    guard configuration.provider == .groq, !apiKey.isEmpty else { return }
+    var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/models")!)
+    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    await warmer.warm(request, session: session)
+  }
+
 
   func clean(
     _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
@@ -55,6 +63,7 @@ struct GroqCleanupClient: CleaningText {
 
     let preparedRequest = request
     let urlSession = session
+    warmer.recordRequestStarted()
     let (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
       group.addTask { try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession) }
       group.addTask {

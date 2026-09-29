@@ -3,7 +3,7 @@ import Foundation
 struct CerebrasCleanupClient: CleaningText {
   private let systemPromptOverride: String?
   private let session: URLSession
-  private let warmUpState: CerebrasWarmUpState
+  private let warmer: CleanupConnectionWarmer
 
   init(
     session: URLSession = .shared, warmUpInterval: Duration = .seconds(60),
@@ -11,33 +11,14 @@ struct CerebrasCleanupClient: CleaningText {
   ) {
     self.systemPromptOverride = systemPromptOverride
     self.session = session
-    warmUpState = CerebrasWarmUpState(minimumInterval: warmUpInterval)
+    warmer = CleanupConnectionWarmer(minimumInterval: warmUpInterval)
   }
 
   func warmUp(configuration: CleanupConfiguration, apiKey: String) async {
-    guard configuration.provider == .cerebras, !apiKey.isEmpty,
-      warmUpState.beginWarmUpIfEligible()
-    else { return }
-    defer { warmUpState.finishWarmUp() }
-
+    guard configuration.provider == .cerebras, !apiKey.isEmpty else { return }
     var request = URLRequest(url: URL(string: "https://api.cerebras.ai/v1/tcp_warming")!)
-    request.timeoutInterval = 1
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-    let preparedRequest = request
-    let urlSession = session
-    do {
-      try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask { _ = try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession) }
-        group.addTask {
-          try await Task.sleep(for: .seconds(1))
-          throw URLError(.timedOut)
-        }
-        _ = try await group.next()
-        group.cancelAll()
-      }
-    } catch {
-      // Warming is an optional latency optimization and must never block dictation.
-    }
+    await warmer.warm(request, session: session)
   }
 
   func clean(
@@ -88,7 +69,7 @@ struct CerebrasCleanupClient: CleaningText {
     let preparedRequest = request
     let urlSession = session
     let metricsCollector = CleanupURLSessionMetricsCollector()
-    warmUpState.recordRequestStarted()
+    warmer.recordRequestStarted()
     let networkStarted = ContinuousClock.now
     let data: Data
     let response: URLResponse
@@ -272,38 +253,6 @@ struct CerebrasCleanupClient: CleaningText {
     let components = start.duration(to: ContinuousClock.now).components
     return Double(components.seconds) * 1_000
       + Double(components.attoseconds) / 1_000_000_000_000_000
-  }
-}
-
-private final class CerebrasWarmUpState: @unchecked Sendable {
-  private let lock = NSLock()
-  private let minimumInterval: Duration
-  private var lastRequestStartedAt: ContinuousClock.Instant?
-  private var warmUpInFlight = false
-
-  init(minimumInterval: Duration) { self.minimumInterval = minimumInterval }
-
-  func beginWarmUpIfEligible() -> Bool {
-    lock.withLock {
-      let now = ContinuousClock.now
-      guard !warmUpInFlight else { return false }
-      if let lastRequestStartedAt,
-        lastRequestStartedAt.duration(to: now) < minimumInterval
-      {
-        return false
-      }
-      lastRequestStartedAt = now
-      warmUpInFlight = true
-      return true
-    }
-  }
-
-  func finishWarmUp() {
-    lock.withLock { warmUpInFlight = false }
-  }
-
-  func recordRequestStarted() {
-    lock.withLock { lastRequestStartedAt = ContinuousClock.now }
   }
 }
 

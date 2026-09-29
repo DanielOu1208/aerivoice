@@ -386,7 +386,7 @@ final class DictationCoordinator: ObservableObject {
 
     benchmark.mark(.readinessChecksFinished)
 
-    if !skipsCleanup, cleanupProvider == .cerebras {
+    if !skipsCleanup {
       let cleaner = self.cleaner
       let work = observeWork("cleanupWarmUp")
       Task {

@@ -489,15 +489,15 @@ final class DictationCoordinatorTests: XCTestCase {
     fixture.coordinator.cancel()
   }
 
-  func testNonCerebrasProviderDoesNotWarmUp() async throws {
-    let fixture = makeFixture(cleanupProvider: .openRouter)
+  func testEveryCleanupProviderWarmsUpAtActivation() async throws {
+    for provider in CleanupProvider.allCases {
+      let fixture = makeFixture(cleanupProvider: provider)
 
-    fixture.coordinator.toggle()
-    try await waitUntil { fixture.coordinator.phase == .recording }
-    await Task.yield()
-
-    XCTAssertFalse(fixture.cleaner.didRequestWarmUp)
-    fixture.coordinator.cancel()
+      fixture.coordinator.toggle()
+      try await waitUntil { fixture.coordinator.phase == .recording }
+      try await waitUntil { fixture.cleaner.didRequestWarmUp }
+      fixture.coordinator.cancel()
+    }
   }
 
   func testMissingSelectedCerebrasCredentialFailsBeforeAudioCapture() async throws {
