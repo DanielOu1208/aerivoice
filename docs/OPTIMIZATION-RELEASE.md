@@ -182,8 +182,10 @@ Follow-up full Debug suite: **557 passed, 3 opt-in tests skipped, 0 failures**.
 
 ### Microphone capture
 
-- Capture continues 250 ms after stop, then the resampler is flushed; the stop cue
-  and output unmute happen only after the microphone closes. The insertion target is
+- Capture continues 50 ms after stop, then the resampler is flushed; the stop cue
+  and output unmute happen only after the microphone closes. (Initially 250 ms;
+  reduced because most speakers finish before release. Tap buffers are ~100 ms and
+  the partly filled one is dropped, so 50 ms mainly recovers speech just before release.) The insertion target is
   still captured at release. Cancel, errors, and the time limit skip the tail.
 - The engine starts at key-down, overlapping the start cue. The capture service
   drops samples recorded before the cue deadline, now 200 ms (the Blow cue's loud
