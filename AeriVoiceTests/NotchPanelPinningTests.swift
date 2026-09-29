@@ -24,23 +24,36 @@ final class NotchPanelPinningTests: XCTestCase {
     XCTAssertTrue(panel.collectionBehavior.contains(.stationary))
   }
 
-  func testOpeningFromPinnedHiddenUsesCollapsedFrame() {
-    let current = CGRect(x: 10, y: 20, width: 300, height: 60)
-    let collapsed = CGRect(x: 50, y: 70, width: 220, height: 38)
-
-    XCTAssertEqual(
-      NotchPanelPinning.openingFrame(
-        panelAlpha: 0, currentFrame: current, collapsedFrame: collapsed),
-      collapsed)
+  func testVisiblePanelIsReraisedOnPhaseChangesButNotTranscriptUpdates() {
+    var recording = NotchState(phase: .recording)
+    var updated = recording
+    updated.transcript = TranscriptSnapshot(confirmed: "hello")
+    XCTAssertFalse(NotchPanelPinning.reordersVisiblePanel(from: recording, to: updated))
+    recording.warning = "Output could not be muted"
+    XCTAssertFalse(NotchPanelPinning.reordersVisiblePanel(from: updated, to: recording))
+    XCTAssertTrue(
+      NotchPanelPinning.reordersVisiblePanel(from: updated, to: NotchState(phase: .processing)))
   }
 
-  func testOpeningDuringHideKeepsCurrentFrame() {
-    let current = CGRect(x: 10, y: 20, width: 300, height: 60)
-    let collapsed = CGRect(x: 50, y: 70, width: 220, height: 38)
+  func testKeepingResidentPanelHiddenDoesNotOrderItAgain() {
+    let panel = OrderingCountPanel(
+      contentRect: CGRect(x: 0, y: 0, width: 220, height: 40),
+      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    defer { panel.close() }
+    NotchPanelPinning.configure(panel)
+    NotchPanelPinning.keepOrderedWhileHidden(panel)
+    let initialCount = panel.orderingCount
+    NotchPanelPinning.keepOrderedWhileHidden(panel)
+    XCTAssertEqual(panel.orderingCount, initialCount)
+    XCTAssertTrue(panel.isVisible)
+  }
+}
 
-    XCTAssertEqual(
-      NotchPanelPinning.openingFrame(
-        panelAlpha: 1, currentFrame: current, collapsedFrame: collapsed),
-      current)
+@MainActor
+private final class OrderingCountPanel: NSPanel {
+  var orderingCount = 0
+  override func orderFrontRegardless() {
+    orderingCount += 1
+    super.orderFrontRegardless()
   }
 }

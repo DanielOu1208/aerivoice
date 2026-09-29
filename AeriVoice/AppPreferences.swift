@@ -53,7 +53,10 @@ final class AppPreferences: ObservableObject {
     static let vocabulary = "vocabulary"
     static let muteOutput = "muteOutput"
     static let soundCues = "soundCues"
+    static let inputDeviceUID = "inputDeviceUID"
+    static let inputDeviceName = "inputDeviceName"
     static let restoreClipboard = "restoreClipboard"
+    static let clipboardRestoreDelay = "clipboardRestoreDelay"
     static let shortcut = "shortcut"
     static let shortcutActivationMode = "shortcutActivationMode"
     static let onboardingComplete = "onboardingComplete"
@@ -125,11 +128,28 @@ final class AppPreferences: ObservableObject {
   }
   @Published var muteOutput: Bool { didSet { defaults.set(muteOutput, forKey: Key.muteOutput) } }
   @Published var soundCues: Bool { didSet { defaults.set(soundCues, forKey: Key.soundCues) } }
+  /// Nil follows the system default input. A disconnected choice also falls back to the default.
+  @Published var inputDevice: AudioInputDevice? {
+    didSet {
+      defaults.set(inputDevice?.uid, forKey: Key.inputDeviceUID)
+      defaults.set(inputDevice?.name, forKey: Key.inputDeviceName)
+    }
+  }
+
+  /// Read by audio capture off the main actor; production preferences use standard defaults.
+  nonisolated static func storedInputDeviceUID(defaults: UserDefaults = .standard) -> String? {
+    defaults.string(forKey: Key.inputDeviceUID)
+  }
   @Published var restoreClipboard: Bool {
     didSet {
       defaults.set(restoreClipboard, forKey: Key.restoreClipboard)
       onClipboardRestorationChange?(restoreClipboard)
     }
+  }
+  /// Zero disables the timed fallback; exact verification remains available.
+  static let clipboardRestoreDelays = [0, 1, 2, 3, 5, 10]
+  @Published var clipboardRestoreDelay: Int {
+    didSet { defaults.set(clipboardRestoreDelay, forKey: Key.clipboardRestoreDelay) }
   }
   @Published var shortcut: ShortcutDefinition? { didSet { persistShortcut() } }
   @Published var shortcutActivationMode: ShortcutActivationMode {
@@ -298,7 +318,12 @@ final class AppPreferences: ObservableObject {
     vocabulary = defaults.string(forKey: Key.vocabulary) ?? ""
     muteOutput = defaults.object(forKey: Key.muteOutput) as? Bool ?? true
     soundCues = defaults.object(forKey: Key.soundCues) as? Bool ?? true
+    inputDevice = defaults.string(forKey: Key.inputDeviceUID).map { uid in
+      AudioInputDevice(uid: uid, name: defaults.string(forKey: Key.inputDeviceName) ?? uid)
+    }
     restoreClipboard = defaults.object(forKey: Key.restoreClipboard) as? Bool ?? true
+    let savedRestoreDelay = defaults.object(forKey: Key.clipboardRestoreDelay) as? Int ?? 5
+    clipboardRestoreDelay = Self.clipboardRestoreDelays.contains(savedRestoreDelay) ? savedRestoreDelay : 5
     shortcutActivationMode =
       ShortcutActivationMode(rawValue: defaults.string(forKey: Key.shortcutActivationMode) ?? "")
       ?? .hybrid

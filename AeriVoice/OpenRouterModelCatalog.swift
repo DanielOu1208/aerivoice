@@ -5,6 +5,13 @@ struct OpenRouterCatalogEntry: Codable, Identifiable, Equatable, Sendable {
   let name: String
   let architecture: Architecture
   var reasoning: OpenRouterReasoning? = nil
+  /// OpenRouter's retirement date (YYYY-MM-DD) for models being removed from the API.
+  var expirationDate: String? = nil
+
+  enum CodingKeys: String, CodingKey {
+    case id, name, architecture, reasoning
+    case expirationDate = "expiration_date"
+  }
 
   struct Architecture: Codable, Equatable, Sendable {
     let inputModalities: [String]
@@ -17,6 +24,14 @@ struct OpenRouterCatalogEntry: Codable, Identifiable, Equatable, Sendable {
   }
 
   var cleanupModel: CleanupModel? { CleanupModel(openRouterID: id) }
+
+  var retirement: Date? {
+    expirationDate.flatMap {
+      try? Date($0, strategy: Date.ISO8601FormatStyle(timeZone: .gmt).year().month().day())
+    }
+  }
+
+  func isRetired(at now: Date = .now) -> Bool { retirement.map { $0 <= now } ?? false }
 
   var isCleanupCompatible: Bool {
     architecture.inputModalities.contains("text")
@@ -52,7 +67,9 @@ struct OpenRouterModelCatalog {
   static func decode(_ data: Data) throws -> [OpenRouterCatalogEntry] {
     let envelope = try JSONDecoder().decode(Envelope.self, from: data)
     var seen = Set<String>()
-    return envelope.data.filter { $0.isCleanupCompatible && seen.insert($0.id).inserted }
+    return envelope.data.filter {
+      $0.isCleanupCompatible && !$0.isRetired() && seen.insert($0.id).inserted
+    }
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
   }
 

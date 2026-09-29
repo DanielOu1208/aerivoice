@@ -57,6 +57,7 @@ struct OnboardingReadiness: Equatable, Sendable {
 }
 
 struct OnboardingView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @ObservedObject var model: AppModel
   @ObservedObject private var preferences: AppPreferences
   let onFinished: () -> Void
@@ -248,7 +249,7 @@ struct OnboardingView: View {
   private func move(by offset: Int) {
     guard let next = OnboardingStep(rawValue: step.rawValue + offset) else { return }
     recoveryMessage = nil
-    withAnimation(.easeInOut(duration: 0.2)) { step = next }
+    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { step = next }
   }
 
   private func finish() {

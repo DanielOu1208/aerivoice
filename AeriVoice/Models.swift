@@ -581,16 +581,20 @@ enum VocabularyNormalizer {
 
 protocol AudioCapturing: AnyObject, Sendable {
   var onAudio: ((Data) -> Void)? { get set }
+  /// Called off the main thread when capture stops itself and cannot resume on another input.
+  var onCaptureInterrupted: (() -> Void)? { get set }
   func prepare() async
   func prepareWithDiagnostics() async -> DiagnosticPreparationResult
   func discardPreparation()
-  /// Returns whether launch-time preparation was reused.
-  func start() async throws -> Bool
+  /// Returns whether earlier preparation was reused. Audio recorded before the deadline is dropped.
+  func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws -> Bool
   func cancelStart()
   func stop()
 }
 
 extension AudioCapturing {
+  func start() async throws -> Bool { try await start(discardingAudioBefore: nil) }
+
   func prepareWithDiagnostics() async -> DiagnosticPreparationResult {
     await prepare()
     return Task.isCancelled ? .cancelled : .unknown
@@ -751,11 +755,13 @@ protocol TextInserting: Sendable {
   func captureTarget() -> Task<TextInsertionTarget?, Never>
   func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult
   func invalidatePendingRestoration()
+  func prepareForNextDictation()
   func finishPendingRestoration() async
 }
 
 extension TextInserting {
   func invalidatePendingRestoration() {}
+  func prepareForNextDictation() { invalidatePendingRestoration() }
   func finishPendingRestoration() async {}
 }
 

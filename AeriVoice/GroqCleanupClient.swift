@@ -3,11 +3,19 @@ import Foundation
 struct GroqCleanupClient: CleaningText {
   private let systemPromptOverride: String?
   private let session: URLSession
+  private let warmer = CleanupConnectionWarmer()
 
   init(session: URLSession = .shared, systemPromptOverride: String? = nil) {
     self.session = session
     self.systemPromptOverride = systemPromptOverride
   }
+  func warmUp(configuration: CleanupConfiguration, apiKey: String) async {
+    guard configuration.provider == .groq, !apiKey.isEmpty else { return }
+    var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/models")!)
+    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    await warmer.warm(request, session: session)
+  }
+
 
   func clean(
     _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
@@ -55,6 +63,7 @@ struct GroqCleanupClient: CleaningText {
 
     let preparedRequest = request
     let urlSession = session
+    warmer.recordRequestStarted()
     let (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
       group.addTask { try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession) }
       group.addTask {
@@ -87,7 +96,10 @@ struct GroqCleanupClient: CleaningText {
         cleanupMetrics: metrics(
           configuration: configuration, response: nil, httpStatus: http.statusCode))
     }
-    guard let content = envelope.choices.first?.message.content,
+    guard let choice = envelope.choices.first,
+      choice.finishReason == nil || choice.finishReason == "stop",
+      choice.message.refusal == nil,
+      let content = choice.message.content,
       let json = content.data(using: .utf8),
       let cleaned = try? JSONDecoder().decode(GroqCleanedText.self, from: json),
       !cleaned.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -161,14 +173,11 @@ enum GroqTokenBudget {
   static func maxCompletionTokens(
     for text: String, systemPrompt: String = "", allowsExpansion: Bool = false
   ) throws -> Int {
-    let estimatedTokens = estimatedTokens(for: text)
-    let safetyMargin = max(128, (estimatedTokens + 3) / 4)
-    let completionTokens = min(
-      maximumCompletionTokens,
-      max(minimumCompletionTokens,
-          allowsExpansion ? estimatedTokens * 3 + safetyMargin : estimatedTokens + safetyMargin))
-    let promptTokens = systemPrompt.isEmpty ? 0 : Self.estimatedTokens(for: systemPrompt)
-    guard estimatedTokens + promptTokens + requestOverheadTokens + completionTokens <= totalTokenLimit else {
+    guard let completionTokens = CleanupTokenBudget.completionTokens(
+      for: text, systemPrompt: systemPrompt, allowsExpansion: allowsExpansion,
+      minimum: minimumCompletionTokens, maximum: maximumCompletionTokens,
+      totalLimit: totalTokenLimit, overhead: requestOverheadTokens)
+    else {
       throw AppError.provider(
         "This dictation is too long for Groq’s current experimental limit. Use OpenRouter or try a shorter dictation."
       )
@@ -177,17 +186,7 @@ enum GroqTokenBudget {
   }
 
   static func estimatedTokens(for text: String) -> Int {
-    var asciiBytes = 0
-    var nonASCIIBytes = 0
-    for byte in text.utf8 {
-      if byte < 0x80 {
-        asciiBytes += 1
-      } else {
-        nonASCIIBytes += 1
-      }
-    }
-
-    return max(1, (asciiBytes + 3) / 4 + (nonASCIIBytes + 1) / 2)
+    CleanupTokenBudget.estimatedTokens(for: text)
   }
 }
 
@@ -249,8 +248,19 @@ private struct GroqResponse: Decodable {
     case serviceTier = "service_tier"
   }
 
-  struct Choice: Decodable { let message: Message }
-  struct Message: Decodable { let content: String? }
+  struct Choice: Decodable {
+    let message: Message
+    let finishReason: String?
+
+    enum CodingKeys: String, CodingKey {
+      case message
+      case finishReason = "finish_reason"
+    }
+  }
+  struct Message: Decodable {
+    let content: String?
+    let refusal: String?
+  }
   struct Usage: Decodable {
     let promptTokens: Int?
     let completionTokens: Int?

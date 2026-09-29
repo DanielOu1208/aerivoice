@@ -290,6 +290,26 @@ final class OpenRouterCleanupClientTests: XCTestCase {
     }
   }
 
+  func testWarmUpOpensConnectionOnceAndSkipsAfterRecentRequest() async throws {
+    let lock = NSLock()
+    var urls: [String] = []
+    URLProtocolStub.handler = { request in
+      lock.withLock { urls.append(request.url!.absoluteString) }
+      XCTAssertEqual(request.timeoutInterval, 1)
+      XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+      return (
+        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+        Data()
+      )
+    }
+    let client = OpenRouterCleanupClient(session: makeSession())
+    let configuration = CleanupConfiguration(model: .gemini35FlashLite, reasoningEffort: .none)
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+    await client.warmUp(configuration: configuration, apiKey: "test-key")
+    await client.warmUp(configuration: configuration, apiKey: "")
+    XCTAssertEqual(lock.withLock { urls }, ["https://openrouter.ai/api/v1/auth/key"])
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [URLProtocolStub.self]

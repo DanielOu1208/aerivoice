@@ -15,7 +15,8 @@ extension DictationCoordinatorTests {
     soundCues: Bool = false, cueDelay: Duration = .zero,
     readiness: DictationReadinessChecking? = nil, connectWaitsForResolution: Bool = false,
     connectError: Error? = nil, audioFrameCount: Int = 1,
-    audioStartWaitsForResolution: Bool = false, localReady: Bool = true
+    audioStartWaitsForResolution: Bool = false, localReady: Bool = true,
+    captureTail: Duration = .zero
   ) -> CoordinatorFixture {
     let suite = "AeriVoiceTests.Coordinator.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -54,7 +55,7 @@ extension DictationCoordinatorTests {
       preferences: preferences, credentials: credentials, audio: audio,
       transcriber: transcriber, cleaner: cleaner, muter: muter, inserter: inserter,
       notch: notch, benchmark: benchmark, usageStats: usageStats, readiness: readiness ?? FakeReadiness(),
-      cuePlayer: cuePlayer, localReadiness: { localReady })
+      cuePlayer: cuePlayer, localReadiness: { localReady }, captureTail: captureTail)
     return CoordinatorFixture(
       preferences: preferences, coordinator: coordinator, audio: audio, transcriber: transcriber,
       inserter: inserter, cleaner: cleaner, muter: muter, notch: notch, benchmark: benchmark,
@@ -131,6 +132,9 @@ extension DictationCoordinatorTests {
   final class FakeAudioCapture: AudioCapturing, @unchecked Sendable {
     private let lock = NSLock()
     private var callback: ((Data) -> Void)?
+    private var interruption: (() -> Void)?
+    private var deadline: ContinuousClock.Instant?
+    private var stops = 0
     private var started = false
     private var stopped = false
     private var returned = false
@@ -150,6 +154,12 @@ extension DictationCoordinatorTests {
       get { lock.withLock { callback } }
       set { lock.withLock { callback = newValue } }
     }
+    var onCaptureInterrupted: (() -> Void)? {
+      get { lock.withLock { interruption } }
+      set { lock.withLock { interruption = newValue } }
+    }
+    var discardDeadline: ContinuousClock.Instant? { lock.withLock { deadline } }
+    var stopCount: Int { lock.withLock { stops } }
     var didStart: Bool { lock.withLock { started } }
     var didStop: Bool { lock.withLock { stopped } }
     var startReturned: Bool { lock.withLock { returned } }
@@ -161,9 +171,12 @@ extension DictationCoordinatorTests {
     func prepare() async { lock.withLock { preparations += 1 } }
     func discardPreparation() { lock.withLock { discards += 1 } }
 
-    func start() async throws -> Bool {
+    func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws -> Bool {
       defer { lock.withLock { returned = true } }
-      lock.withLock { started = true }
+      lock.withLock {
+        started = true
+        self.deadline = deadline
+      }
       let reused: Bool
       if waitsForStartResolution {
         reused = await withCheckedContinuation { continuation in
@@ -175,8 +188,19 @@ extension DictationCoordinatorTests {
       let wasCancelled = Task.isCancelled
       lock.withLock { cancelled = wasCancelled }
       try Task.checkCancellation()
-      for _ in 0..<frameCount {
-        onAudio?(Data(repeating: 0, count: 3_200))
+      // Like the real service, audio recorded before the deadline is never delivered.
+      let frames = frameCount
+      let deliver: @Sendable () -> Void = { [weak self] in
+        guard let self, !self.didStop else { return }
+        for _ in 0..<frames { self.onAudio?(Data(repeating: 0, count: 3_200)) }
+      }
+      if let deadline, deadline > .now {
+        Task {
+          try? await Task.sleep(until: deadline)
+          deliver()
+        }
+      } else {
+        deliver()
       }
       return reused
     }
@@ -191,7 +215,12 @@ extension DictationCoordinatorTests {
     }
 
     func cancelStart() { lock.withLock { stopped = true } }
-    func stop() { lock.withLock { stopped = true } }
+    func stop() {
+      lock.withLock {
+        stopped = true
+        stops += 1
+      }
+    }
   }
 
   @MainActor

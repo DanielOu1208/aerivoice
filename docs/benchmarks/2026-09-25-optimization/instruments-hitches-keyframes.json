@@ -1,0 +1,13 @@
+{
+  "baseline": {
+    "hitches": 95,
+    "total_ms": 1008.3300079999999,
+    "max_ms": 33.333333
+  },
+  "candidate": {
+    "hitches": 54,
+    "total_ms": 491.666605,
+    "max_ms": 16.666666
+  },
+  "method": "One 30-cycle Debug run per arm, same machine and synthetic sequence; no builds, tests or exports during either exercise. Baseline is the earlier clean run; candidate uses synchronized Core Animation keyframes. Native visual acceptance remains unverified."
+}

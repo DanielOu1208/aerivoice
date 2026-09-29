@@ -51,7 +51,7 @@ struct CleanupModelPicker: View {
           if showsAllModels {
             ForEach(matchingEntries) { entry in
               if let model = entry.cleanupModel {
-                modelRow(model, name: entry.name)
+                modelRow(model, name: entry.name, retirement: entry.retirement)
               }
             }
             if matchingEntries.isEmpty && !catalog.isRefreshing {
@@ -119,7 +119,7 @@ struct CleanupModelPicker: View {
     .font(.caption).foregroundStyle(.secondary)
   }
 
-  private func modelRow(_ model: CleanupModel, name: String) -> some View {
+  private func modelRow(_ model: CleanupModel, name: String, retirement: Date? = nil) -> some View {
     Button {
       preferences.cleanupModel = model
       dismiss()
@@ -128,6 +128,10 @@ struct CleanupModelPicker: View {
         VStack(alignment: .leading, spacing: 3) {
           Text(name).foregroundStyle(.primary)
           Text(model.rawValue).font(.caption).foregroundStyle(.secondary)
+          if let retirement {
+            Text("Retires \(retirement.formatted(.dateTime.month(.abbreviated).day().year()))")
+              .font(.caption).foregroundStyle(.orange)
+          }
         }
         Spacer()
         if preferences.cleanupModel == model {

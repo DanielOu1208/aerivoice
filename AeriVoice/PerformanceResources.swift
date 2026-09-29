@@ -139,15 +139,12 @@ struct DiagnosticAudioRoute: Codable, Equatable, Sendable {
 
   /// Only called away from the main/audio callback threads. Device IDs never leave this method.
   static func current() -> Self? {
-    guard let route = AudioInputRoute.current() else { return nil }
-    var type: UInt32 = 0
-    var size = UInt32(MemoryLayout.size(ofValue: type))
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioDevicePropertyTransportType, mScope: kAudioObjectPropertyScopeGlobal,
-      mElement: kAudioObjectPropertyElementMain)
-    let status = AudioObjectGetPropertyData(route.deviceID, &address, 0, nil, &size, &type)
+    guard
+      let route = AudioInputRoute.current(
+        preferredDeviceUID: AppPreferences.storedInputDeviceUID())
+    else { return nil }
     let transport: String
-    switch status == noErr ? type : 0 {
+    switch AudioInputDevice.transportType(route.deviceID) {
     case kAudioDeviceTransportTypeBuiltIn: transport = "builtIn"
     case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: transport = "bluetooth"
     case kAudioDeviceTransportTypeUSB: transport = "usb"

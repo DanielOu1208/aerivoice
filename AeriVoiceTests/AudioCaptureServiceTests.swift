@@ -180,6 +180,202 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(first.count, second.count, accuracy: 16)
   }
 
+
+  func testConfigurationChangeWhileRecordingRestartsOnTheNewInput() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let interrupted = LockedFlag()
+    service.onCaptureInterrupted = { interrupted.set() }
+    _ = try await service.start()
+    let first = fixture.engines[0]
+    fixture.route = AudioInputRoute(deviceID: 2, sampleRate: 24_000, channels: 1)
+    // A burst of notifications is coalesced into one restart.
+    for _ in 0..<3 {
+      NotificationCenter.default.post(
+        name: .AVAudioEngineConfigurationChange, object: first.notificationObject)
+    }
+    try await waitUntil { fixture.engines.count == 2 && fixture.engines[1].startCount == 1 }
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(fixture.engines.count, 2)
+    XCTAssertEqual(first.stopCount, 1)
+    XCTAssertFalse(interrupted.value)
+
+    // Stale notifications from the replaced engine are ignored.
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: first.notificationObject)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(fixture.engines.count, 2)
+    service.stop()
+    XCTAssertEqual(fixture.engines[1].stopCount, 1)
+  }
+
+  func testRunningEngineOnUnchangedRouteIsNotRestarted() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    _ = try await service.start()
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    try await Task.sleep(for: .milliseconds(60))
+    XCTAssertEqual(fixture.engines.count, 1)
+    XCTAssertEqual(fixture.engines[0].stopCount, 0)
+    service.stop()
+  }
+
+  func testFailedRestartReportsInterruption() async throws {
+    let fixture = AudioPreparationFixture { index in FakeCaptureAudioEngine(startFails: index > 0) }
+    let service = fixture.service()
+    let interrupted = LockedFlag()
+    service.onCaptureInterrupted = { interrupted.set() }
+    _ = try await service.start()
+    fixture.route = AudioInputRoute(deviceID: 2, sampleRate: 48_000, channels: 1)
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    try await waitUntil { interrupted.value }
+    XCTAssertEqual(fixture.engines.count, 2)
+    service.stop()
+  }
+
+  func testRestartsAreCappedPerRecording() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let interrupted = LockedFlag()
+    service.onCaptureInterrupted = { interrupted.set() }
+    _ = try await service.start()
+    for device in 2...(AudioCaptureService.maximumRestarts + 2) {
+      fixture.route = AudioInputRoute(deviceID: AudioDeviceID(device), sampleRate: 48_000, channels: 1)
+      let engine = fixture.engines.last!
+      NotificationCenter.default.post(
+        name: .AVAudioEngineConfigurationChange, object: engine.notificationObject)
+      try await waitUntil { interrupted.value || fixture.engines.count == device }
+    }
+    XCTAssertTrue(interrupted.value)
+    XCTAssertEqual(fixture.engines.count, AudioCaptureService.maximumRestarts + 1)
+    service.stop()
+  }
+
+  func testUnreadableRouteStillAttemptsTheSystemDefault() async throws {
+    let engine = FakeCaptureAudioEngine()
+    let service = AudioCaptureService(makeEngine: { route in
+      XCTAssertFalse(route.pinned)
+      return engine
+    }, currentRoute: { nil })
+    _ = try await service.start()
+    XCTAssertEqual(engine.startCount, 1)
+    service.stop()
+  }
+
+  func testBluetoothInputIsNotPrepared() async throws {
+    let fixture = AudioPreparationFixture()
+    fixture.route = AudioInputRoute(
+      deviceID: 3, sampleRate: 24_000, channels: 1, isBluetooth: true)
+    let service = fixture.service()
+    let result = await service.prepareWithDiagnostics()
+    XCTAssertEqual(result, .skipped)
+    XCTAssertTrue(fixture.engines.isEmpty)
+    let reused = try await service.start()
+    XCTAssertFalse(reused)
+    XCTAssertEqual(fixture.engines.count, 1)
+    service.stop()
+  }
+
+  func testAudioRecordedBeforeTheDeadlineIsDropped() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start(discardingAudioBefore: .now.advanced(by: .milliseconds(50)))
+    // 100 ms at 48 kHz becomes 1,600 samples; roughly the first 800 are before the deadline.
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: 4_800))
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: 4_800))
+    service.stop()
+    let samples = delivered.count / MemoryLayout<Int16>.size
+    XCTAssertGreaterThan(samples, 2_200)
+    XCTAssertLessThan(samples, 2_500)
+  }
+
+  func testStopDeliversAudioHeldByTheConverter() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: 4_800))
+    await service.prepare()
+    let beforeStop = delivered.count
+    service.stop()
+    XCTAssertGreaterThanOrEqual(delivered.count, beforeStop)
+    XCTAssertEqual(delivered.count / MemoryLayout<Int16>.size, 1_600, accuracy: 32)
+  }
+
+  func testConverterMixesAllInputChannels() throws {
+    let converter = try XCTUnwrap(PCM16AudioConverter())
+    // Speech only on the second input, as on a two-channel interface.
+    let format = try XCTUnwrap(
+      AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: false))
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800))
+    buffer.frameLength = 4_800
+    let channels = try XCTUnwrap(buffer.floatChannelData)
+    for frame in 0..<4_800 {
+      channels[0][frame] = 0
+      channels[1][frame] = 0.5 * sin(2 * Float.pi * 440 * Float(frame) / 48_000)
+    }
+    let data = try XCTUnwrap(converter.convert(buffer))
+    XCTAssertGreaterThan(rms(data), 1_000)
+  }
+
+  func testHighPassRemovesRumbleAndKeepsSpeechBand() throws {
+    func level(frequency: Float) throws -> Float {
+      let converter = try XCTUnwrap(PCM16AudioConverter())
+      var total: [Int16] = []
+      for block in 0..<5 {
+        let buffer = try makeBuffer(
+          sampleRate: 48_000, frameCount: 4_800, frequency: frequency, offset: block * 4_800)
+        let data = try XCTUnwrap(converter.convert(buffer))
+        total += data.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+      }
+      // Skip the filter's settling time.
+      return rms(Data(total.dropFirst(4_000).withUnsafeBufferPointer { Data(buffer: $0) }))
+    }
+    let rumble = try level(frequency: 20)
+    let speech = try level(frequency: 1_000)
+    XCTAssertLessThan(rumble, speech * 0.1)
+    let unfilteredLevel: Float = 0.5 * 32_767 / Float(2).squareRoot()
+    XCTAssertGreaterThan(speech, 0.9 * unfilteredLevel)
+  }
+
+  private func rms(_ data: Data) -> Float {
+    let samples = data.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+    guard !samples.isEmpty else { return 0 }
+    let sum = samples.reduce(Float(0)) { $0 + Float($1) * Float($1) }
+    return (sum / Float(samples.count)).squareRoot()
+  }
+
+  private func waitUntil(_ condition: () -> Bool) async throws {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while !condition(), ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertTrue(condition())
+  }
+
+  private func makeBuffer(
+    sampleRate: Double, frameCount: AVAudioFrameCount, frequency: Float, offset: Int
+  ) throws -> AVAudioPCMBuffer {
+    let format = try XCTUnwrap(
+      AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1,
+        interleaved: false))
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+    buffer.frameLength = frameCount
+    let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+    for frame in 0..<Int(frameCount) {
+      let phase = 2 * Float.pi * frequency * Float(frame + offset) / Float(sampleRate)
+      samples[frame] = 0.5 * sin(phase)
+    }
+    return buffer
+  }
+
   private func makeBuffer(
     sampleRate: Double, frameCount: AVAudioFrameCount
   ) throws -> AVAudioPCMBuffer {
@@ -215,15 +411,15 @@ private final class AudioPreparationFixture: @unchecked Sendable {
   }
   var engines: [FakeCaptureAudioEngine] { lock.withLock { created } }
 
-  func service() -> AudioCaptureService {
+  func service(restartDebounce: DispatchTimeInterval = .milliseconds(10)) -> AudioCaptureService {
     AudioCaptureService(
-      makeEngine: {
+      makeEngine: { _ in
         self.lock.withLock {
           let engine = self.factory(self.created.count)
           self.created.append(engine)
           return engine
         }
-      }, currentRoute: { self.route })
+      }, currentRoute: { self.route }, restartDebounce: restartDebounce)
   }
 }
 
@@ -231,6 +427,8 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   private let lock = NSLock()
   private let object = NSObject()
   private let prepareFails: Bool
+  private let startFails: Bool
+  private var bufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)?
   private let prepareEntered: XCTestExpectation?
   private let prepareGate: DispatchSemaphore?
   private let startEntered: XCTestExpectation?
@@ -240,11 +438,12 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   private var stops = 0
 
   init(
-    prepareFails: Bool = false, prepareEntered: XCTestExpectation? = nil,
+    prepareFails: Bool = false, startFails: Bool = false, prepareEntered: XCTestExpectation? = nil,
     prepareGate: DispatchSemaphore? = nil, startEntered: XCTestExpectation? = nil,
     startGate: DispatchSemaphore? = nil
   ) {
     self.prepareFails = prepareFails
+    self.startFails = startFails
     self.prepareEntered = prepareEntered
     self.prepareGate = prepareGate
     self.startEntered = startEntered
@@ -252,6 +451,7 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   }
 
   var notificationObject: AnyObject { object }
+  var isRunning: Bool { lock.withLock { starts > stops } }
   var prepareCount: Int { lock.withLock { preparations } }
   var startCount: Int { lock.withLock { starts } }
   var stopCount: Int { lock.withLock { stops } }
@@ -270,8 +470,30 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
     startEntered?.fulfill()
     if let startGate { XCTAssertEqual(startGate.wait(timeout: .now() + 3), .success) }
     try checkCancellation()
-    lock.withLock { starts += 1 }
+    if startFails { throw AppError.microphoneUnavailable }
+    lock.withLock {
+      starts += 1
+      bufferHandler = onBuffer
+    }
+  }
+
+  func emit(_ buffer: AVAudioPCMBuffer) {
+    lock.withLock { bufferHandler }?(buffer)
   }
 
   func stop() { lock.withLock { stops += 1 } }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var flag = false
+  var value: Bool { lock.withLock { flag } }
+  func set() { lock.withLock { flag = true } }
+}
+
+private final class LockedBytes: @unchecked Sendable {
+  private let lock = NSLock()
+  private var data = Data()
+  var count: Int { lock.withLock { data.count } }
+  func append(_ chunk: Data) { lock.withLock { data.append(chunk) } }
 }

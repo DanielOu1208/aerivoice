@@ -1,0 +1,25 @@
+AeriVoice 0.2.1
+
+Smoother notch
+The recording notch opens and closes without resizing its window every frame, so animation hitches are roughly halved.
+
+Fewer clipped words
+With sounds on, the microphone starts while the start sound plays, so speech is kept from about 200 ms after you press the shortcut instead of about half a second. Capture also continues briefly after you stop, and the stop sound plays only after the microphone closes.
+
+Choose your microphone
+Pick an input in Settings > Dictation > Microphone. System default remains the default, and a disconnected choice falls back to it.
+
+Steadier recordings
+Switching inputs mid-dictation no longer silences the rest of a recording. Multichannel microphones are mixed down, and a light filter removes low rumble such as fans and desk bumps.
+
+Clipboard restore delay
+Choose how long AeriVoice waits before restoring your clipboard when an app cannot confirm the paste, in Settings > General > Clipboard.
+
+Faster first requests
+Groq and OpenRouter cleanup connections are prepared as you start dictating, and a prepared Grok connection is kept for up to five minutes.
+
+Retiring OpenRouter models
+Retired models are hidden, retiring ones are labeled, and Settings warns you if your selected model is retiring.
+
+Reliability
+Literal think tags in dictation are preserved with Cerebras, incomplete provider responses fall back to your raw transcript, and pending clipboard restoration is handled more reliably around update restarts.

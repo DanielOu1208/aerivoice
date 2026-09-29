@@ -76,6 +76,7 @@ final class EvalCaptureEngine: CaptureAudioEngine, @unchecked Sendable {
   private var lateFrames = 0
   private var maxLatenessMS = 0.0
   var notificationObject: AnyObject { self }
+  var isRunning: Bool { lock.withLock { feeder != nil } }
   var finished: Bool { lock.withLock { complete } }
   var feedSummary: [String: Any] {
     lock.withLock { ["expected_frames": fixture.frames, "emitted_frames": emittedFrames,

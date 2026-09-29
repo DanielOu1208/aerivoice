@@ -13,6 +13,13 @@ final class ModelTests: XCTestCase {
     defer { defaults.removePersistentDomain(forName: suite) }
     let preferences = AppPreferences(defaults: defaults)
     XCTAssertTrue(preferences.restoreClipboard)
+    XCTAssertEqual(preferences.clipboardRestoreDelay, 5)
+    preferences.clipboardRestoreDelay = 10
+    XCTAssertEqual(AppPreferences(defaults: defaults).clipboardRestoreDelay, 10)
+    preferences.clipboardRestoreDelay = 0
+    XCTAssertEqual(AppPreferences(defaults: defaults).clipboardRestoreDelay, 0)
+    defaults.set(-100, forKey: "clipboardRestoreDelay")
+    XCTAssertEqual(AppPreferences(defaults: defaults).clipboardRestoreDelay, 5)
     var changes: [Bool] = []
     preferences.onClipboardRestorationChange = { changes.append($0) }
     preferences.restoreClipboard = false
@@ -767,19 +774,6 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(samples, samples.sorted())
     XCTAssertLessThanOrEqual(samples.max() ?? 0, 1)
     XCTAssertEqual(plan.progress(at: plan.duration), 1, accuracy: 0.0001)
-  }
-
-  func testNotchTransitionFramesRemainTopCenteredThroughOvershoot() {
-    let screenFrame = CGRect(x: 0, y: 0, width: 1_512, height: 982)
-    let startFrame = CGRect(x: 646, y: 944, width: 220, height: 38)
-    let targetFrame = CGRect(x: 576, y: 910, width: 360, height: 72)
-
-    for progress: CGFloat in [0, 0.5, 1, 1.01] {
-      let frame = NotchFrameInterpolator.frame(
-        from: startFrame, to: targetFrame, progress: progress, screenFrame: screenFrame)
-      XCTAssertEqual(frame.midX, screenFrame.midX, accuracy: 0.0001)
-      XCTAssertEqual(frame.maxY, screenFrame.maxY, accuracy: 0.0001)
-    }
   }
 
   func testNotchReduceMotionUsesShortEaseOut() {

@@ -14,7 +14,8 @@ protocol SoundCuePlaying: AnyObject {
 
 @MainActor
 final class SoundCuePlayer: SoundCuePlaying {
-  let startCaptureDelay: Duration = .milliseconds(300)
+  /// The start cue is loud for its first 200 ms; the output mute then cuts its tail.
+  let startCaptureDelay: Duration = .milliseconds(200)
 
   private let sounds: [DictationCue: NSSound]
 

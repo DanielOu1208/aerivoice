@@ -5,6 +5,7 @@ protocol GrokWebSocketTransport: AnyObject {
   func resume()
   func send(_ message: URLSessionWebSocketTask.Message) async throws
   func receive() async throws -> URLSessionWebSocketTask.Message
+  func ping() async throws
   func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
 }
 
@@ -26,6 +27,15 @@ private final class URLSessionGrokTransport: GrokWebSocketTransport {
   }
   func receive() async throws -> URLSessionWebSocketTask.Message {
     do { return try await task.receive() } catch { throw sanitizedError() }
+  }
+  func ping() async throws {
+    let task = self.task
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      task.sendPing { error in
+        if error != nil { continuation.resume(throwing: GrokTransportError(status: nil)) }
+        else { continuation.resume() }
+      }
+    }
   }
   func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
     AppNetworkPolicy.shared.forget(task)
@@ -51,6 +61,7 @@ final class GrokRealtimeClient: RealtimeTranscribing {
   private let makeTransport: (URLRequest) -> any GrokWebSocketTransport
   private let connectionTimeout: Duration
   private let finalizationTimeout: Duration
+  private let preparedLifetime: Duration
   private var active: GrokRealtimeSession?
   private var prepared: Prepared?
   private var preparationExpiry: Task<Void, Never>?
@@ -69,14 +80,25 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     }
   }
 
+  /// Idle sockets are not billed (xAI bills per audio second). Live probes kept idle sessions
+  /// open for 10 minutes; replacing them sooner stays well inside that.
+  static let preparedLifetime: Duration = .seconds(300)
+  /// Preparation requests renew a slot in its last 30%, so a periodic check never finds it expired.
+  static let preparationCheckInterval: Duration = .seconds(60)
+  /// A socket idle this long is pinged before adoption, catching network changes. Sleep and
+  /// lock already discard the slot, so most adoptions skip the round trip.
+  static let adoptionPingThreshold: Duration = .seconds(60)
+  static let adoptionPingTimeout: Duration = .milliseconds(500)
+
   var hasPreparedConnection: Bool {
     guard let prepared else { return false }
     guard let readyAt = prepared.readyAt else { return false }
-    return clock.now() < readyAt.advanced(by: .seconds(30))
+    return clock.now() < readyAt.advanced(by: preparedLifetime)
   }
 
   init(
     connectionTimeout: Duration = .seconds(3), finalizationTimeout: Duration = .seconds(3),
+    preparedLifetime: Duration = GrokRealtimeClient.preparedLifetime,
     packetPolicy: GrokAudioPacketPolicy = .captureFrames,
     clock: GrokRealtimeClock = .continuous,
     makeTransport: @escaping (URLRequest) -> any GrokWebSocketTransport = { URLSessionGrokTransport(request: $0) }
@@ -85,6 +107,7 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     self.clock = clock
     self.connectionTimeout = connectionTimeout
     self.finalizationTimeout = finalizationTimeout
+    self.preparedLifetime = preparedLifetime
     self.makeTransport = makeTransport
   }
 
@@ -97,9 +120,11 @@ final class GrokRealtimeClient: RealtimeTranscribing {
       throw AppError.provider("The selected transcription model is not available through Grok.")
     }
     if let slot = prepared, let readyAt = slot.readyAt,
-       clock.now() < readyAt.advanced(by: .seconds(30)),
+       clock.now() < readyAt.advanced(by: preparedLifetime),
        slot.key == apiKey, slot.model == configuration.modelID,
-       slot.vocabulary == GrokVocabulary(vocabulary).terms {
+       slot.vocabulary == GrokVocabulary(vocabulary).terms,
+       await isAlive(slot, readyAt: readyAt) {
+      try Task.checkCancellation()
       prepared = nil
       preparationExpiry?.cancel()
       preparationExpiry = nil
@@ -168,7 +193,7 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     if let slot = prepared, slot.key == apiKey, slot.model == configuration.modelID,
        slot.vocabulary == terms {
       guard let readyAt = slot.readyAt else { return false }
-      if clock.now() < readyAt.advanced(by: .seconds(30)) { return true }
+      if clock.now() < readyAt.advanced(by: preparedLifetime * 0.7) { return true }
     }
     invalidatePreparedConnection()
     let session = makeSession()
@@ -189,8 +214,8 @@ final class GrokRealtimeClient: RealtimeTranscribing {
       guard prepared === slot else { return false }
       let readyAt = clock.now()
       slot.readyAt = readyAt
-      preparationExpiry = Task { [weak self, weak slot, clock] in
-        do { try await clock.sleep(readyAt.advanced(by: .seconds(30))) } catch { return }
+      preparationExpiry = Task { [weak self, weak slot, clock, preparedLifetime] in
+        do { try await clock.sleep(readyAt.advanced(by: preparedLifetime)) } catch { return }
         guard !Task.isCancelled, let self, let slot, self.prepared === slot else { return }
         self.discard(slot, event: "preparationExpired")
       }
@@ -200,6 +225,14 @@ final class GrokRealtimeClient: RealtimeTranscribing {
       if prepared === slot { discard(slot, event: "preparationFailed") }
       return false
     }
+  }
+
+  /// A long-idle socket can be dead without a close event (sleep, network change).
+  private func isAlive(_ slot: Prepared, readyAt: ContinuousClock.Instant) async -> Bool {
+    guard clock.now() >= readyAt.advanced(by: Self.adoptionPingThreshold) else { return true }
+    let alive = await slot.session.ping(timeout: Self.adoptionPingTimeout)
+    if !alive { discard(slot, event: "preparationStale") }
+    return alive && prepared === slot
   }
 
   private func discard(_ slot: Prepared, event: String) {

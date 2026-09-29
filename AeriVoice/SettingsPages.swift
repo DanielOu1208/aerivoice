@@ -34,9 +34,20 @@ struct GeneralSettingsPage: View {
         SettingsControlRow(
           title: "Restore clipboard after dictation",
           message:
-            "Restores your previous clipboard after insertion is confirmed. Otherwise, dictation stays copied."
+            "Restores your previous clipboard after confirmed insertion, or after the fallback delay when confirmation is unavailable."
         ) {
           Toggle("Restore clipboard after dictation", isOn: $preferences.restoreClipboard)
+        }
+        SettingsControlRow(
+          title: "Fallback restore delay",
+          message: "Used when an app cannot confirm insertion. If a paste silently fails, paste manually before this delay expires."
+        ) {
+          Picker("Fallback restore delay", selection: $preferences.clipboardRestoreDelay) {
+            ForEach(AppPreferences.clipboardRestoreDelays, id: \.self) { seconds in
+              Text(seconds == 0 ? "Never" : "\(seconds)s").tag(seconds)
+            }
+          }
+          .disabled(!preferences.restoreClipboard)
         }
       }
       Section("Startup") {
@@ -138,6 +149,8 @@ struct DictationSettingsPage: View {
           Spacer()
           Button("Manage…") { selection = .privacy }
         }
+        InputDevicePicker(selection: $preferences.inputDevice)
+          .disabled(model.coordinator.canCancel)
       }
     }
     .formStyle(.grouped)
@@ -230,6 +243,13 @@ struct CleanupSettingsPage: View {
           }
           if !preferences.catalogRequiresZeroDataRetention {
             warning("The selected provider may retain your transcript and cleaned text.")
+          }
+          if let retirement = preferences.openRouterCatalog.entry(for: preferences.cleanupModel)?
+            .retirement
+          {
+            warning(
+              "OpenRouter retires this model on \(retirement.formatted(date: .long, time: .omitted)). Choose another model before then."
+            )
           }
         }
         if preferences.cleanupProvider == .groq {

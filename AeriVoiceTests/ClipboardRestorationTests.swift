@@ -5,6 +5,160 @@ import XCTest
 
 @MainActor
 final class ClipboardRestorationTests: XCTestCase {
+  func testDelayedFallbackRestoresImageAfterUnverifiablePasteAndFocusChange() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.restoreDelay = 0.08
+    fixture.editor.readable = false
+    let image = NSImage(size: NSSize(width: 2, height: 2))
+    image.lockFocus()
+    NSColor.red.setFill()
+    NSRect(x: 0, y: 0, width: 2, height: 2).fill()
+    image.unlockFocus()
+    let data = try XCTUnwrap(image.tiffRepresentation)
+    fixture.board.clearContents()
+    fixture.board.setData(data, forType: .tiff)
+    let target = try await fixture.capture()
+    let result = await fixture.service.insert(fixture.dictation, into: target)
+    XCTAssertEqual(result, .pasteSent)
+    XCTAssertNil(fixture.board.data(forType: .tiff))
+    XCTAssertEqual(fixture.board.string(forType: .string), fixture.dictation)
+    fixture.editor.current = false
+    await fixture.service.finishPendingRestoration()
+    XCTAssertEqual(fixture.outcomes, [.restoredAfterDelay])
+    XCTAssertEqual(fixture.board.data(forType: .tiff), data)
+  }
+
+  func testDelayedFallbackPreservesNewCopyAndCancellation() async throws {
+    for cancel in [false, true] {
+      let fixture = Fixture()
+      defer { fixture.remove() }
+      fixture.restoreDelay = 0.03
+      fixture.editor.readable = false
+      let target = try await fixture.capture()
+      _ = await fixture.service.insert(fixture.dictation, into: target)
+      if cancel {
+        fixture.service.invalidatePendingRestoration()
+      } else {
+        fixture.board.clearContents()
+        fixture.board.setString("new copy", forType: .string)
+      }
+      try await Task.sleep(for: .milliseconds(60))
+      XCTAssertEqual(fixture.outcomes, [cancel ? .cancelled : .superseded])
+      XCTAssertEqual(fixture.board.string(forType: .string), cancel ? fixture.dictation : "new copy")
+    }
+  }
+
+  func testDelayedFallbackCarriesOriginalBackupAcrossRapidDictations() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.restoreDelay = 0.08
+    fixture.editor.readable = false
+    let first = try await fixture.capture()
+    _ = await fixture.service.insert("first", into: first)
+    fixture.service.prepareForNextDictation()
+    let second = try await fixture.capture()
+    _ = await fixture.service.insert("second", into: second)
+    XCTAssertEqual(fixture.board.string(forType: .string), "second")
+    await fixture.service.finishPendingRestoration()
+    XCTAssertEqual(fixture.outcomes, [.cancelled, .restoredAfterDelay])
+    XCTAssertEqual(fixture.board.string(forType: .string), "previous clipboard")
+  }
+
+  func testFailedNextDictationPreservesPreviousDelayedRestoration() async throws {
+    for stopsBeforeFailure in [false, true] {
+      let fixture = Fixture()
+      defer { fixture.remove() }
+      fixture.restoreDelay = 0.08
+      fixture.editor.readable = false
+      let first = try await fixture.capture()
+      _ = await fixture.service.insert("first", into: first)
+      fixture.service.prepareForNextDictation()
+      if stopsBeforeFailure { _ = try await fixture.capture() }
+      fixture.service.invalidatePendingRestoration()
+      await fixture.service.finishPendingRestoration()
+      XCTAssertEqual(fixture.board.string(forType: .string), "previous clipboard")
+    }
+  }
+
+  func testCancelledInsertionCannotCancelResumedPreviousRestoration() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.restoreDelay = 0.15
+    fixture.editor.readable = false
+    let first = try await fixture.capture()
+    _ = await fixture.service.insert("first", into: first)
+    let captured = try await fixture.capture()
+    let gate = RestorationReadGate()
+    let target = TextInsertionTarget(
+      clipboardChangeCount: captured.clipboardChangeCount,
+      restorationID: captured.restorationID, verification: nil
+    ) { _ in
+      _ = await gate.read()
+      return .blocked(.targetUnavailable)
+    }
+    let insertion = Task { await fixture.service.insert("second", into: target) }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while !(await gate.started), ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    let started = await gate.started
+    XCTAssertTrue(started)
+    fixture.service.invalidatePendingRestoration()
+    insertion.cancel()
+    await gate.release()
+    let result = await insertion.value
+    XCTAssertEqual(result, .cancelled)
+    await fixture.service.finishPendingRestoration()
+    XCTAssertEqual(fixture.board.string(forType: .string), "previous clipboard")
+  }
+
+  func testAbandonedNextCaptureDoesNotRestoreOverNewUserCopy() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.restoreDelay = 0.03
+    fixture.editor.readable = false
+    let first = try await fixture.capture()
+    _ = await fixture.service.insert("first", into: first)
+    _ = try await fixture.capture()
+    fixture.board.clearContents()
+    fixture.board.setString("new copy", forType: .string)
+    fixture.service.invalidatePendingRestoration()
+    try await Task.sleep(for: .milliseconds(60))
+    XCTAssertEqual(fixture.board.string(forType: .string), "new copy")
+  }
+
+  func testDelayedFallbackDoesNotRestoreBlockedDispatch() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.restoreDelay = 0.02
+    fixture.editor.readable = false
+    let captured = try await fixture.capture()
+    let target = TextInsertionTarget(
+      clipboardChangeCount: captured.clipboardChangeCount,
+      restorationID: captured.restorationID, verification: nil
+    ) { commit in
+      await commit({ nil }, { .blocked(.targetUnavailable) })
+    }
+    let result = await fixture.service.insert(fixture.dictation, into: target)
+    XCTAssertEqual(result, .copied(.targetUnavailable))
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(fixture.outcomes, [.unverified])
+    XCTAssertEqual(fixture.board.string(forType: .string), fixture.dictation)
+  }
+
+  func testAvailableVerificationDoesNotUseDelayWhenPasteIsIgnored() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.restoreDelay = 0.01
+    fixture.editor.acceptsPaste = false
+    let target = try await fixture.capture()
+    _ = await fixture.service.insert(fixture.dictation, into: target)
+    await fixture.service.finishPendingRestoration()
+    XCTAssertEqual(fixture.outcomes, [.unverified])
+    XCTAssertEqual(fixture.board.string(forType: .string), fixture.dictation)
+  }
+
   func testUpdateTerminationDrainWaitsForVerifiedClipboardRestoration() async throws {
     let fixture = Fixture()
     defer { fixture.remove() }
@@ -293,8 +447,12 @@ final class ClipboardRestorationTests: XCTestCase {
 }
 
 private actor RestorationReadGate {
+  private(set) var started = false
   private var pending: CheckedContinuation<TextEditState?, Never>?
-  func read() async -> TextEditState? { await withCheckedContinuation { pending = $0 } }
+  func read() async -> TextEditState? {
+    started = true
+    return await withCheckedContinuation { pending = $0 }
+  }
   func release() { pending?.resume(returning: nil); pending = nil }
 }
 
@@ -305,12 +463,14 @@ private final class Fixture {
   let editor: SyntheticEditor
   let restoration: ClipboardRestoration
   var enabled = true
+  var restoreDelay: TimeInterval = 0
   var outcomes: [ClipboardRestorationOutcome] = []
   lazy var service = TextInsertionService(
     pasteboard: board,
     capture: { [editor] in Task { editor.target() } },
     restoration: restoration,
     restoreEnabled: { [weak self] in self?.enabled == true },
+    restoreDelay: { [weak self] in self?.restoreDelay ?? 0 },
     makeRestorationReport: { [weak self] in { [weak self] in self?.outcomes.append($0) } })
 
   init(reader: ClipboardRestoration.SnapshotReader? = nil) {

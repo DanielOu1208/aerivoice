@@ -51,7 +51,6 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
   private var assembler = TranscriptAssembler()
   private var snapshot = TranscriptSnapshot()
   private var finishContinuation: CheckedContinuation<String, Error>?
-  private var finished = false
   private var generation = UUID()
 
   init(makeTransport: @escaping (URL) -> SonioxWebSocketTransport = {
@@ -147,7 +146,6 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
     }
     assembler = TranscriptAssembler()
     snapshot = TranscriptSnapshot()
-    finished = false
   }
 
   private func receiveLoop(generation connectionGeneration: UUID) async {
@@ -184,7 +182,6 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
         finalAudioProcessedMS: response.finalAudioProcessedMS,
         totalAudioProcessedMS: response.totalAudioProcessedMS))
     if response.finished == true {
-      finished = true
       let result = snapshot.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
       complete(result.isEmpty ? .failure(AppError.emptyTranscript) : .success(result))
     }

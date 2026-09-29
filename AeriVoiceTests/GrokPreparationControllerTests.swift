@@ -70,4 +70,51 @@ final class GrokPreparationControllerTests: XCTestCase {
     await settle()
     policy.stop()
   }
+
+  func testExpiredPreparationIsReplacedWhileRecentlyUsed() async throws {
+    var preparations = 0
+    let policy = GrokPreparationController(initiallyLocked: false, eligible: { true },
+      prepare: { preparations += 1; return true }, discard: {},
+      refreshInterval: .milliseconds(30), keepWarmWindow: .milliseconds(200))
+    policy.request()
+    try await Task.sleep(for: .milliseconds(120))
+    XCTAssertGreaterThanOrEqual(preparations, 3)
+    // Without new activity, refreshes stop once the keep-warm window passes.
+    try await Task.sleep(for: .milliseconds(250))
+    let settled = preparations
+    try await Task.sleep(for: .milliseconds(120))
+    XCTAssertEqual(preparations, settled)
+    policy.stop()
+  }
+
+  func testInvalidationCancelsPendingRefresh() async throws {
+    var preparations = 0
+    let policy = GrokPreparationController(initiallyLocked: false, eligible: { true },
+      prepare: { preparations += 1; return true }, discard: {},
+      refreshInterval: .milliseconds(30))
+    policy.request()
+    await settle()
+    policy.setSleeping(true)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(preparations, 1)
+    policy.stop()
+  }
+
+  func testLaterRequestsDoNotPostponeTheScheduledCheck() async throws {
+    var preparations = 0
+    let policy = GrokPreparationController(initiallyLocked: false, eligible: { true },
+      prepare: { preparations += 1; return true }, discard: {},
+      refreshInterval: .milliseconds(80))
+    policy.request()
+    await settle()
+    // Wake or unlock requests arrive before the check is due.
+    for _ in 0..<3 {
+      try await Task.sleep(for: .milliseconds(30))
+      policy.request()
+    }
+    let beforeCheck = preparations
+    try await Task.sleep(for: .milliseconds(60))
+    XCTAssertGreaterThan(preparations, beforeCheck)
+    policy.stop()
+  }
 }

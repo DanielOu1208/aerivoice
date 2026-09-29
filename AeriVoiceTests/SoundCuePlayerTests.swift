@@ -20,6 +20,6 @@ final class SoundCuePlayerTests: XCTestCase {
   }
 
   func testStartCueDelayCoversTheAudibleBlowAttack() {
-    XCTAssertEqual(SoundCuePlayer().startCaptureDelay, .milliseconds(300))
+    XCTAssertEqual(SoundCuePlayer().startCaptureDelay, .milliseconds(200))
   }
 }

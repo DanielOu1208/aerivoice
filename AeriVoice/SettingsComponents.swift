@@ -519,3 +519,40 @@ struct CleanupStylePicker: View {
     }
   }
 }
+
+struct InputDevicePicker: View {
+  @Binding var selection: AudioInputDevice?
+  @StateObject private var deviceList = AudioInputDeviceList()
+
+  var body: some View {
+    Picker(selection: uidBinding) {
+      Text("System default").tag(String?.none)
+      if let selection, !deviceList.devices.contains(where: { $0.uid == selection.uid }) {
+        Text("\(selection.name) (disconnected)").tag(Optional(selection.uid))
+      }
+      ForEach(deviceList.devices) { device in
+        Text(device.name).tag(Optional(device.uid))
+      }
+    } label: {
+      SettingsHelpLabel(
+        title: "Input",
+        message:
+          "System default follows the input chosen in System Settings. A chosen microphone that is disconnected falls back to the system default."
+      )
+    }
+  }
+
+  private var uidBinding: Binding<String?> {
+    Binding(
+      get: { selection?.uid },
+      set: { uid in
+        guard let uid else {
+          selection = nil
+          return
+        }
+        if let device = deviceList.devices.first(where: { $0.uid == uid }) {
+          selection = device
+        }
+      })
+  }
+}

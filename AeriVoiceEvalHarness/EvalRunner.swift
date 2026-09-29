@@ -90,7 +90,7 @@ final class EvalRunner {
   private func runSessions(_ fixture: EvalAudioFixture) async throws {
     let engine = EvalCaptureEngine(fixture: fixture, events: events)
     let route = AudioInputRoute(deviceID: 1, sampleRate: fixture.rate, channels: UInt32(fixture.channels))
-    let audio = AudioCaptureService(makeEngine: { engine }, currentRoute: { route })
+    let audio = AudioCaptureService(makeEngine: { _ in engine }, currentRoute: { route })
     let soniox: SonioxRealtimeClient
     let meta: MetaRealtimeClient
     let grok: GrokRealtimeClient

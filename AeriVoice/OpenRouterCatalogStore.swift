@@ -32,7 +32,7 @@ final class OpenRouterCatalogStore: ObservableObject {
       let cached = try? JSONDecoder().decode(CachedCatalog.self, from: data),
       cached.schemaVersion == 1, !cached.entries.isEmpty
     {
-      entries = cached.entries.filter(\.isCleanupCompatible)
+      entries = cached.entries.filter { $0.isCleanupCompatible && !$0.isRetired() }
       fetchedAt = cached.fetchedAt
     }
   }

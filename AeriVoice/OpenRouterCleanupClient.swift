@@ -3,11 +3,19 @@ import Foundation
 struct OpenRouterCleanupClient: CleaningText {
   private let systemPromptOverride: String?
   private let session: URLSession
+  private let warmer = CleanupConnectionWarmer()
 
   init(session: URLSession = .shared, systemPromptOverride: String? = nil) {
     self.session = session
     self.systemPromptOverride = systemPromptOverride
   }
+  func warmUp(configuration: CleanupConfiguration, apiKey: String) async {
+    guard configuration.provider == .openRouter, !apiKey.isEmpty else { return }
+    var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/auth/key")!)
+    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    await warmer.warm(request, session: session)
+  }
+
 
   func clean(
     _ text: String, instructions: CleanupInstructions, configuration: CleanupConfiguration, apiKey: String
@@ -52,6 +60,7 @@ struct OpenRouterCleanupClient: CleaningText {
 
     let preparedRequest = request
     let urlSession = session
+    warmer.recordRequestStarted()
     let (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
       group.addTask { try await AppNetworkPolicy.shared.data(for: preparedRequest, session: urlSession) }
       group.addTask {
