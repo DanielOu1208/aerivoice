@@ -244,6 +244,13 @@ struct CleanupSettingsPage: View {
           if !preferences.catalogRequiresZeroDataRetention {
             warning("The selected provider may retain your transcript and cleaned text.")
           }
+          if let retirement = preferences.openRouterCatalog.entry(for: preferences.cleanupModel)?
+            .retirement
+          {
+            warning(
+              "OpenRouter retires this model on \(retirement.formatted(date: .long, time: .omitted)). Choose another model before then."
+            )
+          }
         }
         if preferences.cleanupProvider == .groq {
           warning(

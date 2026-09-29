@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Accelerate
+import CoreAudio
 import Foundation
 
 final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
@@ -178,13 +179,12 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     checkCancellation: @Sendable () throws -> Void
   ) throws -> Bool {
     guard !recording else { return false }
-    let route = currentRoute()
-    if preparedRoute == nil || preparedRoute != route { stopOnQueue() }
+    let current = currentRoute()
+    if preparedRoute == nil || preparedRoute != current { stopOnQueue() }
     let usedPreparation = engine != nil
-    guard let route = preparedRoute ?? route else {
-      stopOnQueue()
-      throw AppError.microphoneUnavailable
-    }
+    // An unreadable route still attempts the system default; the engine validates its input.
+    let route = preparedRoute ?? current
+      ?? AudioInputRoute(deviceID: AudioDeviceID(kAudioObjectUnknown), sampleRate: 0, channels: 0)
     let engine = self.engine ?? makeEngine(route)
     self.engine = engine
     preparedRoute = nil

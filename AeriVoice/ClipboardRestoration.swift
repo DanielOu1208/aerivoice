@@ -65,6 +65,8 @@ final class ClipboardRestoration {
     var grace: Duration = .milliseconds(100)
     var timeout: Duration = .seconds(2)
     var readGrace: Duration = .milliseconds(500)
+    /// Timers can wake late under load; the drain must not cancel a restoration that is due.
+    var drainMargin: Duration = .milliseconds(500)
   }
 
   // A new service/capture on the same board also invalidates older generations.
@@ -143,7 +145,7 @@ final class ClipboardRestoration {
     guard task != nil, let id = generation else { return }
     let drainTimeout = pendingDelay ?? (timing.timeout + (pendingPaste?.receipt == nil ? .zero : timing.readGrace))
     let deadline = Task { [weak self, timing] in
-      do { try await Task.sleep(for: drainTimeout + timing.poll) } catch { return }
+      do { try await Task.sleep(for: drainTimeout + timing.drainMargin) } catch { return }
       self?.invalidate(ifCurrent: id)
     }
     await withCheckedContinuation { terminationWaiters.append($0) }

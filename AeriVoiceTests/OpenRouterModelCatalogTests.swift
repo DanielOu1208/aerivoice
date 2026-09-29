@@ -24,6 +24,28 @@ final class OpenRouterModelCatalogTests: XCTestCase {
     XCTAssertFalse(models[0].matches("missing"))
   }
 
+  func testCatalogReadsRetirementDatesAndHidesRetiredModels() throws {
+    let data = #"""
+      {"data":[
+        {"id":"vendor/current","name":"Current","architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"vendor/retiring","name":"Retiring","expiration_date":"2999-10-20","architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"vendor/retired","name":"Retired","expiration_date":"2001-01-01","architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"vendor/odd","name":"Odd","expiration_date":"soon","architecture":{"input_modalities":["text"],"output_modalities":["text"]}}
+      ]}
+      """#.data(using: .utf8)!
+    let models = try OpenRouterModelCatalog.decode(data)
+    XCTAssertEqual(models.map(\.id), ["vendor/current", "vendor/odd", "vendor/retiring"])
+    XCTAssertNil(models[0].retirement)
+    XCTAssertNil(models[1].retirement)
+    let retirement = try XCTUnwrap(models[2].retirement)
+    XCTAssertEqual(
+      Calendar(identifier: .gregorian).dateComponents(in: .gmt, from: retirement).month, 10)
+    // Cached catalogs round-trip the date.
+    let cached = try JSONDecoder().decode(
+      OpenRouterCatalogEntry.self, from: JSONEncoder().encode(models[2]))
+    XCTAssertEqual(cached.retirement, retirement)
+  }
+
   func testCustomModelsRejectMalformedIDsAndPreserveProviderInCodable() throws {
     for invalid in [
       "", "removed-model", "vendor/", "vendor/model\n", "https://example.com/model",

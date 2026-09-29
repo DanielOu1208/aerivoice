@@ -177,3 +177,78 @@ sessions, and stale cancellation after a previous timer resumes. These automated
 checks do not replace real Ghostty/Codex acceptance.
 
 Follow-up full Debug suite: **557 passed, 3 opt-in tests skipped, 0 failures**.
+
+## Capture and provider follow-up (September 29)
+
+### Microphone capture
+
+- Capture continues 250 ms after stop, then the resampler is flushed; the stop cue
+  and output unmute happen only after the microphone closes. The insertion target is
+  still captured at release. Cancel, errors, and the time limit skip the tail.
+- The engine starts at key-down, overlapping the start cue. The capture service
+  drops samples recorded before the cue deadline, now 200 ms (the Blow cue's loud
+  attack; the output mute cuts its tail). Local logs showed recording began about
+  475 ms after key-down with cues on (cue wait plus a ~100 ms cold engine start).
+- After each dictation the next engine is prepared (not started; no microphone
+  indicator). Bluetooth inputs are never prepared, to avoid switching headsets
+  into the call profile.
+- A device or format change during recording rebuilds capture on the current input
+  while the transcription session stays open: notifications are debounced (150 ms),
+  stale engines ignored, a running engine on an unchanged route is left alone, and
+  restarts are capped at three. A failed restart finishes with the audio already
+  captured and shows "Microphone disconnected".
+- Multichannel inputs are mixed down instead of keeping only channel 0.
+- An 80 Hz second-order high-pass filter removes rumble and DC offset
+  (−24 dB at 20 Hz, −0.1 dB at 200 Hz).
+- Dictation → Microphone has an input picker; System default remains the default.
+  A disconnected choice falls back to the system default.
+
+### Providers
+
+Live probes (synthetic `say` speech, this Mac's network, n=12 per arm unless noted):
+
+| Question | Result | Decision |
+| --- | --- | --- |
+| Grok `finalize` vs `audio.done` | 189 vs 179 ms median | Keep `audio.done` |
+| Soniox manual finalize vs end-of-stream | 93 vs 98 ms median | Keep end-of-stream |
+| Grok idle socket survival | 20 s … 600 s all survived | 5-minute prepared lifetime |
+| Grok new connection to ready | 236 ms median, 291 ms p90 | Avoid on the critical path |
+| Shared URLSession for WebSockets | 0/16 reused; 281 vs 280 ms | Not adopted |
+
+- Grok prepared sockets live 5 minutes (was 30 seconds and never replaced), are
+  pinged before adoption after 15 s idle, and are replaced after expiry for up to
+  30 minutes after the last activity. xAI bills per audio second; idle probes show
+  timestamps advance only with audio.
+- Groq and OpenRouter connections are warmed at activation, as Cerebras already was.
+- The OpenRouter catalog reads `expiration_date`: retired models are hidden, retiring
+  ones are labeled, and Settings warns when the selected model is retiring.
+
+### Cleanup preset candidates
+
+Live Polished-mode comparison on the 20 compose-edge-20260914 transcripts, two runs
+each, with the candidates configured exactly like the presets they would replace:
+
+| Model | Success | Median | p90 |
+| --- | ---: | ---: | ---: |
+| GPT-5.6 Luna (current) | 40/40 | 1,052 ms | 1,544 ms |
+| GPT-6 Luna | 40/40 | 1,231 ms | 1,638 ms |
+| Gemini 3.7 Flash (current) | 38/40 | 2,412 ms | 4,132 ms |
+| Gemini 3.8 Flash | 39/40 | 2,143 ms | 4,103 ms |
+
+GPT-6 Luna produced near-identical text at half the price but ~180 ms slower.
+Gemini 3.8 Flash was faster but dropped a sentence in both runs of one case, once
+emitted literal `\n` escapes, and once resolved an ambiguous pronoun. Presets are
+unchanged. Every Gemini failure was the exploratory whole-message retraction case.
+
+### Validation
+
+- Full Debug suite, run twice: **583 passed, 3 opt-in tests skipped, 0 failures**.
+  Release app and eval harness builds succeeded.
+- `testCancelledInsertionCannotCancelResumedPreviousRestoration` was intermittently
+  failing (6/8 passing on the baseline, 2/8 on this branch). Instrumentation showed the
+  restore timer waking ~70 ms late while `finishPendingRestoration`'s drain deadline
+  had only a 50 ms margin, so the drain invalidated a restoration that was due. The
+  drain now allows a 500 ms margin (10/10 passes). This path runs only before an
+  update restart.
+- No real-app acceptance yet: device switching (AirPods, USB, Sound settings), the
+  capture tail and cue overlap, and the input picker need checks in the installed app.

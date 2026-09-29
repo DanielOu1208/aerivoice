@@ -253,6 +253,17 @@ final class AudioCaptureServiceTests: XCTestCase {
     service.stop()
   }
 
+  func testUnreadableRouteStillAttemptsTheSystemDefault() async throws {
+    let engine = FakeCaptureAudioEngine()
+    let service = AudioCaptureService(makeEngine: { route in
+      XCTAssertFalse(route.pinned)
+      return engine
+    }, currentRoute: { nil })
+    _ = try await service.start()
+    XCTAssertEqual(engine.startCount, 1)
+    service.stop()
+  }
+
   func testBluetoothInputIsNotPrepared() async throws {
     let fixture = AudioPreparationFixture()
     fixture.route = AudioInputRoute(
