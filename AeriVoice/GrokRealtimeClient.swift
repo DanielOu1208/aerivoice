@@ -83,9 +83,12 @@ final class GrokRealtimeClient: RealtimeTranscribing {
   /// Idle sockets are not billed (xAI bills per audio second). Live probes kept idle sessions
   /// open for 10 minutes; replacing them sooner stays well inside that.
   static let preparedLifetime: Duration = .seconds(300)
-  /// A socket idle this long is pinged before adoption, catching sleep or network changes.
-  static let adoptionPingThreshold: Duration = .seconds(15)
-  static let adoptionPingTimeout: Duration = .seconds(1)
+  /// Preparation requests renew a slot in its last 30%, so a periodic check never finds it expired.
+  static let preparationCheckInterval: Duration = .seconds(60)
+  /// A socket idle this long is pinged before adoption, catching network changes. Sleep and
+  /// lock already discard the slot, so most adoptions skip the round trip.
+  static let adoptionPingThreshold: Duration = .seconds(60)
+  static let adoptionPingTimeout: Duration = .milliseconds(500)
 
   var hasPreparedConnection: Bool {
     guard let prepared else { return false }
@@ -190,7 +193,7 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     if let slot = prepared, slot.key == apiKey, slot.model == configuration.modelID,
        slot.vocabulary == terms {
       guard let readyAt = slot.readyAt else { return false }
-      if clock.now() < readyAt.advanced(by: preparedLifetime) { return true }
+      if clock.now() < readyAt.advanced(by: preparedLifetime * 0.7) { return true }
     }
     invalidatePreparedConnection()
     let session = makeSession()

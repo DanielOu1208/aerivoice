@@ -73,7 +73,7 @@ final class AppModel: ObservableObject {
     },
     prepare: { [weak self] in await self?.coordinator.prepareTranscriptionConnection() ?? false },
     discard: { [weak self] in self?.coordinator.invalidatePreparedConnection() },
-    refreshInterval: GrokRealtimeClient.preparedLifetime + .seconds(1))
+    refreshInterval: GrokRealtimeClient.preparationCheckInterval)
 
   init(launchStartedMS: Double = DiagnosticsClock.uptimeMS()) {
     let preferences = AppPreferences()

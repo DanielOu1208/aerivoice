@@ -1,6 +1,6 @@
 # Optimization release candidate
 
-Target: v0.2.0-beta.2, based on v0.2.0-beta.1 (`9f09861`).
+Target: v0.2.1, based on v0.2.0-beta.1 (`9f09861`). Release notes: [v0.2.1](releases/v0.2.1.md).
 
 ## Implemented
 
@@ -244,8 +244,13 @@ unchanged. Every Gemini failure was the exploratory whole-message retraction cas
 
 ### Validation
 
-- Full Debug suite, run twice: **583 passed, 3 opt-in tests skipped, 0 failures**.
-  Release app and eval harness builds succeeded.
+- Full Debug suite, three consecutive runs after code review: **586 passed, 3 opt-in
+  tests skipped, 0 failures**. Release app and eval harness builds succeeded.
+- Code review fixes: Grok preparation checks run on a fixed 60 s cadence and renew a
+  slot in its final 30% (wake/unlock requests previously postponed the check past
+  expiry); adoption pings only after 60 s idle with a 500 ms timeout; the notch panel
+  is re-raised on phase changes; the clipboard backup reader runs at user-initiated
+  priority (it was starved past its 100 ms budget under parallel test load).
 - `testCancelledInsertionCannotCancelResumedPreviousRestoration` was intermittently
   failing (6/8 passing on the baseline, 2/8 on this branch). Instrumentation showed the
   restore timer waking ~70 ms late while `finishPendingRestoration`'s drain deadline

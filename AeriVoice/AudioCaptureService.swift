@@ -282,15 +282,15 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   }
 
   private func deliver(_ data: Data) {
-    var data = data
-    if samplesToDiscard > 0 {
-      let samples = data.count / MemoryLayout<Int16>.size
-      let dropped = min(samples, samplesToDiscard)
-      samplesToDiscard -= dropped
-      data = data.dropFirst(dropped * MemoryLayout<Int16>.size)
+    guard samplesToDiscard > 0 else {
+      onAudio?(data)
+      return
     }
-    guard !data.isEmpty else { return }
-    onAudio?(Data(data))
+    let samples = data.count / MemoryLayout<Int16>.size
+    let dropped = min(samples, samplesToDiscard)
+    samplesToDiscard -= dropped
+    guard dropped < samples else { return }
+    onAudio?(Data(data.dropFirst(dropped * MemoryLayout<Int16>.size)))
   }
 }
 

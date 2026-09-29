@@ -99,4 +99,22 @@ final class GrokPreparationControllerTests: XCTestCase {
     XCTAssertEqual(preparations, 1)
     policy.stop()
   }
+
+  func testLaterRequestsDoNotPostponeTheScheduledCheck() async throws {
+    var preparations = 0
+    let policy = GrokPreparationController(initiallyLocked: false, eligible: { true },
+      prepare: { preparations += 1; return true }, discard: {},
+      refreshInterval: .milliseconds(80))
+    policy.request()
+    await settle()
+    // Wake or unlock requests arrive before the check is due.
+    for _ in 0..<3 {
+      try await Task.sleep(for: .milliseconds(30))
+      policy.request()
+    }
+    let beforeCheck = preparations
+    try await Task.sleep(for: .milliseconds(60))
+    XCTAssertGreaterThan(preparations, beforeCheck)
+    policy.stop()
+  }
 }

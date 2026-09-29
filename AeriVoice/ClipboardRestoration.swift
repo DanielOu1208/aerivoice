@@ -201,7 +201,8 @@ final class ClipboardRestoration {
     let reader = readSnapshot
     // One materialization per board, even when an external data provider blocks.
     // Cancellation never releases this slot early or queues more provider work.
-    Task.detached(priority: .utility) { [weak self] in
+    // The paste may wait on this backup, so it must not be starved under CPU load.
+    Task.detached(priority: .userInitiated) { [weak self] in
       let snapshot = reader(name, changeCount)
       await MainActor.run {
         Self.readingBoards.remove(.init(name))
@@ -317,9 +318,9 @@ final class ClipboardRestoration {
   }
 
   private func owns(_ pending: PendingPaste) -> Bool {
-    board.changeCount == pending.changeCount
-      && board.string(forType: pending.markerType) == pending.marker
-      && board.changeCount == pending.changeCount
+    ClipboardOwnership.isCurrent(
+      currentMarker: board.string(forType: pending.markerType), expectedMarker: pending.marker,
+      currentChangeCount: board.changeCount, expectedChangeCount: pending.changeCount)
   }
 
   func finishWithoutRestoring(_ outcome: ClipboardRestorationOutcome, id: UUID, report: Report) {

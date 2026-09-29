@@ -218,6 +218,24 @@ final class GrokRealtimeClientTests: XCTestCase {
     XCTAssertFalse(client.hasPreparedConnection)
   }
 
+  func testPreparationRenewsSlotInItsFinalThirtyPercent() async throws {
+    let first = GrokTestSocket()
+    let second = GrokTestSocket()
+    var sockets = [first, second]
+    let time = GrokTestClock()
+    let client = GrokRealtimeClient(clock: time.clock, makeTransport: { _ in sockets.removeFirst() })
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: [])
+    time.advance(by: .seconds(200))
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: [])
+    XCTAssertFalse(first.cancelled)
+    time.advance(by: .seconds(20))
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key", vocabulary: [])
+    XCTAssertTrue(first.cancelled)
+    XCTAssertEqual(sockets.count, 0)
+    XCTAssertTrue(client.hasPreparedConnection)
+    client.cancel()
+  }
+
   func testPreparedMismatchClosesOldSocketAndConnectsFresh() async throws {
     let old = GrokTestSocket()
     let next = GrokTestSocket()

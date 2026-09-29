@@ -1,7 +1,7 @@
 import Foundation
 
-/// App lifecycle eligibility for audio-free preparation. The client owns expiry; after it,
-/// a replacement is opened while the app was recently used.
+/// App lifecycle eligibility for audio-free preparation. The client owns expiry and renewal;
+/// a periodic check keeps a connection ready while the app was recently used.
 @MainActor
 final class GrokPreparationController {
   private let eligible: () -> Bool
@@ -50,12 +50,13 @@ final class GrokPreparationController {
     }
   }
 
+  /// A fixed cadence: later requests must not push the next check past the slot's expiry.
   private func scheduleRefresh(generation id: UUID) {
-    guard let refreshInterval else { return }
-    refreshTask?.cancel()
+    guard let refreshInterval, refreshTask == nil else { return }
     refreshTask = Task { [weak self] in
       do { try await Task.sleep(for: refreshInterval) } catch { return }
       guard let self, self.generation == id else { return }
+      self.refreshTask = nil
       guard self.lastActivity.duration(to: .now) < self.keepWarmWindow else { return }
       self.requestPreparation()
     }

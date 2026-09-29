@@ -12,6 +12,12 @@ final class NotchViewModel: ObservableObject {
 
 @MainActor
 enum NotchPanelPinning {
+  /// Another status-level window may cover the notch mid-session. Re-raise on phase changes
+  /// only; frequent transcript updates must not reorder the panel.
+  static func reordersVisiblePanel(from old: NotchState, to new: NotchState) -> Bool {
+    old.phase != new.phase
+  }
+
   static func configure(_ panel: NSPanel) {
     panel.hidesOnDeactivate = false
     panel.isMovable = false
@@ -71,11 +77,15 @@ final class NotchPresenter: NSObject, NotchPresenting {
   func present(state: NotchState) {
     hideTask?.cancel()
     presentationGeneration += 1
+    let reorders = NotchPanelPinning.reordersVisiblePanel(from: model.state, to: state)
     if model.state != state { model.state = state }
     let wasTargetVisible = targetVisible
     targetVisible = true
 
-    guard !wasTargetVisible else { return }
+    guard !wasTargetVisible else {
+      if reorders, panel.isVisible { panel.orderFrontRegardless() }
+      return
+    }
     guard let (screen, geometry) = resolveGeometry() else {
       targetVisible = false
       return
