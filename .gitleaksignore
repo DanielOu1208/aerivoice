@@ -1,0 +1,5 @@
+# Verified false positives: SHA-256 file hashes in benchmark manifests, not credentials.
+aacebb03d23c59e91875debc5eb3fb1b1db3bb46:docs/benchmarks/2026-09-25-optimization/validation.json:generic-api-key:6
+95b228783b5e0e86c3f18002c9b691f3fb66651c:benchmarks/auto-dictionary/baselines/2026-09-22-v4/followup-freeze.json:generic-api-key:4
+00ad44f30142c6689d3b825eb6a402ca3fe3737f:benchmarks/auto-dictionary/baselines/2026-09-22-v4/followup-freeze.json:generic-api-key:4
+docs/benchmarks/2026-09-25-optimization/validation.json:generic-api-key:6
