@@ -26,6 +26,19 @@ final class RuntimeDiagnosticsTests: XCTestCase {
     XCTAssertEqual(try harness.records().filter { $0.event == .clipboardRestorationFinished }.count, 1)
   }
 
+  func testIdleTimerSamplesWithoutTrappingIsolationCheck() async throws {
+    let harness = Harness(idleSampleInterval: 0.01)
+    defer { harness.remove() }
+    let samples = { try harness.records().filter {
+      [.resourceSample, .resourceUnavailable].contains($0.event) }.count }
+    harness.runtime.finishInitialization()
+    await harness.runtime.flushForTesting()
+    let before = try samples()
+    try await Task.sleep(for: .milliseconds(200))
+    await harness.runtime.flushForTesting()
+    XCTAssertGreaterThan(try samples(), before)
+  }
+
   func testCPUUnitsAndCounterResetHandling() throws {
     XCTAssertEqual(DiagnosticsClock.milliseconds(24_000_000, numer: 125, denom: 3), 1_000)
     let before = snapshot(at: 100)
@@ -253,7 +266,7 @@ private final class Harness {
   let benchmark: LatencyBenchmarkRecorder
   private let suite = "RuntimeDiagnosticsTests-\(UUID().uuidString)"
 
-  init(enabled: Bool? = true, unavailable: Bool = false) {
+  init(enabled: Bool? = true, unavailable: Bool = false, idleSampleInterval: TimeInterval? = nil) {
     let defaults = UserDefaults(suiteName: suite)!
     if let enabled { defaults.set(enabled, forKey: "latencyLogging") }
     preferences = AppPreferences(defaults: defaults)
@@ -266,7 +279,8 @@ private final class Harness {
     runtime = RuntimeDiagnosticsRecorder(
       enabled: enabled, writer: writer, launchStartedMS: 0, environment: environment,
       settings: { DiagnosticSettings(preferences) }, sampler: sampler, audioRoute: { nil },
-      nowMS: { clock.ms }, wallNow: { clock.date }, scheduleTimer: false)
+      nowMS: { clock.ms }, wallNow: { clock.date }, scheduleTimer: idleSampleInterval != nil,
+      idleSampleInterval: idleSampleInterval ?? 300)
     benchmark = LatencyBenchmarkRecorder(
       directoryURL: directory, monotonicNowMS: { clock.ms }, wallNow: { clock.date },
       environment: environment, enabled: enabled,

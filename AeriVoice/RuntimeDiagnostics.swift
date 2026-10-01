@@ -113,6 +113,7 @@ final class RuntimeDiagnosticsRecorder {
   private var phase = "idle"
   private var preparations: [UUID: Bool] = [:]
   private let scheduleTimer: Bool
+  private let idleSampleInterval: TimeInterval
 
   init(
     enabled: Bool, writer: DiagnosticsWriteQueue, launchStartedMS: Double,
@@ -122,7 +123,8 @@ final class RuntimeDiagnosticsRecorder {
     audioRoute: @escaping @Sendable () -> DiagnosticAudioRoute? = DiagnosticAudioRoute.current,
     nowMS: @escaping () -> Double = DiagnosticsClock.uptimeMS,
     wallNow: @escaping () -> Date = Date.init,
-    scheduleTimer: Bool = true
+    scheduleTimer: Bool = true,
+    idleSampleInterval: TimeInterval = 300
   ) {
     self.enabled = enabled
     self.writer = writer
@@ -135,6 +137,7 @@ final class RuntimeDiagnosticsRecorder {
     self.nowMS = nowMS
     self.wallNow = wallNow
     self.scheduleTimer = scheduleTimer
+    self.idleSampleInterval = idleSampleInterval
     signposts.setEnabled(enabled)
     if enabled {
       signposts.begin(.initialization)
@@ -336,13 +339,15 @@ final class RuntimeDiagnosticsRecorder {
       return
     }
     guard timer == nil else { return }
-    let source = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-    source.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(30))
+    // The handler inherits MainActor isolation, which Swift checks at runtime;
+    // firing it from any other queue traps the app.
+    let source = DispatchSource.makeTimerSource(queue: .main)
+    source.schedule(
+      deadline: .now() + idleSampleInterval, repeating: idleSampleInterval,
+      leeway: .milliseconds(Int(idleSampleInterval * 100)))
     source.setEventHandler { [weak self] in
-      Task { @MainActor [weak self] in
-        guard let self, self.enabled, self.activity == .idle else { return }
-        self.requestResourceSample()
-      }
+      guard let self, self.enabled, self.activity == .idle else { return }
+      self.requestResourceSample()
     }
     timer = source
     source.resume()
