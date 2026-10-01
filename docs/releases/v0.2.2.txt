@@ -1,0 +1,13 @@
+AeriVoice 0.2.2
+
+Pasting into web apps like Claude.ai
+Some web apps nest their text box deeper than AeriVoice's password-field safety check used to look, so the result was copied instead of pasted. The check now looks much further while still checking every level.
+
+Clipboard restore in terminals
+When an app redraws its screen after a paste, such as Claude Code in Ghostty, AeriVoice now restores your previous clipboard after the fallback delay in Settings > General > Clipboard.
+
+Check for Updates no longer freezes AeriVoice
+Dictation keeps working while an update message is open, and quitting no longer hangs behind it.
+
+Crash fix
+AeriVoice no longer crashes after five idle minutes when performance logging is turned on.
