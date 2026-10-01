@@ -20,8 +20,9 @@ the same element. Explicit disabled/read-only flags reject the target, including
 a read-only focused child beneath an editable ancestor.
 
 Secure-field metadata is checked through every ancestor to the application root.
-Missing parents, unknown query results, cycles, and depth exhaustion prevent
-Paste. Missing/unsupported AXSubrole is accepted because ordinary controls and
+Missing parents, unknown query results, cycles, and depth exhaustion (more than 128
+levels) prevent Paste. Web editors nest deeply: Claude.ai's input in a Chromium
+browser sits 33 levels below the application, past the earlier 32-level limit. Missing/unsupported AXSubrole is accepted because ordinary controls and
 containers omit it; this cannot guarantee safety when a third-party app conceals
 its secure-field semantics. The global secure-keyboard-input state is also
 checked at capture and immediately before dispatch, always on MainActor because

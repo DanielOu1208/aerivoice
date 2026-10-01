@@ -55,11 +55,15 @@ enum ParentLookup<Element> {
 }
 
 enum EditorAncestry {
+  /// Web apps nest editors deeply: Claude.ai's input in a Chromium browser sits 33 levels
+  /// below the application. The walk is also bounded by the caller's AX deadline.
+  static let maximumDepth = 128
+
   /// Only an explicitly verified application root completes the security walk.
   /// nil means unavailable metadata; a failure is a definite rejection and is
   /// never retried as if accessibility were still loading.
   static func resolve<Element>(
-    startingAt focus: Element, maximumDepth: Int = 32,
+    startingAt focus: Element, maximumDepth: Int = EditorAncestry.maximumDepth,
     traits: (Element) -> TextTargetTraits,
     parent: (Element) -> ParentLookup<Element>,
     same: (Element, Element) -> Bool,
