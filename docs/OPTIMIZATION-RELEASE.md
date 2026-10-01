@@ -163,7 +163,10 @@ seconds with Never, 1, 2, 3, 5, and 10-second choices. Exact editor verification
 still takes priority. When an editor cannot supply the initial text/cursor state,
 a successfully dispatched Paste can restore after this delay. Dispatch is not
 proof of insertion; an unnoticed paste failure can outlast the manual-paste window.
-Known blocked dispatches and unsuccessful exact verification leave dictation copied.
+Exact verification that cannot confirm the edit (a terminal redraw such as Claude
+Code in Ghostty, lost readback, or a focus change) also falls back to this delay,
+measured from dispatch. Known blocked dispatches, and verifiable fields that stay
+unchanged (an ignored Paste), leave dictation copied.
 
 The timer checks the clipboard ownership marker, change count, and generation.
 A new user copy wins. Rapid dictations carry the original backup forward; a later
