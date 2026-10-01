@@ -173,16 +173,36 @@ final class SparkleUserDriver: NSObject, SPUUserDriver, SPUStandardUserDriverDel
   func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) {
     showAcknowledgement(acknowledgement) { [weak self] in self?.standard.showUpdateInstalledAndRelaunched(relaunched, acknowledgement: $0) }
   }
+  var hasPendingPresentation: Bool { deferredPresentation != nil }
+
   private func presentOrDefer(_ render: @escaping () -> Void) {
     guard permitted else { return }
-    if presentationAllowed?() == true { render() }
-    else { deferredPresentation = render }
+    deferredPresentation = render
+    if presentationAllowed?() == true { schedulePresentation() }
   }
   func resumeDeferredPresentation() {
-    guard permitted, presentationAllowed?() == true else { return }
-    let render = deferredPresentation
+    guard deferredPresentation != nil else { return }
+    schedulePresentation()
+  }
+
+  /// Sparkle calls the driver from inside a main-queue block, and its alerts run modally. A
+  /// modal started there blocks every other main-queue job until it closes, including MainActor
+  /// tasks: dictation, the notch, and the quit handler's reply. A hidden "up to date" alert
+  /// therefore froze the app and deadlocked Quit. Presenting from a run-loop callout keeps the
+  /// main queue running. Clearing the pending presentation first still cancels it.
+  private func schedulePresentation() {
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) { [weak self] in
+      MainActor.assumeIsolated { self?.presentPending() }
+    }
+    CFRunLoopWakeUp(CFRunLoopGetMain())
+  }
+
+  private func presentPending() {
+    guard permitted, presentationAllowed?() == true, let render = deferredPresentation else {
+      return
+    }
     deferredPresentation = nil
-    render?()
+    render()
   }
   func dismissUpdateInstallation() {
     deferredPresentation = nil

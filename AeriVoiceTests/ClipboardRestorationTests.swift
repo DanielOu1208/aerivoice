@@ -159,6 +159,46 @@ final class ClipboardRestorationTests: XCTestCase {
     XCTAssertEqual(fixture.board.string(forType: .string), fixture.dictation)
   }
 
+  func testInconclusiveVerificationRestoresAfterDelay() async throws {
+    for redraw in [true, false] {
+      let fixture = Fixture()
+      defer { fixture.remove() }
+      fixture.restoreDelay = 0.2
+      fixture.editor.onRead = { [weak fixture] count in
+        guard count == 1, let fixture else { return }
+        // A terminal redraws its screen instead of producing the predicted edit.
+        if redraw {
+          fixture.editor.state = TextEditState(
+            text: "redrawn screen", selection: NSRange(location: 14, length: 0))
+        } else {
+          fixture.editor.readable = false
+        }
+      }
+      let target = try await fixture.capture()
+      _ = await fixture.service.insert(fixture.dictation, into: target)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertEqual(fixture.outcomes, [])
+      XCTAssertEqual(fixture.board.string(forType: .string), fixture.dictation)
+      try await waitUntil { !fixture.outcomes.isEmpty }
+      XCTAssertEqual(fixture.outcomes, [.restoredAfterDelay])
+      XCTAssertEqual(fixture.board.string(forType: .string), "previous clipboard")
+    }
+  }
+
+  func testNextRecordingLetsInconclusiveVerificationFallBack() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.restoreDelay = 0.08
+    fixture.editor.onRead = { [weak fixture] _ in fixture?.editor.readable = false }
+    let target = try await fixture.capture()
+    _ = await fixture.service.insert(fixture.dictation, into: target)
+    fixture.service.prepareForNextDictation()
+    fixture.service.invalidatePendingRestoration()
+    try await waitUntil { !fixture.outcomes.isEmpty }
+    XCTAssertEqual(fixture.outcomes, [.restoredAfterDelay])
+    XCTAssertEqual(fixture.board.string(forType: .string), "previous clipboard")
+  }
+
   func testUpdateTerminationDrainWaitsForVerifiedClipboardRestoration() async throws {
     let fixture = Fixture()
     defer { fixture.remove() }

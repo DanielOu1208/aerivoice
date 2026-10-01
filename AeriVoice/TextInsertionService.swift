@@ -276,7 +276,8 @@ final class TextInsertionService: TextInserting {
         restoration.verify(
           id: restorationID, snapshot: snapshot, before: before, expected: expected,
           source: source, markerType: Self.markerType, marker: marker,
-          ownedChangeCount: ownedChangeCount, dictation: text, report: report)
+          ownedChangeCount: ownedChangeCount, dictation: text, fallbackDelay: restoreDelay(),
+          report: report)
       } else if restoreEnabled(), readReceipt != nil {
         restoration.verifyRead(id: restorationID, source: target?.verification, report: report)
       } else if restoreEnabled(), snapshot != nil, restoreDelay() > 0 {

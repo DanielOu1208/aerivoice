@@ -167,10 +167,7 @@ final class ClipboardRestoration {
     invalidate()
     let resumedID = activate()
     pendingPaste = previous.paste
-    let remaining = ContinuousClock.now.duration(to: previous.deadline)
-    let seconds = Double(remaining.components.seconds)
-      + Double(remaining.components.attoseconds) / 1e18
-    restoreAfterDelay(id: resumedID, delay: max(0.001, seconds), report: { _ in })
+    restoreAfterDelay(id: resumedID, until: previous.deadline, report: { _ in })
   }
 
   /// Carry the original clipboard across overlapping dictations.
@@ -278,6 +275,15 @@ final class ClipboardRestoration {
     }
   }
 
+  private func restoreAfterDelay(
+    id: UUID, until deadline: ContinuousClock.Instant, report: @escaping Report
+  ) {
+    let remaining = ContinuousClock.now.duration(to: deadline)
+    let seconds = Double(remaining.components.seconds)
+      + Double(remaining.components.attoseconds) / 1e18
+    restoreAfterDelay(id: id, delay: max(0.001, seconds), report: report)
+  }
+
   func verifyRead(
     id: UUID, source: TextVerificationSource?, report: @escaping Report
   ) {
@@ -328,23 +334,38 @@ final class ClipboardRestoration {
     report(outcome)
   }
 
+  /// Exact readback takes priority. When it cannot confirm the edit (a terminal
+  /// redraw, lost readback or focus change), the fallback delay still applies,
+  /// measured from dispatch. A field that never changed ignored the Paste, so
+  /// its dictation stays copied for a manual paste.
   func verify(
     id: UUID, snapshot: ClipboardSnapshot, before: TextEditState, expected: TextEditState,
     source: TextVerificationSource, markerType: NSPasteboard.PasteboardType,
-    marker: String, ownedChangeCount: Int, dictation: String, report: @escaping Report
+    marker: String, ownedChangeCount: Int, dictation: String, fallbackDelay: TimeInterval = 0,
+    report: @escaping Report
   ) {
     guard isCurrent(id) else { report(.superseded); return }
     self.report = report
     let expires = ContinuousClock.now.advanced(by: timing.timeout)
+    let fallback = fallbackDelay.isFinite && fallbackDelay > 0
+      ? ContinuousClock.now.advanced(by: .seconds(min(fallbackDelay, 30))) : nil
+    if let fallback {
+      // Overlapping dictations and the update drain treat this as a delayed paste.
+      delayedDeadline = fallback
+      pendingDelay = max(timing.timeout, ContinuousClock.now.duration(to: fallback))
+    }
     task = Task { [weak self] in
       var outcome: ClipboardRestorationOutcome = .unverified
+      var unchanged = false
       while !Task.isCancelled, ContinuousClock.now < expires {
         guard let self else { return }
         guard self.ownsClipboard(id, markerType, marker, ownedChangeCount) else {
           outcome = .superseded
           break
         }
-        guard let state = await source.read() else { break }
+        let read = await source.read()
+        unchanged = read == before
+        guard let state = read else { break }
         guard !Task.isCancelled, self.isCurrent(id), ContinuousClock.now < expires else { break }
         if state == expected {
           do { try await Task.sleep(for: self.timing.grace) } catch { break }
@@ -367,7 +388,14 @@ final class ClipboardRestoration {
         guard state == before else { break }
         do { try await Task.sleep(for: self.timing.poll) } catch { break }
       }
-      self?.complete(id: id, outcome: outcome)
+      guard let self else { return }
+      if outcome == .unverified, !unchanged, let fallback, !Task.isCancelled, self.isCurrent(id) {
+        let completion = self.report ?? { _ in }
+        self.report = nil
+        self.restoreAfterDelay(id: id, until: fallback, report: completion)
+        return
+      }
+      self.complete(id: id, outcome: outcome)
     }
   }
 

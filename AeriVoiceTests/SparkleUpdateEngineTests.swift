@@ -81,6 +81,20 @@ final class SparkleUpdateEngineTests: XCTestCase {
     XCTAssertEqual(acknowledgements, 1)
   }
 
+  func testAllowedPresentationWaitsForTheRunLoopAndStaysCancellable() {
+    // A modal opened inside Sparkle's main-queue callback stalls every MainActor task.
+    let driver = SparkleUserDriver(hostBundle: .main)
+    driver.networkAllowed = { true }
+    driver.presentationAllowed = { true }
+    var acknowledgements = 0
+    driver.showUpdaterError(NSError(domain: "test", code: 1)) { acknowledgements += 1 }
+    XCTAssertTrue(driver.hasPendingPresentation, "Presentation must not run inside the callback")
+    driver.cancelCurrentCycle()
+    XCTAssertFalse(driver.hasPendingPresentation)
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    XCTAssertEqual(acknowledgements, 1)
+  }
+
   func testDeferredReadyReplyRemainsCancellableWithoutPresentation() {
     let driver = SparkleUserDriver(hostBundle: .main)
     driver.networkAllowed = { true }

@@ -89,6 +89,17 @@ final class InsertionSafetyTests: XCTestCase {
     XCTAssertEqual(resolve(parents: [.parent(1), .parent(0)]), .failure(.targetUnavailable))
   }
 
+  func testDeeplyNestedWebEditorResolves() {
+    // Claude.ai's input in a Chromium browser is 33 levels below the application.
+    let parents: [ParentLookup<Int>] = (1...33).map { .parent($0) } + [.root]
+    XCTAssertEqual(resolve(parents: parents), .success(0))
+  }
+
+  func testSecureAncestorDeepInAWebPageStillRejects() {
+    let parents: [ParentLookup<Int>] = (1...100).map { .parent($0) } + [.root]
+    XCTAssertEqual(resolve(parents: parents, secureIndex: 90), .failure(.secureField))
+  }
+
   func testDeepSecureAncestorIsNotSkipped() {
     let parents: [ParentLookup<Int>] = (1...12).map { .parent($0) } + [.root]
     XCTAssertEqual(resolve(parents: parents, secureIndex: 12), .failure(.secureField))
@@ -130,7 +141,7 @@ final class InsertionSafetyTests: XCTestCase {
 
   private func resolve(
     parents: [ParentLookup<Int>], secureIndex: Int? = nil, unknownIndex: Int? = nil,
-    maximumDepth: Int = 32
+    maximumDepth: Int = EditorAncestry.maximumDepth
   ) -> Result<Int, PasteBlockReason>? {
     EditorAncestry.resolve(
       startingAt: 0, maximumDepth: maximumDepth,
