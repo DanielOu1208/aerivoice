@@ -156,6 +156,9 @@ extension DictationCoordinatorTests {
     private var declinedStarts = 0
     private var startRequests: [Bool] = []
     private var startContinuation: CheckedContinuation<Bool, Never>?
+    private var releaseStops: [UInt64] = []
+    private var holdsReleaseStop = false
+    private var pendingReleaseStop: ReleaseStop?
     private let frameCount: Int
     private let waitsForStartResolution: Bool
     /// Models a Bluetooth input: a start that declines Bluetooth throws.
@@ -188,6 +191,33 @@ extension DictationCoordinatorTests {
     /// Whether each start request declined Bluetooth, in order.
     var startRequestsDecliningBluetooth: [Bool] { lock.withLock { startRequests } }
     var hasPendingStart: Bool { lock.withLock { startContinuation != nil } }
+    /// Release host times passed to beginStop(atHostTime:), in order.
+    var releaseStopHostTimes: [UInt64] { lock.withLock { releaseStops } }
+    var hasPendingReleaseStop: Bool { lock.withLock { pendingReleaseStop != nil } }
+    /// When set, a release stop keeps recording like the real service does for its last
+    /// block, until finishReleaseStop() or stop().
+    var holdsReleaseStopUntilFinished: Bool {
+      get { lock.withLock { holdsReleaseStop } }
+      set { lock.withLock { holdsReleaseStop = newValue } }
+    }
+
+    func beginStop(atHostTime hostTime: UInt64) -> ReleaseStop {
+      let release = ReleaseStop()
+      let holds = lock.withLock {
+        releaseStops.append(hostTime)
+        if holdsReleaseStop { pendingReleaseStop = release }
+        return holdsReleaseStop
+      }
+      guard !holds else { return release }
+      stop()
+      return .finished
+    }
+
+    /// The block holding the release arrived: the microphone closes.
+    func finishReleaseStop() { stop() }
+
+    /// Audio the microphone delivers late, such as the block holding the release.
+    func deliverTrailingAudio() { onAudio?(Data(repeating: 1, count: 3_200)) }
 
     func prepare() async { lock.withLock { preparations += 1 } }
     func discardPreparation() { lock.withLock { discards += 1 } }
@@ -255,10 +285,14 @@ extension DictationCoordinatorTests {
       }
     }
     func stop() {
-      lock.withLock {
+      let release = lock.withLock {
         stopped = true
         stops += 1
+        defer { pendingReleaseStop = nil }
+        return pendingReleaseStop
       }
+      // Like the real service, an explicit stop ends a release wait at once.
+      release?.finish()
     }
   }
 

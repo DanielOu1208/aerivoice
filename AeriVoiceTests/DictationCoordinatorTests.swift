@@ -316,10 +316,17 @@ final class DictationCoordinatorTests: XCTestCase {
     fixture.coordinator.toggle()
     try await waitUntil { fixture.coordinator.phase == .recording }
     XCTAssertEqual(fixture.inserter.captureCount, 0)
-    fixture.inserter.onCapture = { XCTAssertTrue(fixture.audio.didStop) }
+    // Pinned at the release itself. The microphone already knows the release and is still
+    // finishing its last block.
+    fixture.audio.holdsReleaseStopUntilFinished = true
+    fixture.inserter.onCapture = {
+      XCTAssertEqual(fixture.audio.releaseStopHostTimes.count, 1)
+      XCTAssertFalse(fixture.audio.didStop)
+    }
     fixture.coordinator.toggle()
     XCTAssertEqual(fixture.inserter.captureCount, 1)
     fixture.inserter.target = TextInsertionTarget { _ in .pasteSent }
+    fixture.audio.finishReleaseStop()
     try await waitUntil { fixture.coordinator.phase == .success }
     XCTAssertEqual(fixture.inserter.receivedTarget?.id, original.id)
     XCTAssertEqual(fixture.inserter.captureCount, 1)

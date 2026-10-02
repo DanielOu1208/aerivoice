@@ -579,6 +579,39 @@ enum VocabularyNormalizer {
   }
 }
 
+/// A microphone closing at the release. It may finish before anyone waits on it.
+final class ReleaseStop: @unchecked Sendable {
+  private let lock = NSLock()
+  private var done = false
+  private var waiter: CheckedContinuation<Void, Never>?
+
+  static var finished: ReleaseStop {
+    let stop = ReleaseStop()
+    stop.finish()
+    return stop
+  }
+
+  func finish() {
+    let waiter = lock.withLock {
+      done = true
+      defer { self.waiter = nil }
+      return self.waiter
+    }
+    waiter?.resume()
+  }
+
+  /// Returns once the microphone has closed. One waiter at a time.
+  func wait() async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      let finished = lock.withLock {
+        if !done { waiter = continuation }
+        return done
+      }
+      if finished { continuation.resume() }
+    }
+  }
+}
+
 protocol AudioCapturing: AnyObject, Sendable {
   var onAudio: ((Data) -> Void)? { get set }
   /// Called off the main thread when capture stops itself and cannot resume on another input.
@@ -593,9 +626,17 @@ protocol AudioCapturing: AnyObject, Sendable {
     async throws -> AudioStartReport
   func cancelStart()
   func stop()
+  /// Ends capture at the release (a host time), keeping audio said up to it. Returns at once;
+  /// the microphone has closed when the returned stop finishes.
+  func beginStop(atHostTime hostTime: UInt64) -> ReleaseStop
 }
 
 extension AudioCapturing {
+  func beginStop(atHostTime hostTime: UInt64) -> ReleaseStop {
+    stop()
+    return .finished
+  }
+
   func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws
     -> AudioStartReport
   {

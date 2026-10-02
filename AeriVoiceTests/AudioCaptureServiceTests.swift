@@ -356,6 +356,193 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(delivered.count / MemoryLayout<Int16>.size, 1_600, accuracy: 32)
   }
 
+  // MARK: Ending at the release
+
+  /// 100 ms at 48 kHz, as the hardware tap delivers it; 1,600 samples once converted to 16 kHz.
+  private let block: AVAudioFrameCount = 4_800
+
+  private func host(_ base: UInt64, plus milliseconds: Double) -> UInt64 {
+    AVAudioTime.hostTime(
+      forSeconds: AVAudioTime.seconds(forHostTime: base) + milliseconds / 1_000)
+  }
+
+  private func samples(_ bytes: LockedBytes) -> Int { bytes.count / MemoryLayout<Int16>.size }
+
+  /// Starts a release stop and waits until it is waiting for its block.
+  private func beginReleaseStop(
+    _ service: AudioCaptureService, at release: UInt64
+  ) async throws -> Task<Void, Never> {
+    let stop = service.beginStop(atHostTime: release)
+    let stopping = Task { await stop.wait() }
+    try await waitUntil { service.isWaitingForReleaseBlock }
+    return stopping
+  }
+
+  func testReleaseKeepsOnlyTheAudioBeforeIt() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let start = mach_absolute_time()
+    let stopping = try await beginReleaseStop(service, at: host(start, plus: 50))
+    XCTAssertEqual(fixture.engines[0].stopCount, 0, "The block holding the release is awaited")
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: start)
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 800, accuracy: 48)
+  }
+
+  func testBlocksBeforeTheReleaseAreKeptWholeWhileWaiting() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let start = mach_absolute_time()
+    let stopping = try await beginReleaseStop(service, at: host(start, plus: 150))
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: start)
+    // The first block ends before the release, so capture keeps waiting.
+    XCTAssertTrue(service.isWaitingForReleaseBlock)
+    XCTAssertEqual(fixture.engines[0].stopCount, 0)
+    fixture.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: host(start, plus: 100))
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 2_400, accuracy: 48)
+  }
+
+  func testBlockThatStartsAfterTheReleaseIsDropped() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let release = mach_absolute_time()
+    let stopping = try await beginReleaseStop(service, at: release)
+    fixture.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: host(release, plus: 10))
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 0)
+  }
+
+  func testBlockWithoutATimeIsKeptWholeAndEndsCapture() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let stopping = try await beginReleaseStop(service, at: mach_absolute_time())
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: nil)
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 1_600, accuracy: 32)
+  }
+
+  func testReleaseStopGivesUpWhenNoBlockArrives() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service(releaseBlockTimeout: .milliseconds(100))
+    _ = try await service.start()
+    let started = ContinuousClock.now
+    await service.beginStop(atHostTime: mach_absolute_time()).wait()
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertLessThan(started.duration(to: .now), .seconds(3))
+  }
+
+  func testStopDuringAReleaseWaitEndsItAtOnce() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    _ = try await service.start()
+    let stopping = try await beginReleaseStop(service, at: host(mach_absolute_time(), plus: 500))
+    let stopped = ContinuousClock.now
+    service.stop()
+    await stopping.value
+    XCTAssertLessThan(stopped.duration(to: .now), .seconds(1))
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+  }
+
+  func testReleaseStopDoesNotWaitForAnEngineThatStopped() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    _ = try await service.start()
+    fixture.engines[0].stop()
+    let started = ContinuousClock.now
+    await service.beginStop(atHostTime: host(mach_absolute_time(), plus: 500)).wait()
+    XCTAssertLessThan(started.duration(to: .now), .seconds(1))
+  }
+
+  func testReleaseAfterItsBlockWasDeliveredEndsCaptureAtOnce() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let start = mach_absolute_time()
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: start)
+    XCTAssertFalse(service.isWaitingForReleaseBlock)
+    // The block holding the release went through before the release reached the service.
+    let stopping = ContinuousClock.now
+    await service.beginStop(atHostTime: host(start, plus: 60)).wait()
+    XCTAssertLessThan(stopping.duration(to: .now), .seconds(1), "No block is left to wait for")
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 1_600, accuracy: 32)
+  }
+
+  func testInputChangeDuringAReleaseWaitOpensNoOtherMicrophone() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    _ = try await service.start()
+    let stopping = try await beginReleaseStop(service, at: host(mach_absolute_time(), plus: 500))
+    fixture.route = AudioInputRoute(deviceID: AudioDeviceID(2), sampleRate: 48_000, channels: 1)
+    // A running engine can still deliver the block holding the release.
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertTrue(service.isWaitingForReleaseBlock)
+    // A stopped one cannot, so capture ends without moving to the new input.
+    let waited = ContinuousClock.now
+    fixture.engines[0].stop()
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    await stopping.value
+    XCTAssertLessThan(waited.duration(to: .now), .seconds(1))
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(fixture.engines.count, 1)
+  }
+
+  func testReleaseCutArithmetic() {
+    let start = mach_absolute_time()
+    func cut(_ milliseconds: Double, start blockStart: UInt64? = start) -> (AVAudioFrameCount, Bool) {
+      let result = CaptureRelease.cut(
+        release: host(start, plus: milliseconds), blockStart: blockStart, frames: block,
+        sampleRate: 48_000)
+      return (result.keep, result.reachesRelease)
+    }
+    let half = cut(50)
+    XCTAssertEqual(Double(half.0), 2_400, accuracy: 2)
+    XCTAssertTrue(half.1)
+    let before = cut(150)
+    XCTAssertEqual(before.0, block)
+    XCTAssertFalse(before.1)
+    let after = cut(-10)
+    XCTAssertEqual(after.0, 0)
+    XCTAssertTrue(after.1)
+    let unknown = cut(50, start: nil)
+    XCTAssertEqual(unknown.0, block)
+    XCTAssertTrue(unknown.1)
+  }
+
+  func testPrefixCopiesTheFirstFrames() throws {
+    let buffer = try makeBuffer(sampleRate: 48_000, frameCount: 480)
+    let prefix = try XCTUnwrap(buffer.prefix(100))
+    XCTAssertEqual(prefix.frameLength, 100)
+    XCTAssertEqual(prefix.format, buffer.format)
+    let source = try XCTUnwrap(buffer.floatChannelData?[0])
+    let copied = try XCTUnwrap(prefix.floatChannelData?[0])
+    for frame in 0..<100 { XCTAssertEqual(copied[frame], source[frame]) }
+  }
+
   func testConverterMixesAllInputChannels() throws {
     let converter = try XCTUnwrap(PCM16AudioConverter())
     // Speech only on the second input, as on a two-channel interface.
@@ -467,7 +654,10 @@ private final class AudioPreparationFixture: @unchecked Sendable {
   }
   var engines: [FakeCaptureAudioEngine] { lock.withLock { created } }
 
-  func service(restartDebounce: DispatchTimeInterval = .milliseconds(10)) -> AudioCaptureService {
+  func service(
+    restartDebounce: DispatchTimeInterval = .milliseconds(10),
+    releaseBlockTimeout: DispatchTimeInterval = .seconds(5)
+  ) -> AudioCaptureService {
     AudioCaptureService(
       makeEngine: { _ in
         self.lock.withLock {
@@ -475,7 +665,8 @@ private final class AudioPreparationFixture: @unchecked Sendable {
           self.created.append(engine)
           return engine
         }
-      }, currentRoute: { self.optionalRoute }, restartDebounce: restartDebounce)
+      }, currentRoute: { self.optionalRoute }, restartDebounce: restartDebounce,
+      releaseBlockTimeout: releaseBlockTimeout)
   }
 }
 
@@ -484,7 +675,7 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   private let object = NSObject()
   private let prepareFails: Bool
   private let startFails: Bool
-  private var bufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)?
+  private var bufferHandler: (@Sendable (AVAudioPCMBuffer, UInt64?) -> Void)?
   private let prepareEntered: XCTestExpectation?
   private let prepareGate: DispatchSemaphore?
   private let startEntered: XCTestExpectation?
@@ -521,7 +712,7 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
 
   func start(
     checkCancellation: @Sendable () throws -> Void,
-    onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
+    onBuffer: @escaping @Sendable (AVAudioPCMBuffer, UInt64?) -> Void
   ) throws -> CaptureEngineStartSteps {
     startEntered?.fulfill()
     if let startGate { XCTAssertEqual(startGate.wait(timeout: .now() + 3), .success) }
@@ -537,8 +728,9 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   static let steps = CaptureEngineStartSteps(
     tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6))
 
-  func emit(_ buffer: AVAudioPCMBuffer) {
-    lock.withLock { bufferHandler }?(buffer)
+  /// `hostTime` is when the block's first frame was captured; nil models an unknown time.
+  func emit(_ buffer: AVAudioPCMBuffer, hostTime: UInt64? = nil) {
+    lock.withLock { bufferHandler }?(buffer, hostTime)
   }
 
   func stop() { lock.withLock { stops += 1 } }

@@ -46,7 +46,7 @@ Turning logging off cancels the idle timer, stops signposts and new collection, 
 | `audioTapInstall` | Checking the input format and installing the capture tap |
 | `audioEnginePrepare` | Preparing the engine again now that it has a tap |
 | `audioEngineStart` | Starting the hardware |
-| `audioStop` | Closing the microphone at stop, including the wait for the audio queue and the resampler flush |
+| `audioStop` | Closing the microphone at stop, from the release: the wait for the audio block holding the release (at most one ~100 ms block), the audio queue and the resampler flush. It runs alongside `targetPin`, so the two overlap |
 | `targetPin` | Pinning the target app, window, and field at stop, on the main thread |
 | `editorLookup` | Finding the editor from the pinned focus, off the main thread |
 | `prePasteProbe` | The read before Paste that serves clipboard restoration |

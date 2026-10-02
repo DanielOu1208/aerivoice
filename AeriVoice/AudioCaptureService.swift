@@ -10,11 +10,14 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   /// Device switches arrive as bursts (default change, then format renegotiation).
   static let restartDebounce: DispatchTimeInterval = .milliseconds(150)
   static let maximumRestarts = 3
+  /// Longest wait for the block holding the release: one ~100 ms tap block plus headroom.
+  static let releaseBlockTimeout: DispatchTimeInterval = .milliseconds(200)
 
   private let queue = DispatchQueue(label: "com.danielou.AeriVoice.audio", qos: .userInteractive)
   private let makeEngine: @Sendable (AudioInputRoute) -> CaptureAudioEngine
   private let currentRoute: @Sendable () -> AudioInputRoute?
   private let restartDebounce: DispatchTimeInterval
+  private let releaseBlockTimeout: DispatchTimeInterval
   private let lifecycleLock = NSLock()
   private var lifecycleGeneration = UUID()
   private var engine: CaptureAudioEngine?
@@ -27,6 +30,16 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   private var restartToken: UUID?
   private var restartCount = 0
   private var samplesToDiscard = 0
+  private var pendingRelease: PendingRelease?
+  /// Host time just after the last block delivered whole.
+  private var lastBlockEnd: UInt64?
+
+  /// A stop waiting for the tap block that holds the release.
+  private struct PendingRelease {
+    let hostTime: UInt64
+    let token: UUID
+    let finished: () -> Void
+  }
 
   init(
     makeEngine: @escaping @Sendable (AudioInputRoute) -> CaptureAudioEngine = { route in
@@ -35,11 +48,13 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     currentRoute: @escaping @Sendable () -> AudioInputRoute? = {
       AudioInputRoute.current(preferredDeviceUID: AppPreferences.storedInputDeviceUID())
     },
-    restartDebounce: DispatchTimeInterval = AudioCaptureService.restartDebounce
+    restartDebounce: DispatchTimeInterval = AudioCaptureService.restartDebounce,
+    releaseBlockTimeout: DispatchTimeInterval = AudioCaptureService.releaseBlockTimeout
   ) {
     self.makeEngine = makeEngine
     self.currentRoute = currentRoute
     self.restartDebounce = restartDebounce
+    self.releaseBlockTimeout = releaseBlockTimeout
   }
 
   deinit {
@@ -143,6 +158,40 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     queue.sync { stopOnQueue(flushingConverter: true) }
   }
 
+  /// Ends capture at the release. Tap blocks are ~100 ms and a partly filled one is dropped
+  /// when the engine stops, so stopping at once loses the end of a word said right before
+  /// release. Instead capture runs until the block holding `hostTime` arrives, keeps only its
+  /// frames before the release, then stops. A stalled input stops after `releaseBlockTimeout`;
+  /// stop(), an interruption or a new start end the wait at once. The release reaches the
+  /// queue before any later block, so call this as soon as the shortcut is released.
+  func beginStop(atHostTime hostTime: UInt64) -> ReleaseStop {
+    lifecycleLock.withLock { lifecycleGeneration = UUID() }
+    let stop = ReleaseStop()
+    queue.async {
+      // An engine that has stopped delivering has no block left to wait for, and one whose
+      // block holding the release has already gone through has nothing left to keep.
+      guard self.recording, self.engine?.isRunning == true, self.pendingRelease == nil,
+        !(self.lastBlockEnd.map { $0 >= hostTime } ?? false)
+      else {
+        self.stopOnQueue(flushingConverter: true)
+        stop.finish()
+        return
+      }
+      // A restart scheduled just before release would open a microphone only to close it.
+      self.restartToken = nil
+      let token = UUID()
+      self.pendingRelease = PendingRelease(hostTime: hostTime, token: token, finished: stop.finish)
+      self.queue.asyncAfter(deadline: .now() + self.releaseBlockTimeout) { [weak self] in
+        guard let self, self.pendingRelease?.token == token else { return }
+        self.stopOnQueue(flushingConverter: true)
+      }
+    }
+    return stop
+  }
+
+  /// Whether a release stop is waiting for its block. For tests.
+  var isWaitingForReleaseBlock: Bool { queue.sync { pendingRelease != nil } }
+
   private func isCurrent(_ generation: UUID) -> Bool {
     lifecycleLock.withLock { lifecycleGeneration == generation }
   }
@@ -172,7 +221,11 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
       guard let self, let engine else { return }
       self.queue.async {
         guard self.engine === engine else { return }
-        if self.recording {
+        if self.pendingRelease != nil {
+          // Capture ends at the release, so it never moves to another input. A stopped engine
+          // has no block holding the release left to deliver.
+          if !engine.isRunning { self.stopOnQueue(flushingConverter: true) }
+        } else if self.recording {
           self.scheduleRestartOnQueue()
         } else {
           self.stopOnQueue()
@@ -230,9 +283,9 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   ) throws -> CaptureEngineStartSteps {
     let generation = UUID()
     captureGeneration = generation
-    return try engine.start(checkCancellation: checkCancellation) { [weak self] buffer in
+    return try engine.start(checkCancellation: checkCancellation) { [weak self] buffer, hostTime in
       guard let service = self else { return }
-      service.queue.async { service.convert(buffer, generation: generation) }
+      service.queue.async { service.convert(buffer, hostTime: hostTime, generation: generation) }
     }
   }
 
@@ -288,12 +341,28 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     converter = nil
     recording = false
     samplesToDiscard = 0
+    lastBlockEnd = nil
+    if let pendingRelease {
+      self.pendingRelease = nil
+      pendingRelease.finished()
+    }
   }
 
-  private func convert(_ input: AVAudioPCMBuffer, generation: UUID) {
+  private func convert(_ input: AVAudioPCMBuffer, hostTime: UInt64?, generation: UUID) {
     guard captureGeneration == generation, recording, let converter else { return }
-    guard let data = converter.convert(input) else { return }
-    deliver(data)
+    guard let release = pendingRelease?.hostTime else {
+      if let data = converter.convert(input) { deliver(data) }
+      lastBlockEnd = hostTime.map {
+        $0 + AVAudioTime.hostTime(forSeconds: Double(input.frameLength) / input.format.sampleRate)
+      }
+      return
+    }
+    let cut = CaptureRelease.cut(
+      release: release, blockStart: hostTime, frames: input.frameLength,
+      sampleRate: input.format.sampleRate)
+    let kept = cut.keep == input.frameLength ? input : input.prefix(cut.keep)
+    if cut.keep > 0, let kept, let data = converter.convert(kept) { deliver(data) }
+    if cut.reachesRelease { stopOnQueue(flushingConverter: true) }
   }
 
   private func deliver(_ data: Data) {
@@ -306,6 +375,42 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     samplesToDiscard -= dropped
     guard dropped < samples else { return }
     onAudio?(Data(data.dropFirst(dropped * MemoryLayout<Int16>.size)))
+  }
+}
+
+/// Where the release falls within a tap block. Pure, so the arithmetic is testable.
+enum CaptureRelease {
+  /// How many of the block's frames came before the release, and whether the block reaches
+  /// it (so capture can stop). A block with no known start time is kept whole and ends capture.
+  static func cut(
+    release: UInt64, blockStart: UInt64?, frames: AVAudioFrameCount, sampleRate: Double
+  ) -> (keep: AVAudioFrameCount, reachesRelease: Bool) {
+    guard let blockStart, sampleRate > 0 else { return (frames, true) }
+    let seconds = AVAudioTime.seconds(forHostTime: release)
+      - AVAudioTime.seconds(forHostTime: blockStart)
+    let before = (seconds * sampleRate).rounded(.down)
+    guard before > 0 else { return (0, true) }
+    guard before < Double(frames) else { return (frames, before == Double(frames)) }
+    return (AVAudioFrameCount(before), true)
+  }
+}
+
+extension AVAudioPCMBuffer {
+  /// A copy of the first `frames` frames, in the same format.
+  func prefix(_ frames: AVAudioFrameCount) -> AVAudioPCMBuffer? {
+    let count = min(frames, frameLength)
+    guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(count, 1)) else {
+      return nil
+    }
+    let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+    let source = UnsafeMutableAudioBufferListPointer(mutableAudioBufferList)
+    let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+    for (from, to) in zip(source, destination) {
+      guard let fromData = from.mData, let toData = to.mData else { return nil }
+      toData.copyMemory(from: fromData, byteCount: Int(count) * bytesPerFrame)
+    }
+    copy.frameLength = count
+    return copy
   }
 }
 

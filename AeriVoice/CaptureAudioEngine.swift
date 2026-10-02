@@ -7,9 +7,11 @@ protocol CaptureAudioEngine: AnyObject, Sendable {
   var notificationObject: AnyObject { get }
   var isRunning: Bool { get }
   func prepare() throws
+  /// `onBuffer` also receives the host time of the block's first frame, or nil when the
+  /// engine doesn't know it.
   func start(
     checkCancellation: @Sendable () throws -> Void,
-    onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
+    onBuffer: @escaping @Sendable (AVAudioPCMBuffer, UInt64?) -> Void
   ) throws -> CaptureEngineStartSteps
   func stop()
 }
@@ -50,7 +52,7 @@ final class SystemCaptureAudioEngine: CaptureAudioEngine, @unchecked Sendable {
 
   func start(
     checkCancellation: @Sendable () throws -> Void,
-    onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
+    onBuffer: @escaping @Sendable (AVAudioPCMBuffer, UInt64?) -> Void
   ) throws -> CaptureEngineStartSteps {
     let clock = ContinuousClock()
     var steps = CaptureEngineStartSteps()
@@ -58,8 +60,8 @@ final class SystemCaptureAudioEngine: CaptureAudioEngine, @unchecked Sendable {
     var started = clock.now
     try validateInput()
     try checkCancellation()
-    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
-      onBuffer(buffer)
+    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, when in
+      onBuffer(buffer, when.isHostTimeValid ? when.hostTime : nil)
     }
     tapInstalled = true
     steps.tapInstall = started.duration(to: clock.now)

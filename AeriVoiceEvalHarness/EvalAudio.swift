@@ -76,7 +76,8 @@ final class EvalCaptureEngine: CaptureAudioEngine, @unchecked Sendable {
   private var lateFrames = 0
   private var maxLatenessMS = 0.0
   var notificationObject: AnyObject { self }
-  var isRunning: Bool { lock.withLock { feeder != nil } }
+  /// A finished feed delivers no more blocks, so a stop at release doesn't wait for one.
+  var isRunning: Bool { lock.withLock { feeder != nil && !complete } }
   var finished: Bool { lock.withLock { complete } }
   var feedSummary: [String: Any] {
     lock.withLock { ["expected_frames": fixture.frames, "emitted_frames": emittedFrames,
@@ -91,7 +92,7 @@ final class EvalCaptureEngine: CaptureAudioEngine, @unchecked Sendable {
   func prepare() throws { events.emit("engine_prepared", ["hardware": false]) }
 
   func start(checkCancellation: @Sendable () throws -> Void,
-             onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws -> CaptureEngineStartSteps {
+             onBuffer: @escaping @Sendable (AVAudioPCMBuffer, UInt64?) -> Void) throws -> CaptureEngineStartSteps {
     try checkCancellation()
     let token = UUID()
     lock.withLock {
@@ -121,7 +122,10 @@ final class EvalCaptureEngine: CaptureAudioEngine, @unchecked Sendable {
           return true
         }
         guard valid, !Task.isCancelled else { return }
-        onBuffer(buffer)
+        // Like a hardware tap, the block's first frame was captured one block ago.
+        let blockSeconds = Double(buffer.frameLength) / fixture.rate
+        onBuffer(buffer, AVAudioTime.hostTime(
+          forSeconds: AVAudioTime.seconds(forHostTime: mach_absolute_time()) - blockSeconds))
       }
       guard let self else { return }
       let valid = self.lock.withLock {

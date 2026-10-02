@@ -817,11 +817,8 @@ final class DictationCoordinator: ObservableObject {
     benchmark.mark(.stopRequested)
     let taskID = UUID()
     stopTaskID = taskID
-    // The microphone closes right away and the stop cue plays after it, so the cue is never
-    // transcribed.
-    if let audioStop = stopAudioIfNeeded(playCue: true) {
-      benchmark.recordStep(.audioStop, audioStop)
-    }
+    // The microphone learns the release before anything else, so no audio after it is kept.
+    let closingAudio = closeAudioAtRelease(mach_absolute_time())
     // The insertion target is the app focused at release.
     let pinStarted = ContinuousClock.now
     let targetCapture = inserter.captureTarget()
@@ -830,6 +827,7 @@ final class DictationCoordinator: ObservableObject {
     let work = observeWork("stop")
     stopTask = Task { @MainActor [weak self] in
       defer { work?.finish() }
+      if let closingAudio { await self?.finishClosingAudio(closingAudio) }
       await self?.stop(targetCapture: targetCapture)
       guard let self, self.stopTaskID == taskID else { return }
       self.stopTask = nil
@@ -862,16 +860,56 @@ final class DictationCoordinator: ObservableObject {
     if let value = steps.revalidation { benchmark.recordStep(.pasteRevalidation, value) }
   }
 
+  /// A running microphone closing at the release.
+  private struct ClosingAudio {
+    let stop: ReleaseStop
+    let requested: ContinuousClock.Instant
+  }
+
+  /// A running microphone keeps recording until its block holding `release` (a host time)
+  /// arrives, at most one ~100 ms block, and keeps only what was said before release, so the
+  /// end of the last word isn't lost. One still starting stops at once.
+  private func closeAudioAtRelease(_ release: UInt64) -> ClosingAudio? {
+    guard !audioStopped, !audioStarting else {
+      if let audioStop = stopAudioIfNeeded(playCue: true) {
+        benchmark.recordStep(.audioStop, audioStop)
+      }
+      return nil
+    }
+    recordRecordingDuration()
+    return ClosingAudio(stop: audio.beginStop(atHostTime: release), requested: .now)
+  }
+
+  /// The stop cue plays once the microphone has closed, so it is never transcribed.
+  private func finishClosingAudio(_ closing: ClosingAudio) async {
+    await closing.stop.wait()
+    // A cancel or failure during the wait already stopped capture and finished up.
+    guard !audioStopped else { return }
+    audioStopped = true
+    finishAudioStop(playCue: true, prepareNext: true)
+    benchmark.recordStep(.audioStop, closing.requested.duration(to: .now))
+  }
+
+  private func recordRecordingDuration() {
+    guard let started = captureStartedAt else { return }
+    let duration = started.duration(to: .now).components
+    recordingSeconds = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
+    captureStartedAt = nil
+  }
+
+  private func finishAudioStop(playCue: Bool, prepareNext: Bool) {
+    if prepareNext { prepareNextAudio() }
+    muter.restore()
+    if playCue { play(.stop) }
+    limitTask?.cancel()
+  }
+
   /// Returns how long closing a running microphone took.
   @discardableResult
   private func stopAudioIfNeeded(playCue: Bool, prepareNext: Bool = true) -> Duration? {
     guard !audioStopped || audioStarting else { return nil }
     audioStopped = true
-    if let started = captureStartedAt {
-      let duration = started.duration(to: .now).components
-      recordingSeconds = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
-      captureStartedAt = nil
-    }
+    recordRecordingDuration()
     var stopDuration: Duration?
     if audioStarting {
       startTask?.cancel()
@@ -885,10 +923,7 @@ final class DictationCoordinator: ObservableObject {
       audio.stop()
       stopDuration = stopping.duration(to: .now)
     }
-    if prepareNext { prepareNextAudio() }
-    muter.restore()
-    if playCue { play(.stop) }
-    limitTask?.cancel()
+    finishAudioStop(playCue: playCue, prepareNext: prepareNext)
     return stopDuration
   }
 

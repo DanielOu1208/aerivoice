@@ -40,13 +40,56 @@ extension DictationCoordinatorTests {
     try await waitUntil { fixture.coordinator.phase == .recording }
 
     fixture.coordinator.toggle()
-    // No wait after stop: the microphone is closed before the stop cue plays.
+    // The microphone learns the release at once and closes before the stop cue plays.
+    XCTAssertEqual(fixture.audio.releaseStopHostTimes.count, 1)
     XCTAssertTrue(fixture.audio.didStop)
+    XCTAssertEqual(fixture.cuePlayer.playedCues, [.start])
+    try await waitUntil { fixture.cuePlayer.playedCues == [.start, .stop] }
     XCTAssertEqual(fixture.audio.stopCount, 1)
-    XCTAssertEqual(fixture.cuePlayer.playedCues, [.start, .stop])
     try await waitUntil { fixture.coordinator.phase == .success }
     XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
     XCTAssertEqual(fixture.audio.stopCount, 1)
+  }
+
+  func testRecordingContinuesUntilTheBlockHoldingTheReleaseArrives() async throws {
+    let fixture = makeFixture(soundCues: true)
+    fixture.audio.holdsReleaseStopUntilFinished = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    let releasedAfter = mach_absolute_time()
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.audio.hasPendingReleaseStop }
+    XCTAssertGreaterThanOrEqual(try XCTUnwrap(fixture.audio.releaseStopHostTimes.first), releasedAfter)
+    // Still recording: the insertion target is pinned, but the stop cue waits for the mic.
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    XCTAssertEqual(fixture.inserter.captureCount, 1)
+    XCTAssertFalse(fixture.audio.didStop)
+    XCTAssertEqual(fixture.cuePlayer.playedCues, [.start])
+    let framesBefore = fixture.transcriber.sentFrames.count
+    fixture.audio.deliverTrailingAudio()
+    fixture.audio.finishReleaseStop()
+    try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertEqual(fixture.cuePlayer.playedCues, [.start, .stop])
+    XCTAssertEqual(fixture.audio.stopCount, 1)
+    XCTAssertGreaterThan(
+      fixture.transcriber.sentFrames.count, framesBefore,
+      "Audio from the block holding the release is still transcribed")
+  }
+
+  func testCancelDuringTheReleaseWaitStopsAtOnceWithoutTheStopCue() async throws {
+    let fixture = makeFixture(soundCues: true)
+    fixture.audio.holdsReleaseStopUntilFinished = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.audio.hasPendingReleaseStop }
+    fixture.coordinator.cancel()
+    XCTAssertTrue(fixture.audio.didStop)
+    XCTAssertFalse(fixture.audio.hasPendingReleaseStop)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(fixture.audio.stopCount, 1)
+    XCTAssertEqual(fixture.cuePlayer.playedCues, [.start])
+    XCTAssertNil(fixture.inserter.insertedText)
   }
 
   func testInterruptedCaptureFinishesWithTheAudioAlreadyRecorded() async throws {
@@ -317,9 +360,9 @@ extension DictationCoordinatorTests {
     XCTAssertEqual(fixture.benchmark.steps[.audioEngineStart], .milliseconds(6))
 
     fixture.coordinator.finishHeldDictation(lifecycleGeneration: generation)
-    XCTAssertNotNil(fixture.benchmark.steps[.audioStop])
     XCTAssertNotNil(fixture.benchmark.steps[.targetPin])
     try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertNotNil(fixture.benchmark.steps[.audioStop])
     XCTAssertEqual(fixture.benchmark.steps[.editorLookup], .milliseconds(7))
     XCTAssertEqual(fixture.benchmark.steps[.prePasteProbe], .milliseconds(9))
     XCTAssertEqual(fixture.benchmark.steps[.pasteRevalidation], .milliseconds(10))
