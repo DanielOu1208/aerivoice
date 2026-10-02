@@ -36,8 +36,10 @@ the moment a dictation is activated (inside the shortcut handler for a key press
 the credential, Accessibility, and local-model checks. It runs off the main actor, so the
 checks overlap the
 engine's own start-up. If a check fails, the engine is stopped, the next one is prepared,
-and audio it delivered is discarded unsent before the readiness error appears. Audio
-recorded while the checks run belongs to the dictation and is kept. Output muting stays
+and audio it delivered is discarded unsent before the readiness error appears. If the
+input goes away while the checks run, the dictation fails with the microphone error once
+they pass, instead of recording from a stopped engine. Audio recorded while the checks run
+belongs to the dictation and is kept. Output muting stays
 in the activation path, so in the slow case a few milliseconds can be recorded before
 output is muted. A Bluetooth or unreadable input is declined at the press (opening a
 headset's microphone switches it to its call profile even if the dictation is then

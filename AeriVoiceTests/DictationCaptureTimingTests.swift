@@ -246,6 +246,23 @@ extension DictationCoordinatorTests {
     }
   }
 
+  func testInterruptionBeforeTheChecksFinishFailsTheDictation() async throws {
+    // The microphone started at the press, then the input went away while start() was still
+    // checking, before there was a session to report it to.
+    let readiness = SuspendedReadiness(microphoneAuthorized: true)
+    let fixture = makeFixture(readiness: readiness)
+    fixture.coordinator.toggle()
+    try await waitUntil { readiness.didRequestMicrophone && fixture.audio.startReturned }
+    fixture.audio.onCaptureInterrupted?()
+    try await Task.sleep(for: .milliseconds(20))
+    readiness.resolveMicrophoneRequest(true)
+    try await waitUntil { fixture.benchmark.terminalResult == .failed }
+    XCTAssertEqual(fixture.benchmark.failureStage, .audioCapture)
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.captureStarted))
+    XCTAssertEqual(fixture.coordinator.phase, .error(AppError.microphoneUnavailable.localizedDescription))
+    XCTAssertTrue(fixture.audio.didStop)
+  }
+
   func testCancelRightAfterThePressNeverRecords() async throws {
     let fixture = makeFixture(audioFrameCount: 3)
     fixture.coordinator.toggle()

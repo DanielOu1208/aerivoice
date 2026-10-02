@@ -119,8 +119,13 @@ extension DictationCoordinatorTests {
   final class SuspendedReadiness: DictationReadinessChecking {
     private var microphoneContinuation: CheckedContinuation<Bool, Never>?
     private(set) var didRequestMicrophone = false
-    /// The prompt is pending, so the microphone never starts at the press.
-    var microphoneAuthorized: Bool { false }
+    /// False: the prompt is pending, so the microphone never starts at the press. True holds
+    /// start() in its checks after the microphone started at the press.
+    let microphoneAuthorized: Bool
+
+    init(microphoneAuthorized: Bool = false) {
+      self.microphoneAuthorized = microphoneAuthorized
+    }
 
     func requestMicrophone() async -> Bool {
       didRequestMicrophone = true

@@ -74,6 +74,8 @@ final class DictationCoordinator: ObservableObject {
   /// A microphone start requested at the shortcut press, which start() awaits once its checks
   /// pass.
   private var audioStartTask: Task<AudioStartReport, Error>?
+  /// The input went away after that start, before start() opened a session to report it to.
+  private var earlyAudioInterrupted = false
   private var captureWarning: String?
   private var launchPreparationAttempted = false
   private var launchPreparationTask: Task<Void, Never>?
@@ -508,6 +510,7 @@ final class DictationCoordinator: ObservableObject {
   private func startAudioEarlyIfPossible() {
     guard !preferences.soundCues, readiness.microphoneAuthorized else { return }
     resetAudioBuffer()
+    earlyAudioInterrupted = false
     audioStarting = true
     benchmark.mark(.audioEngineStartRequested)
     let audio = self.audio
@@ -525,7 +528,10 @@ final class DictationCoordinator: ObservableObject {
     if let early = audioStartTask {
       defer { if audioStartTask == early { audioStartTask = nil } }
       do {
-        return try await early.value
+        let report = try await early.value
+        // The engine stopped while the checks ran; recording from it would capture nothing.
+        guard !earlyAudioInterrupted else { throw AppError.microphoneUnavailable }
+        return report
       } catch is AudioStartDeclined {
         benchmark.mark(.earlyAudioStartDeclined)
       }
@@ -832,7 +838,13 @@ final class DictationCoordinator: ObservableObject {
   }
 
   private func captureInterrupted() {
-    guard let id = sessionID, phase == .starting || phase == .recording else { return }
+    guard phase == .starting || phase == .recording else { return }
+    guard let id = sessionID else {
+      // The microphone started at the press and start() is still checking: it fails once it
+      // takes the microphone over.
+      if audioStartTask != nil { earlyAudioInterrupted = true }
+      return
+    }
     if audioStarting {
       fail(AppError.microphoneUnavailable, id: id, stage: .audioCapture)
     } else if !audioStopped {
