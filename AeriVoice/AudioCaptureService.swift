@@ -94,18 +94,24 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     }
   }
 
-  func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws -> Bool {
+  func start(
+    discardingAudioBefore deadline: ContinuousClock.Instant?, declinesBluetooth: Bool
+  ) async throws -> AudioStartReport {
     try Task.checkCancellation()
     let generation = lifecycleLock.withLock { lifecycleGeneration }
     let request = AudioStartupRequest()
+    let requested = ContinuousClock.now
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         queue.async {
           do {
+            let queueWait = requested.duration(to: .now)
             guard self.isCurrent(generation), !request.isCancelled else {
               throw CancellationError()
             }
-            let usedPreparation = try self.startOnQueue(discardingAudioBefore: deadline) {
+            var report = try self.startOnQueue(
+              discardingAudioBefore: deadline, declinesBluetooth: declinesBluetooth
+            ) {
               guard self.isCurrent(generation), !request.isCancelled else {
                 throw CancellationError()
               }
@@ -114,7 +120,8 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
               self.stopOnQueue()
               throw CancellationError()
             }
-            continuation.resume(returning: usedPreparation)
+            report.queueWait = queueWait
+            continuation.resume(returning: report)
           } catch {
             continuation.resume(throwing: error)
           }
@@ -175,17 +182,24 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   }
 
   private func startOnQueue(
-    discardingAudioBefore deadline: ContinuousClock.Instant?,
+    discardingAudioBefore deadline: ContinuousClock.Instant?, declinesBluetooth: Bool,
     checkCancellation: @Sendable () throws -> Void
-  ) throws -> Bool {
-    guard !recording else { return false }
+  ) throws -> AudioStartReport {
+    guard !recording else { return AudioStartReport(usedPreparation: false) }
+    let clock = ContinuousClock()
+    var step = clock.now
     let current = currentRoute()
+    // Declined before anything changes, so a prepared engine stays prepared.
+    if declinesBluetooth, current?.isBluetooth != false { throw AudioStartDeclined() }
     if preparedRoute == nil || preparedRoute != current { stopOnQueue() }
-    let usedPreparation = engine != nil
+    var report = AudioStartReport(usedPreparation: engine != nil)
+    report.routeCheck = step.duration(to: clock.now)
     // An unreadable route still attempts the system default; the engine validates its input.
     let route = preparedRoute ?? current
       ?? AudioInputRoute(deviceID: AudioDeviceID(kAudioObjectUnknown), sampleRate: 0, channels: 0)
+    step = clock.now
     let engine = self.engine ?? makeEngine(route)
+    if !report.usedPreparation { report.engineCreation = step.duration(to: clock.now) }
     self.engine = engine
     preparedRoute = nil
     activeRoute = route
@@ -196,26 +210,27 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     }
     self.converter = converter
     do {
-      try startCapture(engine, checkCancellation: checkCancellation)
+      report.engine = try startCapture(engine, checkCancellation: checkCancellation)
       if configurationObserver == nil { observeConfigurationChanges(of: engine) }
       recording = true
       let started = ContinuousClock.now
       // Capture begins about when start returns; drop samples recorded before the deadline.
       let discarded = deadline.map { started.duration(to: $0) / .seconds(1) } ?? 0
       samplesToDiscard = Int(max(0, discarded) * PCM16AudioConverter.sampleRate)
-      return usedPreparation
+      return report
     } catch {
       stopOnQueue()
       throw error
     }
   }
 
+  @discardableResult
   private func startCapture(
     _ engine: CaptureAudioEngine, checkCancellation: @Sendable () throws -> Void
-  ) throws {
+  ) throws -> CaptureEngineStartSteps {
     let generation = UUID()
     captureGeneration = generation
-    try engine.start(checkCancellation: checkCancellation) { [weak self] buffer in
+    return try engine.start(checkCancellation: checkCancellation) { [weak self] buffer in
       guard let service = self else { return }
       service.queue.async { service.convert(buffer, generation: generation) }
     }

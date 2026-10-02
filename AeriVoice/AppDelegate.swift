@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       return .terminateLater
     }
     model.stopTranscriptionPreparation()
-    model.coordinator.cancel()
+    model.coordinator.cancelForSuspension()
     Task { @MainActor in
       await model.usageStats.finishPendingOperationsForTermination()
       sender.reply(toApplicationShouldTerminate: true)
@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
   func applicationWillTerminate(_ notification: Notification) {
     model.stopTranscriptionPreparation()
-    model.coordinator.cancel()
+    model.coordinator.cancelForSuspension()
     model.runtimeDiagnostics.terminate()
     model.benchmarkRecorder.flushBeforeTermination()
   }
@@ -144,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
       [weak self] _ in
       Task { @MainActor in
         self?.model.transcriptionWillSleep()
-        self?.model.coordinator.cancel()
+        self?.model.coordinator.cancelForSuspension()
         self?.model.runtimeDiagnostics.willSleep()
       }
     }
@@ -154,27 +154,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         guard let self else { return }
         self.model.runtimeDiagnostics.didWake()
         self.model.transcriptionDidWake()
+        self.model.prepareAudioIfUnlocked()
       }
     }
     DistributedNotificationCenter.default().addObserver(
       forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
     ) { [weak self] _ in
       Task { @MainActor in
+        self?.model.runtimeDiagnostics.screenLocked()
         self?.model.transcriptionLockChanged(true)
-        self?.model.coordinator.cancel()
+        self?.model.coordinator.cancelForSuspension()
       }
     }
     DistributedNotificationCenter.default().addObserver(
       forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
-    ) { [weak self] _ in Task { @MainActor in self?.model.refreshTranscriptionSessionEligibility() } }
+    ) { [weak self] _ in
+      Task { @MainActor in
+        self?.model.runtimeDiagnostics.screenUnlocked()
+        self?.model.refreshTranscriptionSessionEligibility()
+        // The notification itself says the screen is unlocked; don't wait for the session
+        // state to agree.
+        self?.model.coordinator.prepareAudioIfIdle()
+      }
+    }
     workspace.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) {
       [weak self] _ in Task { @MainActor in
         self?.model.transcriptionLockChanged(true)
-        self?.model.coordinator.cancel()
+        self?.model.coordinator.cancelForSuspension()
       }
     }
     workspace.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main) {
-      [weak self] _ in Task { @MainActor in self?.model.refreshTranscriptionSessionEligibility() }
+      [weak self] _ in Task { @MainActor in
+        self?.model.refreshTranscriptionSessionEligibility()
+        self?.model.prepareAudioIfUnlocked()
+      }
     }
   }
 

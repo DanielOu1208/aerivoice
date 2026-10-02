@@ -10,8 +10,18 @@ protocol CaptureAudioEngine: AnyObject, Sendable {
   func start(
     checkCancellation: @Sendable () throws -> Void,
     onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
-  ) throws
+  ) throws -> CaptureEngineStartSteps
   func stop()
+}
+
+/// How long each step of an engine start took. Content-free.
+struct CaptureEngineStartSteps: Equatable, Sendable {
+  /// Checking the input format and installing the capture tap.
+  var tapInstall: Duration = .zero
+  /// Preparing the graph again now that it has a tap.
+  var prepare: Duration = .zero
+  /// Starting the hardware.
+  var start: Duration = .zero
 }
 
 final class SystemCaptureAudioEngine: CaptureAudioEngine, @unchecked Sendable {
@@ -41,18 +51,27 @@ final class SystemCaptureAudioEngine: CaptureAudioEngine, @unchecked Sendable {
   func start(
     checkCancellation: @Sendable () throws -> Void,
     onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
-  ) throws {
+  ) throws -> CaptureEngineStartSteps {
+    let clock = ContinuousClock()
+    var steps = CaptureEngineStartSteps()
     try checkCancellation()
+    var started = clock.now
     try validateInput()
     try checkCancellation()
     engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
       onBuffer(buffer)
     }
     tapInstalled = true
+    steps.tapInstall = started.duration(to: clock.now)
     // Installing the tap changes the graph; prepare its capture resources now.
+    started = clock.now
     engine.prepare()
+    steps.prepare = started.duration(to: clock.now)
     try checkCancellation()
+    started = clock.now
     try engine.start()
+    steps.start = started.duration(to: clock.now)
+    return steps
   }
 
   func stop() {

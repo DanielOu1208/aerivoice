@@ -16,7 +16,7 @@ extension DictationCoordinatorTests {
     readiness: DictationReadinessChecking? = nil, connectWaitsForResolution: Bool = false,
     connectError: Error? = nil, audioFrameCount: Int = 1,
     audioStartWaitsForResolution: Bool = false, localReady: Bool = true,
-    captureTail: Duration = .zero
+    audioStartDeclines: Bool = false
   ) -> CoordinatorFixture {
     let suite = "AeriVoiceTests.Coordinator.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -39,7 +39,8 @@ extension DictationCoordinatorTests {
         .cerebras: hasCerebrasKey ? "cerebras-key" : nil,
       ])
     let audio = FakeAudioCapture(
-      frameCount: audioFrameCount, waitsForStartResolution: audioStartWaitsForResolution)
+      frameCount: audioFrameCount, waitsForStartResolution: audioStartWaitsForResolution,
+      declinesBluetooth: audioStartDeclines)
     let transcriber = FakeTranscriber(
       provisionalText: provisionalText, waitsForConnectResolution: connectWaitsForResolution,
       connectError: connectError)
@@ -55,7 +56,7 @@ extension DictationCoordinatorTests {
       preferences: preferences, credentials: credentials, audio: audio,
       transcriber: transcriber, cleaner: cleaner, muter: muter, inserter: inserter,
       notch: notch, benchmark: benchmark, usageStats: usageStats, readiness: readiness ?? FakeReadiness(),
-      cuePlayer: cuePlayer, localReadiness: { localReady }, captureTail: captureTail)
+      cuePlayer: cuePlayer, localReadiness: { localReady })
     return CoordinatorFixture(
       preferences: preferences, coordinator: coordinator, audio: audio, transcriber: transcriber,
       inserter: inserter, cleaner: cleaner, muter: muter, notch: notch, benchmark: benchmark,
@@ -107,14 +108,19 @@ extension DictationCoordinatorTests {
   }
 
   struct FakeReadiness: DictationReadinessChecking {
+    /// False models a first dictation, when the permission prompt is still to come.
+    var microphoneAuthorized = true
+    var accessibility = true
     func requestMicrophone() async -> Bool { true }
-    func accessibilityReady(prompt: Bool) -> Bool { true }
+    func accessibilityReady(prompt: Bool) -> Bool { accessibility }
   }
 
   @MainActor
   final class SuspendedReadiness: DictationReadinessChecking {
     private var microphoneContinuation: CheckedContinuation<Bool, Never>?
     private(set) var didRequestMicrophone = false
+    /// The prompt is pending, so the microphone never starts at the press.
+    var microphoneAuthorized: Bool { false }
 
     func requestMicrophone() async -> Bool {
       didRequestMicrophone = true
@@ -141,13 +147,19 @@ extension DictationCoordinatorTests {
     private var cancelled = false
     private var preparations = 0
     private var discards = 0
+    private var cancelledStarts = 0
+    private var declinedStarts = 0
+    private var startRequests: [Bool] = []
     private var startContinuation: CheckedContinuation<Bool, Never>?
     private let frameCount: Int
     private let waitsForStartResolution: Bool
+    /// Models a Bluetooth input: a start that declines Bluetooth throws.
+    private let declinesBluetooth: Bool
 
-    init(frameCount: Int, waitsForStartResolution: Bool) {
+    init(frameCount: Int, waitsForStartResolution: Bool, declinesBluetooth: Bool = false) {
       self.frameCount = frameCount
       self.waitsForStartResolution = waitsForStartResolution
+      self.declinesBluetooth = declinesBluetooth
     }
 
     var onAudio: ((Data) -> Void)? {
@@ -166,12 +178,25 @@ extension DictationCoordinatorTests {
     var startWasCancelled: Bool { lock.withLock { cancelled } }
     var prepareCount: Int { lock.withLock { preparations } }
     var discardCount: Int { lock.withLock { discards } }
+    var cancelStartCount: Int { lock.withLock { cancelledStarts } }
+    var declinedStartCount: Int { lock.withLock { declinedStarts } }
+    /// Whether each start request declined Bluetooth, in order.
+    var startRequestsDecliningBluetooth: [Bool] { lock.withLock { startRequests } }
     var hasPendingStart: Bool { lock.withLock { startContinuation != nil } }
 
     func prepare() async { lock.withLock { preparations += 1 } }
     func discardPreparation() { lock.withLock { discards += 1 } }
 
-    func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws -> Bool {
+    func start(
+      discardingAudioBefore deadline: ContinuousClock.Instant?, declinesBluetooth: Bool
+    ) async throws -> AudioStartReport {
+      let declined = lock.withLock {
+        startRequests.append(declinesBluetooth)
+        guard declinesBluetooth, self.declinesBluetooth else { return false }
+        declinedStarts += 1
+        return true
+      }
+      if declined { throw AudioStartDeclined() }
       defer { lock.withLock { returned = true } }
       lock.withLock {
         started = true
@@ -202,7 +227,11 @@ extension DictationCoordinatorTests {
       } else {
         deliver()
       }
-      return reused
+      return AudioStartReport(
+        usedPreparation: reused, queueWait: .milliseconds(1), routeCheck: .milliseconds(2),
+        engineCreation: reused ? .zero : .milliseconds(3),
+        engine: CaptureEngineStartSteps(
+          tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6)))
     }
 
     func resolveStart(usedPreparation: Bool = false) {
@@ -214,7 +243,12 @@ extension DictationCoordinatorTests {
       continuation?.resume(returning: usedPreparation)
     }
 
-    func cancelStart() { lock.withLock { stopped = true } }
+    func cancelStart() {
+      lock.withLock {
+        stopped = true
+        cancelledStarts += 1
+      }
+    }
     func stop() {
       lock.withLock {
         stopped = true
@@ -444,6 +478,11 @@ extension DictationCoordinatorTests {
     var result: InsertionResult = .pasteSent
     var target: TextInsertionTarget?
     var receivedTarget: TextInsertionTarget?
+    var insertionSteps: InsertionSteps?
+    func takeInsertionSteps() -> InsertionSteps? {
+      defer { insertionSteps = nil }
+      return insertionSteps
+    }
     func captureTarget() -> Task<TextInsertionTarget?, Never> {
       onCapture?()
       captureCount += 1
@@ -483,6 +522,7 @@ extension DictationCoordinatorTests {
     var didBegin = false
     var milestones = Set<BenchmarkMilestone>()
     var orderedMilestones: [BenchmarkMilestone] = []
+    var steps: [BenchmarkStep: Duration] = [:]
     var audioBytes = 0
     var audioBytesSent = 0
     var sttUpdates = 0
@@ -509,6 +549,11 @@ extension DictationCoordinatorTests {
     func mark(_ milestone: BenchmarkMilestone) {
       milestones.insert(milestone)
       orderedMilestones.append(milestone)
+    }
+
+    func recordStep(_ step: BenchmarkStep, _ duration: Duration) {
+      guard isRecording else { return }
+      steps[step] = duration
     }
 
     func recordAudioCaptured(bytes: Int, bufferedBytes: Int) { audioBytes += bytes }

@@ -205,7 +205,7 @@ final class DictationCoordinatorTests: XCTestCase {
     XCTAssertTrue(fixture.notch.presentedStates.isEmpty)
     XCTAssertFalse(fixture.transcriber.didConnect)
     XCTAssertEqual(fixture.coordinator.phase, .idle)
-    fixture.coordinator.cancel()
+    fixture.coordinator.cancelForSuspension()
     XCTAssertGreaterThan(fixture.audio.discardCount, 0)
   }
 
@@ -271,7 +271,9 @@ final class DictationCoordinatorTests: XCTestCase {
   }
 
   func testStartupTimingsIncludePreparationUseAndPreserveOrdering() async throws {
-    let fixture = makeFixture(audioStartWaitsForResolution: true)
+    // Before microphone access is granted, the microphone starts only after the checks.
+    let fixture = makeFixture(
+      readiness: FakeReadiness(microphoneAuthorized: false), audioStartWaitsForResolution: true)
     fixture.coordinator.toggle()
     try await waitUntil { fixture.audio.hasPendingStart }
     fixture.audio.resolveStart(usedPreparation: true)
@@ -434,7 +436,10 @@ final class DictationCoordinatorTests: XCTestCase {
     XCTAssertEqual(fixture.benchmark.terminalResult, .failed)
     XCTAssertEqual(fixture.benchmark.failureStage, .readiness)
     XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
-    XCTAssertFalse(fixture.audio.didStart)
+    // The microphone started at the press; it is stopped and nothing reaches the provider.
+    XCTAssertTrue(fixture.audio.didStop)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
   }
 
   func testSelectedGroqProviderUsesGroqCredential() async throws {
@@ -449,7 +454,7 @@ final class DictationCoordinatorTests: XCTestCase {
     XCTAssertEqual(fixture.cleaner.lastAPIKey, "groq-key")
   }
 
-  func testMissingSelectedGroqCredentialFailsBeforeAudioCapture() async throws {
+  func testMissingSelectedGroqCredentialFailsBeforeAudioIsKept() async throws {
     let fixture = makeFixture(hasGroqKey: false, cleanupProvider: .groq)
 
     fixture.coordinator.toggle()
@@ -459,7 +464,8 @@ final class DictationCoordinatorTests: XCTestCase {
     }
 
     XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
-    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertTrue(fixture.audio.didStop)
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
   }
 
   func testSelectedCerebrasProviderUsesCerebrasCredential() async throws {
@@ -500,7 +506,7 @@ final class DictationCoordinatorTests: XCTestCase {
     }
   }
 
-  func testMissingSelectedCerebrasCredentialFailsBeforeAudioCapture() async throws {
+  func testMissingSelectedCerebrasCredentialFailsBeforeAudioIsKept() async throws {
     let fixture = makeFixture(hasCerebrasKey: false, cleanupProvider: .cerebras)
 
     fixture.coordinator.toggle()
@@ -510,7 +516,8 @@ final class DictationCoordinatorTests: XCTestCase {
     }
 
     XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
-    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertTrue(fixture.audio.didStop)
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
   }
 
   func testSelectedMetaProviderUsesMetaCredentialAndConfiguration() async throws {
@@ -624,12 +631,19 @@ final class DictationCoordinatorTests: XCTestCase {
       (1006, .network, nil), (nil, .network, nil),
     ]
     for (status, category, httpStatus) in cases {
-      let fixture = makeFixture(transcriptionProvider: .grok, connectError: GrokTransportError(status: status))
+      // Capture is still starting, so the failure is classified as setup.
+      let fixture = makeFixture(
+        transcriptionProvider: .grok, connectError: GrokTransportError(status: status),
+        audioStartWaitsForResolution: true)
       fixture.coordinator.toggle()
       try await waitUntil { fixture.benchmark.terminalResult == .failed }
       XCTAssertEqual(fixture.benchmark.failureStage, .sttSetup)
       XCTAssertEqual(fixture.benchmark.failureCategory, category)
       XCTAssertEqual(fixture.benchmark.failureHTTPStatus, httpStatus)
+      XCTAssertTrue(fixture.audio.didStop)
+      try await waitUntil { fixture.audio.hasPendingStart }
+      fixture.audio.resolveStart()
+      try await waitUntil { fixture.audio.startReturned }
     }
   }
 
@@ -711,7 +725,7 @@ final class DictationCoordinatorTests: XCTestCase {
 
     XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
     XCTAssertFalse(fixture.transcriber.didConnect)
-    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertTrue(fixture.audio.didStop)
   }
 
   func testTranscriptionProviderIsSnapshottedWhenDictationBegins() async throws {
@@ -833,7 +847,8 @@ final class DictationCoordinatorTests: XCTestCase {
       XCTFail("Held release changed a failed startup phase")
       return
     }
-    XCTAssertFalse(fixture.audio.didStart)
+    XCTAssertTrue(fixture.audio.didStop)
+    XCTAssertTrue(fixture.transcriber.sentFrames.isEmpty)
     XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
   }
 

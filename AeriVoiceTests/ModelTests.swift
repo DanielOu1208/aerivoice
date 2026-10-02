@@ -710,6 +710,20 @@ final class ModelTests: XCTestCase {
     XCTAssertTrue(tracker.release(at: start + ShortcutPressTracker.holdThreshold))
   }
 
+  @MainActor
+  func testShortcutEventAgeUsesTheUptimeClock() throws {
+    let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true))
+    // A synthetic event carries no timestamp, so no delay is recorded for it.
+    XCTAssertNil(GlobalShortcutMonitor.age(of: event))
+    // Event timestamps count nanoseconds of uptime, the clock `systemUptime` reads.
+    let now = ProcessInfo.processInfo.systemUptime
+    event.timestamp = CGEventTimestamp(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) - 12_000_000
+    let age = try XCTUnwrap(GlobalShortcutMonitor.age(of: event, now: now))
+    XCTAssertEqual(age / .milliseconds(1), 12, accuracy: 5)
+    XCTAssertNil(GlobalShortcutMonitor.age(of: event, now: now - 5))
+    XCTAssertNil(GlobalShortcutMonitor.age(of: event, now: now + 120))
+  }
+
   func testShortcutPressTrackerIgnoresReleaseWhenNotArmed() {
     var tracker = ShortcutPressTracker()
     tracker.press(at: 0, finishesOnRelease: false)

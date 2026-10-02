@@ -49,7 +49,7 @@ enum RuntimeEvent: String, Codable, Sendable {
   case preparationStarted, preparationFinished, preparationSkipped
   case networkWarmupStarted, networkWarmupFinished
   case interactionBegan, interactionFinished, phaseChanged, sessionCleanupFinished
-  case settingsOpened, settingsClosed, settingsChanged, sleep, wake, termination
+  case settingsOpened, settingsClosed, settingsChanged, sleep, wake, lock, unlock, termination
   case loggingEnabled, loggingDisabled, resourceSample, resourceUnavailable
   case clipboardRestorationFinished
 }
@@ -297,6 +297,11 @@ final class RuntimeDiagnosticsRecorder {
     emit(.wake)
     requestResourceSample()
   }
+
+  /// The screen locked or unlocked. A lock discards the prepared microphone engine and an
+  /// unlock prepares it again, so a cold start after a long idle can be told apart.
+  func screenLocked() { emit(.lock) }
+  func screenUnlocked() { emit(.unlock) }
 
   func terminate() {
     timer?.cancel()

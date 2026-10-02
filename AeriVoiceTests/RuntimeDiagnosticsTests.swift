@@ -128,6 +128,21 @@ final class RuntimeDiagnosticsTests: XCTestCase {
     XCTAssertEqual(try harness.interactions().last?.context?.sinceWakeMS, 20)
   }
 
+  func testScreenLockAndUnlockAreRecorded() async throws {
+    let harness = Harness()
+    defer { harness.remove() }
+    harness.runtime.screenLocked()
+    harness.runtime.screenUnlocked()
+    await harness.runtime.flushForTesting()
+    let events = try harness.records().map(\.event).filter { [.lock, .unlock].contains($0) }
+    XCTAssertEqual(events, [.lock, .unlock])
+
+    harness.preferences.latencyLogging = false
+    harness.runtime.screenLocked()
+    await harness.runtime.flushForTesting()
+    XCTAssertEqual(try harness.records().filter { $0.event == .lock }.count, 1)
+  }
+
   func testDisabledStartupCreatesNoFilesAndEnableDoesNotInventLaunch() async throws {
     let harness = Harness(enabled: nil)
     defer { harness.remove() }

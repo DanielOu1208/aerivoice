@@ -83,6 +83,8 @@ struct TextInsertionTarget: Sendable {
   var clipboardChangeCount: Int?
   var restorationID: UUID?
   var verification: TextVerificationSource?
+  /// Timings of the capture work; insertion adds its own.
+  var steps = InsertionSteps()
   let perform: @Sendable (@escaping PasteCommit) async -> TargetInsertionOutcome
 
   static func rejected(_ reason: PasteBlockReason) -> Self {
@@ -104,6 +106,7 @@ final class TextInsertionService: TextInserting {
   private let capture: @MainActor () -> Task<TextInsertionTarget?, Never>
   private let restoration: ClipboardRestoration
   private let restoreEnabled: @MainActor () -> Bool
+  private var insertionSteps: InsertionSteps?
   private var recordingStarted = false
   private let restoreDelay: @MainActor () -> TimeInterval
   private let readAwareClipboard: Bool
@@ -146,8 +149,14 @@ final class TextInsertionService: TextInserting {
   }
   func finishPendingRestoration() async { await restoration.finishPendingRestoration() }
 
+  func takeInsertionSteps() -> InsertionSteps? {
+    defer { insertionSteps = nil }
+    return insertionSteps
+  }
+
   func captureTarget() -> Task<TextInsertionTarget?, Never> {
     recordingStarted = false
+    insertionSteps = nil
     let backup = restoration.takePendingBackup()
     let changeCount = pasteboard.changeCount
     let restorationID = restoration.beginCapture(
@@ -189,6 +198,8 @@ final class TextInsertionService: TextInserting {
     var ownedChangeCount: Int?
     var committedOutcome: TargetInsertionOutcome?
     var readReceipt: ClipboardReadReceipt?
+    var steps = target?.steps ?? InsertionSteps()
+    defer { insertionSteps = steps }
 
     await restoration.waitForSnapshot(for: restorationID)
     guard !Task.isCancelled else {
@@ -235,18 +246,27 @@ final class TextInsertionService: TextInserting {
           snapshot?.changeCount == initialChangeCount, let source = target?.verification
         {
           attemptedProbe = true
+          let probeStarted = ContinuousClock.now
           if let state = source.prepare(), let replacement = state.replacingSelection(with: text) {
             before = state
             expected = replacement
           }
+          steps.prePasteProbe = probeStarted.duration(to: .now)
         }
         if self.readAwareClipboard, self.restoreEnabled(), snapshot != nil, expected == nil {
           readReceipt = ClipboardReadReceipt(text: text)
         }
         // The optional read may have taken time. Revalidate before touching the board.
-        if Task.isCancelled {
+        let cancelled = Task.isCancelled
+        var revalidation: PasteBlockReason?
+        if !cancelled, attemptedProbe {
+          let started = ContinuousClock.now
+          revalidation = validate()
+          steps.revalidation = started.duration(to: .now)
+        }
+        if cancelled {
           outcome = .blocked(.targetUnavailable)
-        } else if attemptedProbe, let reason = validate() {
+        } else if let reason = revalidation {
           outcome = .blocked(reason)
         } else if !copyIfUnchanged() {
           outcome = .blocked(.clipboardChanged)
@@ -360,6 +380,9 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
   }
 
   func capture(_ identity: Identity) async -> TextInsertionTarget {
+    let clock = ContinuousClock()
+    var steps = InsertionSteps()
+    let started = clock.now
     let result = await FocusedElementRecovery.resolve(
       targetIsCurrent: { self.identityIsCurrent(identity) },
       readFocus: { self.editorCandidate(identity) },
@@ -372,6 +395,7 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
         try await Task.sleep(for: .seconds(delay))
       },
       isCancelled: { self.shouldStop })
+    steps.editorLookup = started.duration(to: clock.now)
     guard let result else {
       return .rejected(identityBlockReason(identity) ?? .targetUnavailable)
     }
@@ -379,7 +403,9 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     case .failure(let reason): return .rejected(reason)
     case .success(let editor):
       let snapshot = Snapshot(identity: identity, editor: editor)
-      return TextInsertionTarget(verification: Self.verificationSource(for: snapshot)) { commit in
+      return TextInsertionTarget(
+        verification: Self.verificationSource(for: snapshot), steps: steps
+      ) { commit in
         await withTaskGroup(of: TargetInsertionOutcome.self) { group in
           group.addTask(priority: .userInitiated) {
             await AccessibilityPasteWorker().paste(into: snapshot, commit: commit)

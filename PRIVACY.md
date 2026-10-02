@@ -131,7 +131,9 @@ Existing completed history remains until cleared or expired.
 
 ## Permissions
 
-- **Microphone:** captures audio only while an AeriVoice dictation is active.
+- **Microphone:** captures audio only while an AeriVoice dictation is active. With sound
+  cues off it starts at the shortcut press; if the dictation then can't start (a missing
+  key or permission), that audio is discarded without being sent.
 - **Accessibility:** observes the active target and inserts completed text.
 
 AeriVoice uses the hardened runtime but is not sandboxed because it performs

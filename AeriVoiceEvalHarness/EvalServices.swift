@@ -78,6 +78,8 @@ final class EvalLifecycle: DictationLifecycleObserving {
 }
 
 struct EvalReadiness: DictationReadinessChecking {
+  /// As in the app with permission granted: with cues off the feed starts at the press.
+  var microphoneAuthorized: Bool { true }
   func requestMicrophone() async -> Bool { true }
   func accessibilityReady(prompt: Bool) -> Bool { true }
 }

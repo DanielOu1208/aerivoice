@@ -586,20 +586,47 @@ protocol AudioCapturing: AnyObject, Sendable {
   func prepare() async
   func prepareWithDiagnostics() async -> DiagnosticPreparationResult
   func discardPreparation()
-  /// Returns whether earlier preparation was reused. Audio recorded before the deadline is dropped.
-  func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws -> Bool
+  /// Audio recorded before the deadline is dropped. A start that `declinesBluetooth` throws
+  /// `AudioStartDeclined` before touching the engine when the input is, or may be, a
+  /// Bluetooth headset.
+  func start(discardingAudioBefore deadline: ContinuousClock.Instant?, declinesBluetooth: Bool)
+    async throws -> AudioStartReport
   func cancelStart()
   func stop()
 }
 
 extension AudioCapturing {
-  func start() async throws -> Bool { try await start(discardingAudioBefore: nil) }
+  func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws
+    -> AudioStartReport
+  {
+    try await start(discardingAudioBefore: deadline, declinesBluetooth: false)
+  }
+
+  func start() async throws -> AudioStartReport { try await start(discardingAudioBefore: nil) }
 
   func prepareWithDiagnostics() async -> DiagnosticPreparationResult {
     await prepare()
     return Task.isCancelled ? .cancelled : .unknown
   }
 }
+
+/// How one capture start went, timed on the audio queue. Content-free.
+struct AudioStartReport: Equatable, Sendable {
+  /// Whether earlier preparation was reused.
+  var usedPreparation: Bool
+  /// From the request until the audio queue ran it; preparation in progress delays it.
+  var queueWait: Duration = .zero
+  /// Reading the input route, and discarding a preparation made for another route.
+  var routeCheck: Duration = .zero
+  /// Creating an engine; zero when a prepared one was reused.
+  var engineCreation: Duration = .zero
+  var engine = CaptureEngineStartSteps()
+}
+
+/// A start asked to avoid Bluetooth found a Bluetooth input, or couldn't read the input.
+/// Opening a headset's microphone switches it to its call profile, even for a dictation that
+/// is then abandoned.
+struct AudioStartDeclined: Error, Equatable {}
 
 @MainActor
 protocol RealtimeTranscribing: AnyObject {
@@ -757,12 +784,25 @@ protocol TextInserting: Sendable {
   func invalidatePendingRestoration()
   func prepareForNextDictation()
   func finishPendingRestoration() async
+  /// Timings of the last insertion's accessibility work. Returned once.
+  func takeInsertionSteps() -> InsertionSteps?
 }
 
 extension TextInserting {
   func invalidatePendingRestoration() {}
   func prepareForNextDictation() { invalidatePendingRestoration() }
   func finishPendingRestoration() async {}
+  func takeInsertionSteps() -> InsertionSteps? { nil }
+}
+
+/// How long the accessibility work around Paste took. Content-free; nil means not reached.
+struct InsertionSteps: Equatable, Sendable {
+  /// Finding the editor from the focus pinned at stop, off the main thread.
+  var editorLookup: Duration?
+  /// The read before Paste that serves clipboard restoration.
+  var prePasteProbe: Duration?
+  /// Checking the target again after that read.
+  var revalidation: Duration?
 }
 
 enum InsertionResult: Equatable, Sendable {

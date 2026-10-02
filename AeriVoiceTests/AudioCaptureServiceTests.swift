@@ -13,11 +13,11 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(fixture.engines[0].prepareCount, 1)
     XCTAssertEqual(fixture.engines[0].startCount, 0)
 
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertTrue(reused)
     XCTAssertEqual(fixture.engines.count, 1)
     service.stop()
-    let reusedAgain = try await service.start()
+    let reusedAgain = try await service.start().usedPreparation
     XCTAssertFalse(reusedAgain)
     XCTAssertEqual(fixture.engines.count, 2)
     service.stop()
@@ -34,7 +34,7 @@ final class AudioCaptureServiceTests: XCTestCase {
       await service.prepare()
       let prepared = fixture.engines[0]
       fixture.route = changedRoute
-      let reused = try await service.start()
+      let reused = try await service.start().usedPreparation
       XCTAssertFalse(reused)
       XCTAssertEqual(prepared.startCount, 0)
       XCTAssertEqual(prepared.stopCount, 1)
@@ -49,7 +49,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     await service.prepare()
     NotificationCenter.default.post(
       name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     service.stop()
 
@@ -71,7 +71,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     let service = fixture.service()
     await service.prepare()
     XCTAssertEqual(fixture.engines[0].stopCount, 1)
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     XCTAssertEqual(fixture.engines.count, 2)
     service.stop()
@@ -88,7 +88,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     let activation = Task { try await service.start() }
     gate.signal()
     await preparation.value
-    let reused = try await activation.value
+    let reused = try await activation.value.usedPreparation
     XCTAssertTrue(reused)
     XCTAssertEqual(fixture.engines.count, 1)
     XCTAssertEqual(engine.prepareCount, 1)
@@ -109,7 +109,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     service.discardPreparation()
     gate.signal()
     await preparation.value
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     XCTAssertEqual(prepared.startCount, 0)
     XCTAssertEqual(prepared.stopCount, 1)
@@ -246,7 +246,12 @@ final class AudioCaptureServiceTests: XCTestCase {
       let engine = fixture.engines.last!
       NotificationCenter.default.post(
         name: .AVAudioEngineConfigurationChange, object: engine.notificationObject)
-      try await waitUntil { interrupted.value || fixture.engines.count == device }
+      // The replacement starts only after the service observes it, so the next notification
+      // can't be posted before anyone listens for it.
+      try await waitUntil {
+        interrupted.value
+          || (fixture.engines.count == device && fixture.engines[device - 1].startCount == 1)
+      }
     }
     XCTAssertTrue(interrupted.value)
     XCTAssertEqual(fixture.engines.count, AudioCaptureService.maximumRestarts + 1)
@@ -272,9 +277,53 @@ final class AudioCaptureServiceTests: XCTestCase {
     let result = await service.prepareWithDiagnostics()
     XCTAssertEqual(result, .skipped)
     XCTAssertTrue(fixture.engines.isEmpty)
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     XCTAssertEqual(fixture.engines.count, 1)
+    service.stop()
+  }
+
+  func testStartReportsTheEngineStepsAndWhetherPreparationWasUsed() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    await service.prepare()
+    let prepared = try await service.start()
+    XCTAssertTrue(prepared.usedPreparation)
+    XCTAssertEqual(prepared.engine, FakeCaptureAudioEngine.steps)
+    XCTAssertEqual(prepared.engineCreation, .zero)
+    XCTAssertGreaterThanOrEqual(prepared.queueWait, .zero)
+    service.stop()
+
+    let cold = try await service.start()
+    XCTAssertFalse(cold.usedPreparation)
+    XCTAssertEqual(cold.engine, FakeCaptureAudioEngine.steps)
+    XCTAssertEqual(fixture.engines.count, 2)
+    service.stop()
+  }
+
+  func testStartDecliningBluetoothLeavesTheEngineUntouched() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    await service.prepare()
+    let prepared = fixture.engines[0]
+    for route in [
+      AudioInputRoute(deviceID: 3, sampleRate: 24_000, channels: 1, isBluetooth: true), nil,
+    ] {
+      fixture.optionalRoute = route
+      do {
+        _ = try await service.start(discardingAudioBefore: nil, declinesBluetooth: true)
+        XCTFail("A start declining Bluetooth started on \(String(describing: route))")
+      } catch is AudioStartDeclined {}
+      XCTAssertEqual(prepared.stopCount, 0)
+      XCTAssertEqual(prepared.startCount, 0)
+      XCTAssertEqual(fixture.engines.count, 1)
+    }
+
+    // The same input that was prepared starts normally, and the preparation is used.
+    fixture.route = AudioInputRoute(deviceID: 1, sampleRate: 48_000, channels: 1)
+    let report = try await service.start(discardingAudioBefore: nil, declinesBluetooth: true)
+    XCTAssertTrue(report.usedPreparation)
+    XCTAssertEqual(prepared.startCount, 1)
     service.stop()
   }
 
@@ -352,7 +401,8 @@ final class AudioCaptureServiceTests: XCTestCase {
   }
 
   private func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    // Generous for a loaded machine; a passing condition returns as soon as it holds.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
     while !condition(), ContinuousClock.now < deadline {
       try await Task.sleep(for: .milliseconds(5))
     }
@@ -395,7 +445,8 @@ final class AudioCaptureServiceTests: XCTestCase {
 
 private final class AudioPreparationFixture: @unchecked Sendable {
   private let lock = NSLock()
-  private var inputRoute = AudioInputRoute(deviceID: 1, sampleRate: 48_000, channels: 1)
+  private var inputRoute: AudioInputRoute? = AudioInputRoute(
+    deviceID: 1, sampleRate: 48_000, channels: 1)
   private var created: [FakeCaptureAudioEngine] = []
   private let factory: @Sendable (Int) -> FakeCaptureAudioEngine
 
@@ -406,6 +457,11 @@ private final class AudioPreparationFixture: @unchecked Sendable {
   }
 
   var route: AudioInputRoute {
+    get { lock.withLock { inputRoute! } }
+    set { lock.withLock { inputRoute = newValue } }
+  }
+  /// Nil models an input whose route can't be read.
+  var optionalRoute: AudioInputRoute? {
     get { lock.withLock { inputRoute } }
     set { lock.withLock { inputRoute = newValue } }
   }
@@ -419,7 +475,7 @@ private final class AudioPreparationFixture: @unchecked Sendable {
           self.created.append(engine)
           return engine
         }
-      }, currentRoute: { self.route }, restartDebounce: restartDebounce)
+      }, currentRoute: { self.optionalRoute }, restartDebounce: restartDebounce)
   }
 }
 
@@ -466,7 +522,7 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   func start(
     checkCancellation: @Sendable () throws -> Void,
     onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
-  ) throws {
+  ) throws -> CaptureEngineStartSteps {
     startEntered?.fulfill()
     if let startGate { XCTAssertEqual(startGate.wait(timeout: .now() + 3), .success) }
     try checkCancellation()
@@ -475,7 +531,11 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
       starts += 1
       bufferHandler = onBuffer
     }
+    return Self.steps
   }
+
+  static let steps = CaptureEngineStartSteps(
+    tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6))
 
   func emit(_ buffer: AVAudioPCMBuffer) {
     lock.withLock { bufferHandler }?(buffer)

@@ -78,6 +78,40 @@ final class LatencyBenchmarkingTests: XCTestCase {
     }
   }
 
+  func testStepDurationsAreRecordedInMillisecondsAndOmittedWhenAbsent() async throws {
+    let directory = makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let clock = TestClock(milliseconds: 0)
+    let recorder = makeRecorder(
+      directory: directory, clock: clock,
+      wallClock: TestWallClock(date: Date(timeIntervalSince1970: 2_000_000_000)))
+    await recorder.flushForTesting()
+    // Nothing is active yet: a step has nowhere to go.
+    recorder.recordStep(.audioStop, .milliseconds(3))
+    recorder.begin(
+      enabled: true, cleanupMode: .faithful, cleanupConfiguration: defaultCleanupConfiguration)
+    recorder.recordStep(.shortcutEventToActivation, .microseconds(4_500))
+    recorder.recordStep(.audioEngineStart, .milliseconds(30))
+    clock.milliseconds = 20
+    recorder.mark(.captureStarted)
+    recorder.finish(.cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    recorder.begin(
+      enabled: true, cleanupMode: .faithful, cleanupConfiguration: defaultCleanupConfiguration)
+    recorder.finish(.cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
+    await recorder.flushForTesting()
+
+    let url = directory.appending(path: LatencyBenchmarkStore.logFilename)
+    let records = try decodeRecords(at: url)
+    XCTAssertEqual(records.count, 2)
+    XCTAssertEqual(
+      records[0].stepsMS, ["shortcutEventToActivation": 4.5, "audioEngineStart": 30])
+    XCTAssertEqual(records[0].durationsMS.activationToCaptureMS, 20)
+    XCTAssertNil(records[1].stepsMS)
+    let lines = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+      .split(separator: "\n")
+    XCTAssertFalse(lines[1].contains("stepsMS"))
+  }
+
   func testRecorderWritesDeterministicPrivacySafeInteraction() async throws {
     let directory = makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

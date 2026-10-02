@@ -91,7 +91,7 @@ final class EvalCaptureEngine: CaptureAudioEngine, @unchecked Sendable {
   func prepare() throws { events.emit("engine_prepared", ["hardware": false]) }
 
   func start(checkCancellation: @Sendable () throws -> Void,
-             onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws {
+             onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws -> CaptureEngineStartSteps {
     try checkCancellation()
     let token = UUID()
     lock.withLock {
@@ -132,6 +132,8 @@ final class EvalCaptureEngine: CaptureAudioEngine, @unchecked Sendable {
       if valid { events.emit("audio_feed_finished", self.feedSummary, session: session) }
     }
     lock.withLock { feeder = task }
+    // No hardware: the feed has no start-up steps to time.
+    return CaptureEngineStartSteps()
   }
 
   func stop() {

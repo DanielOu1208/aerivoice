@@ -120,6 +120,78 @@ for file in inputFiles {
     roots.append(root)
   }
 }
+// Microphone start and stop, from every app interaction (not the provider harness's
+// fixtures), split by whether the start reused a prepared engine.
+struct CaptureSample {
+  let milestones: [String: Double]
+  let steps: [String: Double]
+  let activationToCaptureMS: Double?
+  let stopToCallbacksFlushedMS: Double?
+
+  init(_ root: [String: Any]) {
+    milestones = dictionary(root["milestonesMS"]).compactMapValues(number)
+    steps = dictionary(root["stepsMS"]).compactMapValues(number)
+    let durations = dictionary(root["durationsMS"])
+    activationToCaptureMS = number(durations["activationToCaptureMS"])
+    stopToCallbacksFlushedMS = number(durations["stopToCallbacksFlushedMS"])
+  }
+
+  var started: Bool {
+    milestones["audioEngineStartRequested"] != nil && milestones["captureStarted"] != nil
+  }
+  var prepared: Bool { milestones["preparedAudioEngineUsed"] != nil }
+  var declinedEarlyStart: Bool { milestones["earlyAudioStartDeclined"] != nil }
+  /// Requested at the press, before start() read any credential.
+  var startedAtPress: Bool {
+    guard let requested = milestones["audioEngineStartRequested"] else { return false }
+    return !declinedEarlyStart && requested <= (milestones["credentialReadStarted"] ?? .infinity)
+  }
+  var requestToCaptureMS: Double? {
+    guard let requested = milestones["audioEngineStartRequested"],
+      let captured = milestones["captureStarted"]
+    else { return nil }
+    return captured - requested
+  }
+}
+
+let captureSamples = roots.filter { $0["fixtureID"] == nil }.map(CaptureSample.init)
+let startedSamples = captureSamples.filter(\.started)
+print("Microphone start and stop")
+print("Source: \(inputURL.path)")
+if startedSamples.isEmpty {
+  print("No started captures with start milestones")
+} else {
+  let preparedCount = startedSamples.filter(\.prepared).count
+  print(
+    "Started captures: \(startedSamples.count), prepared=\(preparedCount), "
+      + "cold=\(startedSamples.count - preparedCount) "
+      + "(\(String(format: "%.1f", 100 * Double(startedSamples.count - preparedCount) / Double(startedSamples.count)))% cold), "
+      + "at press=\(startedSamples.filter(\.startedAtPress).count), "
+      + "declined early start=\(startedSamples.filter(\.declinedEarlyStart).count)")
+  report("Shortcut event to activation", captureSamples.compactMap { $0.steps["shortcutEventToActivation"] })
+  let audioSteps = [
+    "audioQueueWait", "audioRouteCheck", "audioEngineCreate", "audioTapInstall",
+    "audioEnginePrepare", "audioEngineStart",
+  ]
+  for (label, group) in [
+    ("prepared", startedSamples.filter(\.prepared)), ("cold", startedSamples.filter { !$0.prepared }),
+  ] {
+    print("Start, \(label):")
+    report("  Activation to engine requested", group.compactMap { $0.milestones["audioEngineStartRequested"] })
+    report("  Engine requested to capture", group.compactMap(\.requestToCaptureMS))
+    report("  Activation to capture", group.compactMap(\.activationToCaptureMS))
+    for step in audioSteps { report("  \(step)", group.compactMap { $0.steps[step] }) }
+  }
+}
+print("Stop:")
+report("  Stop to callbacks flushed", captureSamples.compactMap(\.stopToCallbacksFlushedMS))
+for step in [
+  "audioStop", "targetPin", "editorLookup", "prePasteProbe", "pasteRevalidation",
+] {
+  report("  \(step)", captureSamples.compactMap { $0.steps[step] })
+}
+print("")
+
 let samples: [Sample] = roots.compactMap { root in
   let isLiveBenchmark = root["fixtureID"] != nil
   let cleanup = isLiveBenchmark ? root : dictionary(root["cleanup"])

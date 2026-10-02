@@ -85,6 +85,8 @@ private final class LifecycleSpy: DictationLifecycleObserving {
 @MainActor
 private final class LifecycleReadiness: DictationReadinessChecking {
   var pending: CheckedContinuation<Bool, Never>?
+  /// Not granted yet: these tests use the real capture service, which must never start.
+  var microphoneAuthorized: Bool { false }
   func requestMicrophone() async -> Bool {
     await withCheckedContinuation { pending = $0 }
   }
