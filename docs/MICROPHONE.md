@@ -9,7 +9,7 @@ Using AirPods or another Bluetooth headset as the microphone switches it to a lo
 ## During a dictation
 
 - **Start:** with sound cues on, the microphone starts while the start sound plays; audio from the first 200 ms is discarded so the cue is not transcribed. With cues off, capture starts immediately.
-- **Stop:** capture continues 50 ms after you stop, and the stop sound plays after the microphone closes.
+- **Stop:** the microphone closes as soon as you stop, and the stop sound plays after it closes. Finish your last word before releasing the shortcut; audio from the final instant before release may not be captured.
 - **Switching inputs:** if the input changes mid-dictation (plugging in a headset, or changing input in System Settings), capture restarts on the new input and the recording continues. If it cannot restart, AeriVoice finishes with the audio already captured and shows "Microphone disconnected".
 
 ## Audio processing

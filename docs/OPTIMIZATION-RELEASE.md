@@ -185,7 +185,8 @@ Follow-up full Debug suite: **557 passed, 3 opt-in tests skipped, 0 failures**.
 
 ### Microphone capture
 
-- Capture continues 50 ms after stop, then the resampler is flushed; the stop cue
+- Capture continued 50 ms after stop in 0.2.1 and 0.2.2 (removed afterwards so text
+  arrives without the fixed wait; the mechanism remains, off by default), then the resampler is flushed; the stop cue
   and output unmute happen only after the microphone closes. (Initially 250 ms;
   reduced because most speakers finish before release. Tap buffers are ~100 ms and
   the partly filled one is dropped, so 50 ms mainly recovers speech just before release.) The insertion target is

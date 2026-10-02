@@ -68,8 +68,9 @@ final class DictationCoordinator: ObservableObject {
   private var audioStopped = true
   private var audioStarting = false
   private var captureWarning: String?
-  /// Audio arrives in ~100 ms tap buffers and the partly filled one is dropped at stop;
-  /// a short tail keeps the words spoken right before release.
+  /// Optional recording after stop. Off by default so text arrives without a fixed wait;
+  /// audio arrives in ~100 ms tap buffers and the partly filled one is dropped at stop, so a
+  /// tail would recover speech in the last moment before release.
   private let captureTail: Duration
   private var launchPreparationAttempted = false
   private var launchPreparationTask: Task<Void, Never>?
@@ -108,7 +109,7 @@ final class DictationCoordinator: ObservableObject {
       return model.isReady
     },
     notifications: DictationNotificationPosting = SystemDictationNotifications(),
-    captureTail: Duration = .milliseconds(50)
+    captureTail: Duration = .zero
   ) {
     self.localReadiness = localReadiness
     self.captureTail = captureTail
