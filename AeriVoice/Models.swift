@@ -40,6 +40,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
   case soniox
   case meta
   case grok
+  case cartesia
   case local
 
   var id: Self { self }
@@ -49,6 +50,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     case .soniox: "Soniox"
     case .meta: "Meta"
     case .grok: "Grok"
+    case .cartesia: "Cartesia"
     case .local: "Local"
     }
   }
@@ -58,6 +60,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     case .soniox: "Soniox Realtime"
     case .meta: "Muse Voice Transcribe 1.0"
     case .grok: "Grok Voice Transcribe 2.0"
+    case .cartesia: CartesiaTranscriptionModel.ink2.displayName
     case .local: "Nemotron 3.5 — English"
     }
   }
@@ -67,6 +70,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     case .soniox: "stt-rt-v5"
     case .meta: "muse-voice-transcribe-1.0"
     case .grok: "grok-voice-transcribe-2.0"
+    case .cartesia: CartesiaTranscriptionModel.ink2.rawValue
     case .local: "nemotron-3.5-asr-0.6b-560ms"
     }
   }
@@ -76,6 +80,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     case .soniox: .soniox
     case .meta: .metaModelAPI
     case .grok: .xai
+    case .cartesia: .cartesia
     case .local: nil
     }
   }
@@ -85,6 +90,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     case .soniox: .missingSonioxKey
     case .meta: .missingMetaModelAPIKey
     case .grok: .missingXAIKey
+    case .cartesia: .missingCartesiaKey
     case .local: .provider("Download the Local model in Dictation settings.")
     }
   }
@@ -92,8 +98,22 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
   var connectedBufferLimitBytes: Int {
     switch self {
     case .soniox: 512_000
-    case .meta, .grok: 160_000
+    case .meta, .grok, .cartesia: 160_000
     case .local: 160_000
+    }
+  }
+}
+
+/// Raw values are Cartesia's model IDs. Both use the same endpoint and protocol.
+enum CartesiaTranscriptionModel: String, CaseIterable, Codable, Identifiable, Sendable {
+  case ink2 = "ink-2"
+  case inkPreview = "ink-preview"
+
+  var id: Self { self }
+  var displayName: String {
+    switch self {
+    case .ink2: "Ink 2"
+    case .inkPreview: "Ink Preview"
     }
   }
 }
@@ -124,9 +144,17 @@ struct TranscriptionConfiguration: Equatable, Sendable {
   let provider: TranscriptionProvider
   var localModel: LocalTranscriptionModel = .nemotron
   var appleLocaleIdentifier: String = ""
+  var cartesiaModel: CartesiaTranscriptionModel = .ink2
 
   var modelID: String {
-    provider == .local && localModel == .apple ? "apple-speech-transcriber" : provider.modelID
+    switch provider {
+    case .local where localModel == .apple: "apple-speech-transcriber"
+    case .cartesia: cartesiaModel.rawValue
+    default: provider.modelID
+    }
+  }
+  var modelDisplayName: String {
+    provider == .cartesia ? cartesiaModel.displayName : provider.modelDisplayName
   }
   var audioEncoding: String { "pcm_s16le_16000" }
   var zeroDataRetentionRequired: Bool? { provider == .meta ? true : nil }
@@ -889,6 +917,7 @@ enum AppError: LocalizedError {
   case missingSonioxKey
   case missingMetaModelAPIKey
   case missingXAIKey
+  case missingCartesiaKey
   case missingOpenRouterKey
   case missingGroqKey
   case missingCerebrasKey
@@ -903,6 +932,7 @@ enum AppError: LocalizedError {
     case .missingSonioxKey: "Add and verify a Soniox API key in Settings."
     case .missingMetaModelAPIKey: "Add and verify a Meta Model API key in Settings."
     case .missingXAIKey: "Add and verify an xAI API key in Settings."
+    case .missingCartesiaKey: "Add and verify a Cartesia API key in Settings."
     case .missingOpenRouterKey: "Add and verify an OpenRouter API key in Settings."
     case .missingGroqKey: "Add and verify a Groq API key in Settings."
     case .missingCerebrasKey: "Add and verify a Cerebras API key in Settings."

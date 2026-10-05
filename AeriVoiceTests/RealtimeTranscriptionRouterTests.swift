@@ -57,6 +57,40 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
     XCTAssertEqual(result, "Grok text")
   }
 
+  func testRoutesCartesiaWithItsModelAndInvalidatesGrokStandby() async throws {
+    let soniox = RouterClientSpy()
+    let grok = RouterClientSpy()
+    let cartesia = RouterClientSpy()
+    let router = RealtimeTranscriptionRouter(soniox: soniox, grok: grok, cartesia: cartesia)
+    _ = await router.prepareConnection(
+      configuration: TranscriptionConfiguration(provider: .grok), apiKey: "test", vocabulary: [])
+    let configuration = TranscriptionConfiguration(provider: .cartesia, cartesiaModel: .inkPreview)
+    var transcripts: [String] = []
+    router.onTranscript = { transcripts.append($0.snapshot.displayText) }
+
+    try await router.connect(
+      configuration: configuration, apiKey: "cartesia-key", vocabulary: ["AeriVoice"],
+      sessionID: DictationSessionID())
+    XCTAssertFalse(router.hasPreparedConnection)
+    XCTAssertEqual(cartesia.connection?.configuration.modelID, "ink-preview")
+    XCTAssertEqual(cartesia.connection?.apiKey, "cartesia-key")
+    XCTAssertEqual(cartesia.connection?.vocabulary, ["AeriVoice"])
+    XCTAssertNil(soniox.connection)
+    XCTAssertNil(grok.connection)
+
+    let update = RealtimeTranscriptUpdate(
+      snapshot: TranscriptSnapshot(confirmed: "Cartesia"), hasFinalText: true,
+      finalAudioProcessedMS: nil, totalAudioProcessedMS: nil)
+    soniox.onTranscript?(update)
+    cartesia.onTranscript?(update)
+    XCTAssertEqual(transcripts, ["Cartesia"])
+    cartesia.finishResult = "Cartesia text"
+    let result = try await router.finish()
+    XCTAssertEqual(result, "Cartesia text")
+    router.cancel()
+    XCTAssertGreaterThan(cartesia.cancelCount, 0)
+  }
+
   func testRoutesMetaSessionWithoutConnectingSoniox() async throws {
     let soniox = RouterClientSpy()
     let meta = RouterClientSpy()

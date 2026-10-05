@@ -28,10 +28,13 @@ final class ModelTests: XCTestCase {
   }
 
   func testTranscriptionProviderCatalogAndCapabilities() {
-    XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta, .grok, .local])
+    XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta, .grok, .cartesia, .local])
     XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v5")
     XCTAssertEqual(TranscriptionProvider.meta.modelID, "muse-voice-transcribe-1.0")
     XCTAssertEqual(TranscriptionProvider.grok.modelID, "grok-voice-transcribe-2.0")
+    XCTAssertEqual(TranscriptionProvider.cartesia.modelID, "ink-2")
+    XCTAssertEqual(TranscriptionProvider.cartesia.credentialKind, .cartesia)
+    XCTAssertEqual(TranscriptionProvider.cartesia.connectedBufferLimitBytes, 160_000)
     XCTAssertEqual(TranscriptionProvider.grok.credentialKind, .xai)
     XCTAssertEqual(TranscriptionProvider.soniox.credentialKind, .soniox)
     XCTAssertEqual(TranscriptionProvider.meta.credentialKind, .metaModelAPI)
@@ -56,6 +59,44 @@ final class ModelTests: XCTestCase {
     preferences.transcriptionProvider = .meta
     XCTAssertEqual(defaults.string(forKey: "transcriptionProvider"), "meta")
     XCTAssertEqual(AppPreferences(defaults: defaults).transcriptionProvider, .meta)
+  }
+
+  func testCartesiaConfigurationUsesTheSelectedInkModel() {
+    XCTAssertEqual(CartesiaTranscriptionModel.allCases.map(\.rawValue), ["ink-2", "ink-preview"])
+    let stable = TranscriptionConfiguration(provider: .cartesia)
+    XCTAssertEqual(stable.modelID, "ink-2")
+    XCTAssertEqual(stable.modelDisplayName, "Ink 2")
+    let preview = TranscriptionConfiguration(provider: .cartesia, cartesiaModel: .inkPreview)
+    XCTAssertEqual(preview.modelID, "ink-preview")
+    XCTAssertEqual(preview.modelDisplayName, "Ink Preview")
+    XCTAssertNil(preview.zeroDataRetentionRequired)
+    // The Cartesia model never changes another provider's model.
+    let soniox = TranscriptionConfiguration(provider: .soniox, cartesiaModel: .inkPreview)
+    XCTAssertEqual(soniox.modelID, "stt-rt-v5")
+    XCTAssertEqual(soniox.modelDisplayName, "Soniox Realtime")
+  }
+
+  @MainActor
+  func testCartesiaModelDefaultsToInkTwoPersistsAndReachesTheConfiguration() {
+    let suite = "AeriVoiceTests.CartesiaModel.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    let preferences = AppPreferences(defaults: defaults)
+    XCTAssertEqual(preferences.cartesiaTranscriptionModel, .ink2)
+    var changes = 0
+    preferences.onTranscriptionProviderChange = { changes += 1 }
+    preferences.transcriptionProvider = .cartesia
+    preferences.cartesiaTranscriptionModel = .inkPreview
+    XCTAssertEqual(changes, 2)
+    XCTAssertEqual(defaults.string(forKey: "cartesiaTranscriptionModel"), "ink-preview")
+    XCTAssertEqual(preferences.transcriptionConfiguration.modelID, "ink-preview")
+
+    let restored = AppPreferences(defaults: defaults)
+    XCTAssertEqual(restored.cartesiaTranscriptionModel, .inkPreview)
+    XCTAssertEqual(restored.transcriptionConfiguration.cartesiaModel, .inkPreview)
+    defaults.set("removed-model", forKey: "cartesiaTranscriptionModel")
+    XCTAssertEqual(AppPreferences(defaults: defaults).cartesiaTranscriptionModel, .ink2)
   }
 
   @MainActor
@@ -198,9 +239,18 @@ final class ModelTests: XCTestCase {
   func testCombinedOnboardingChoicesPreserveCloudAndLocalEngineRouting() {
     for choice in TranscriptionChoice.allCases {
       let restored = TranscriptionChoice(
-        provider: choice.provider, localModel: choice.localModel ?? .nemotron)
+        provider: choice.provider, localModel: choice.localModel ?? .nemotron,
+        cartesiaModel: choice.cartesiaModel ?? .ink2)
       XCTAssertEqual(restored, choice)
     }
+    XCTAssertEqual(TranscriptionChoice.cartesiaInk2.provider, .cartesia)
+    XCTAssertEqual(TranscriptionChoice.cartesiaInk2.cartesiaModel, .ink2)
+    XCTAssertEqual(TranscriptionChoice.cartesiaInk2.title, "Cartesia Ink 2")
+    XCTAssertEqual(TranscriptionChoice.cartesiaInkPreview.provider, .cartesia)
+    XCTAssertEqual(TranscriptionChoice.cartesiaInkPreview.cartesiaModel, .inkPreview)
+    XCTAssertEqual(TranscriptionChoice.cartesiaInkPreview.title, "Cartesia Ink Preview")
+    XCTAssertNil(TranscriptionChoice.cartesiaInkPreview.localModel)
+    XCTAssertNil(TranscriptionChoice.grok.cartesiaModel)
     XCTAssertEqual(TranscriptionChoice.apple.provider, .local)
     XCTAssertEqual(TranscriptionChoice.apple.localModel, .apple)
     XCTAssertEqual(TranscriptionChoice.nemotron.localModel, .nemotron)

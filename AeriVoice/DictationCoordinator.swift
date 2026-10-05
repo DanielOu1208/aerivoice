@@ -1037,12 +1037,15 @@ final class DictationCoordinator: ObservableObject {
     if let error = error as? GrokTransportError {
       return (error.isProviderRejection ? .provider : .network, error.httpStatus)
     }
+    if let error = error as? CartesiaTransportError {
+      return (error.isProviderRejection ? .provider : .network, error.httpStatus)
+    }
     if error is CleanupNetworkError { return (.network, nil) }
     if error is URLError { return (.network, nil) }
     if let error = error as? AppError {
       switch error {
-      case .missingSonioxKey, .missingMetaModelAPIKey, .missingXAIKey, .missingOpenRouterKey, .missingGroqKey,
-        .missingCerebrasKey:
+      case .missingSonioxKey, .missingMetaModelAPIKey, .missingXAIKey, .missingCartesiaKey,
+        .missingOpenRouterKey, .missingGroqKey, .missingCerebrasKey:
         return (.missingCredential, nil)
       case .microphoneUnavailable: return (.microphonePermission, nil)
       case .connectionTimeout: return (.connectionTimeout, nil)

@@ -43,6 +43,7 @@ final class AppPreferences: ObservableObject {
     static let localTranscriptionModel = "localTranscriptionModel"
     static let appleSpeechLocale = "appleSpeechLocale"
     static let transcriptionProvider = "transcriptionProvider"
+    static let cartesiaTranscriptionModel = "cartesiaTranscriptionModel"
     static let cleanupMode = "cleanupMode"
     static let cleanupCustomInstructions = "cleanupCustomInstructions"
     static let cleanupProvider = "cleanupProvider"
@@ -79,11 +80,18 @@ final class AppPreferences: ObservableObject {
       onTranscriptionProviderChange?()
     }
   }
+  @Published var cartesiaTranscriptionModel: CartesiaTranscriptionModel {
+    didSet {
+      defaults.set(cartesiaTranscriptionModel.rawValue, forKey: Key.cartesiaTranscriptionModel)
+      onTranscriptionProviderChange?()
+    }
+  }
 
   var effectiveTranscriptionProvider: TranscriptionProvider { offlineMode ? .local : transcriptionProvider }
   var transcriptionConfiguration: TranscriptionConfiguration {
     TranscriptionConfiguration(provider: effectiveTranscriptionProvider,
-      localModel: localTranscriptionModel, appleLocaleIdentifier: appleSpeechLocale)
+      localModel: localTranscriptionModel, appleLocaleIdentifier: appleSpeechLocale,
+      cartesiaModel: cartesiaTranscriptionModel)
   }
 
   func setOfflineMode(_ enabled: Bool) {
@@ -283,6 +291,8 @@ final class AppPreferences: ObservableObject {
     offlineMode = defaults.bool(forKey: Key.offlineMode)
     localTranscriptionModel = LocalTranscriptionModel(rawValue: defaults.string(forKey: Key.localTranscriptionModel) ?? "") ?? .nemotron
     appleSpeechLocale = defaults.string(forKey: Key.appleSpeechLocale) ?? ""
+    cartesiaTranscriptionModel = CartesiaTranscriptionModel(
+      rawValue: defaults.string(forKey: Key.cartesiaTranscriptionModel) ?? "") ?? .ink2
     transcriptionProvider =
       TranscriptionProvider(
         rawValue: defaults.string(forKey: Key.transcriptionProvider) ?? "") ?? .soniox

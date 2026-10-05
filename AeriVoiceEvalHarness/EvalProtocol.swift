@@ -15,6 +15,7 @@ struct EvalScenario: Decodable {
   let grokPacketMode: String?
   let grokConnectionMode: String?
   let grokReadyAgeMs: Double?
+  let cartesiaModel: String?
   let offlineMode: Bool?
   let localModel: String?
   let appleLocale: String?
@@ -43,6 +44,9 @@ struct EvalScenario: Decodable {
   var provider: TranscriptionProvider { TranscriptionProvider(rawValue: transcriptionProvider ?? "soniox")! }
   var grokPacketPolicy: GrokAudioPacketPolicy { grokPacketMode == "100ms" ? .milliseconds100 : .captureFrames }
   var grokReady: Bool { grokConnectionMode == "ready" }
+  var cartesiaEngine: CartesiaTranscriptionModel {
+    CartesiaTranscriptionModel(rawValue: cartesiaModel ?? "ink-2")!
+  }
   var localEngine: LocalTranscriptionModel { LocalTranscriptionModel(rawValue: localModel ?? "nemotron")! }
   var model: CleanupModel { CleanupModel(rawValue: cleanupModel ?? "qwen-3.8-27b")! }
   var configuration: CleanupConfiguration {
@@ -87,6 +91,11 @@ struct EvalScenario: Decodable {
       if let age = grokReadyAgeMs {
         guard grokReady, age.isFinite, age >= 0, age <= 60_000 else { throw EvalError.invalidScenario }
       }
+    }
+    if let cartesiaModel {
+      guard provider == .cartesia, offlineMode != true,
+        CartesiaTranscriptionModel(rawValue: cartesiaModel) != nil
+      else { throw EvalError.invalidScenario }
     }
     guard LocalTranscriptionModel(rawValue: localModel ?? "nemotron") != nil else { throw EvalError.invalidScenario }
     if provider != .local,

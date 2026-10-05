@@ -233,6 +233,11 @@ final class AppModel: ObservableObject {
       guard !preferences.offlineMode || installed else { return }
       setLocalTranscriptionModel(localModel)
     }
+    if let cartesiaModel = choice.cartesiaModel,
+      cartesiaModel != preferences.cartesiaTranscriptionModel
+    {
+      preferences.cartesiaTranscriptionModel = cartesiaModel
+    }
     selectTranscriptionProvider(choice.provider)
   }
 
@@ -448,6 +453,7 @@ final class AppModel: ObservableObject {
     case .soniox: nil
     case .metaModelAPI: nil
     case .xai: nil
+    case .cartesia: nil
     case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
     case .groq: preferences.cleanupConfiguration(for: .groq)
     case .cerebras: preferences.cleanupConfiguration(for: .cerebras)

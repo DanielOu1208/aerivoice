@@ -2,7 +2,9 @@ import Foundation
 
 /// Responds below the real clients: handshakes, JSON encoding and parsing still run in production code.
 @MainActor
-final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport, GrokWebSocketTransport {
+final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport, GrokWebSocketTransport,
+  CartesiaWebSocketTransport
+{
   private let provider: TranscriptionProvider
   private let script: ControlledResponses
   private let text: String
@@ -20,6 +22,13 @@ final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport
   func invalidate() { cancel(with: .goingAway, reason: nil) }
   func ping() async throws { if cancelled { throw CancellationError() } }
 
+  /// Cartesia has no handshake message: the socket is ready once it opens.
+  func open() async throws {
+    try await Task.sleep(for: .milliseconds(script.connectDelayMs ?? 0))
+    guard !cancelled else { throw CancellationError() }
+    if script.fault == "connection" { throw URLError(.cannotConnectToHost) }
+  }
+
   func send(_ message: URLSessionWebSocketTask.Message) async throws {
     guard !cancelled else { throw CancellationError() }
     switch message {
@@ -32,7 +41,20 @@ final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport
         } else if provider == .grok {
           try enqueue(["type": "transcript.partial", "text": text, "start": 0, "duration": 0.25,
                        "is_final": false, "speech_final": false])
+        } else if provider == .cartesia {
+          try enqueue(["type": "transcript", "is_final": false, "text": text])
         } else { try enqueue(["type": "transcript", "transcript": text, "final": false]) }
+      }
+    case .string(let value) where provider == .cartesia:
+      // Cartesia's commands are bare words: `finalize` returns the transcript, `close` ends the session.
+      guard script.fault != "finalize_timeout" else { return }
+      if value == "finalize" {
+        try await Task.sleep(for: .milliseconds(script.finalizeDelayMs ?? 0))
+        guard !cancelled else { throw CancellationError() }
+        try enqueue(["type": "transcript", "is_final": true, "text": text])
+        try enqueue(["type": "flush_done"])
+      } else if value == "close" {
+        try enqueue(["type": "done"])
       }
     case .string(let value):
       let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any]

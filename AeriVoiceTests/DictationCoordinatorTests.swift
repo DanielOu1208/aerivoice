@@ -541,6 +541,39 @@ final class DictationCoordinatorTests: XCTestCase {
     fixture.coordinator.cancel()
   }
 
+  func testSelectedCartesiaModelUsesCartesiaCredentialAndConfiguration() async throws {
+    let fixture = makeFixture(transcriptionProvider: .cartesia)
+    fixture.preferences.cartesiaTranscriptionModel = .inkPreview
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+
+    XCTAssertEqual(
+      fixture.transcriber.lastConfiguration,
+      TranscriptionConfiguration(provider: .cartesia, cartesiaModel: .inkPreview))
+    XCTAssertEqual(fixture.transcriber.lastConfiguration?.modelID, "ink-preview")
+    XCTAssertEqual(fixture.transcriber.lastAPIKey, "cartesia-key")
+    XCTAssertEqual(fixture.transcriber.lastVocabulary, ["AeriVoice"])
+    XCTAssertEqual(fixture.benchmark.transcriptionConfiguration?.modelID, "ink-preview")
+    fixture.coordinator.cancel()
+  }
+
+  func testMissingCartesiaCredentialDoesNotFallBackToAnotherProvider() async throws {
+    let fixture = makeFixture(transcriptionProvider: .cartesia, hasCartesiaKey: false)
+
+    fixture.coordinator.toggle()
+    try await waitUntil {
+      if case .error = fixture.coordinator.phase { return true }
+      return false
+    }
+
+    XCTAssertEqual(
+      fixture.coordinator.phase, .error("Add and verify a Cartesia API key in Settings."))
+    XCTAssertEqual(fixture.benchmark.failureCategory, .missingCredential)
+    XCTAssertFalse(fixture.transcriber.didConnect)
+    XCTAssertTrue(fixture.audio.didStop)
+  }
+
   func testProvidersConnectDuringCueWithoutDelayingCapture() async throws {
     for provider in TranscriptionProvider.allCases {
       let fixture = makeFixture(

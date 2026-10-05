@@ -47,6 +47,16 @@ struct LiveCredentialValidator: CredentialValidating {
         vocabulary: [], sessionID: DictationSessionID())
       try await client.send(RealtimeAudioFrame(audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
       do { _ = try await client.finish() } catch AppError.emptyTranscript {}
+    case .cartesia:
+      let client = CartesiaRealtimeClient()
+      defer { client.cancel() }
+      try await client.connect(
+        configuration: TranscriptionConfiguration(provider: .cartesia), apiKey: value,
+        vocabulary: [], sessionID: DictationSessionID())
+      try await client.send(
+        RealtimeAudioFrame(
+          audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
+      do { _ = try await client.finish() } catch AppError.emptyTranscript {}
     case .metaModelAPI:
       let client = MetaRealtimeClient()
       defer { client.cancel() }

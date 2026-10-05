@@ -14,6 +14,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
   private let soniox: RealtimeTranscribing
   private let meta: RealtimeTranscribing
   private let grok: RealtimeTranscribing
+  private let cartesia: RealtimeTranscribing
   private let local: RealtimeTranscribing
   private let apple: RealtimeTranscribing
   private var activeLocalModel: LocalTranscriptionModel = .nemotron
@@ -24,12 +25,14 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     soniox: RealtimeTranscribing = SonioxRealtimeClient(),
     meta: RealtimeTranscribing = MetaRealtimeClient(),
     grok: RealtimeTranscribing = GrokRealtimeClient(),
+    cartesia: RealtimeTranscribing = CartesiaRealtimeClient(),
     local: RealtimeTranscribing = LocalRealtimeClient(),
     apple: RealtimeTranscribing = AppleRealtimeClient()
   ) {
     self.soniox = soniox
     self.meta = meta
     self.grok = grok
+    self.cartesia = cartesia
     self.local = local
     self.apple = apple
     wire(local, provider: .local, localModel: .nemotron)
@@ -37,6 +40,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     wire(soniox, provider: .soniox)
     wire(meta, provider: .meta)
     wire(grok, provider: .grok)
+    wire(cartesia, provider: .cartesia)
   }
 
   func connect(
@@ -97,6 +101,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     soniox.cancelActiveConnection()
     meta.cancelActiveConnection()
     grok.cancelActiveConnection()
+    cartesia.cancelActiveConnection()
     local.cancelActiveConnection()
     apple.cancelActiveConnection()
   }
@@ -107,6 +112,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     soniox.cancel()
     meta.cancel()
     grok.cancel()
+    cartesia.cancel()
     local.cancel()
     apple.cancel()
   }
@@ -132,6 +138,7 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     case .soniox: soniox
     case .meta: meta
     case .grok: grok
+    case .cartesia: cartesia
     case .local: activeLocalModel == .apple ? apple : local
     }
   }
@@ -151,12 +158,15 @@ enum RealtimeTranscriptionPrewarmer {
         urls = [URL(string: "https://api.x.ai")].compactMap { $0 }
       case .meta:
         urls = [URL(string: "https://api.meta.ai")].compactMap { $0 }
+      case .cartesia:
+        urls = [URL(string: "https://api.cartesia.ai")].compactMap { $0 }
       case .soniox:
         urls = [URL(string: "https://stt-rt.soniox.com")].compactMap { $0 }
       case nil:
         urls = [
           URL(string: "https://api.meta.ai"),
           URL(string: "https://api.x.ai"),
+          URL(string: "https://api.cartesia.ai"),
           URL(string: "https://stt-rt.soniox.com"),
         ].compactMap { $0 }
       }
