@@ -97,8 +97,12 @@ extension DictationCoordinatorTests {
     private var reads: [CredentialKind] = []
     init(values: [CredentialKind: String?]) { self.values = values }
     var readKinds: [CredentialKind] { lock.withLock { reads } }
+    /// Runs inside each read, on the reader's thread: a place to keep the main thread busy
+    /// during start()'s checks, as a slow Keychain does.
+    var onRead: ((CredentialKind) -> Void)?
     func value(for kind: CredentialKind) -> String? {
-      lock.withLock {
+      onRead?(kind)
+      return lock.withLock {
         reads.append(kind)
         return values[kind] ?? nil
       }

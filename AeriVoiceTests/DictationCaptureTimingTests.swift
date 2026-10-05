@@ -306,6 +306,31 @@ extension DictationCoordinatorTests {
     XCTAssertTrue(fixture.audio.didStop)
   }
 
+  func testInterruptionQueuedBehindTheChecksFailsTheDictation() async throws {
+    // The real ordering: the checks keep the main thread busy, the microphone requested at
+    // the press finishes starting, and the input goes away. Its report waits behind the
+    // checks and must still fail the dictation, not let it record from a stopped engine.
+    let fixture = makeFixture()
+    var reported = false
+    fixture.credentials.onRead = { [audio = fixture.audio] _ in
+      guard !reported else { return }
+      reported = true
+      let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+      while !audio.startReturned, ContinuousClock.now < deadline { usleep(1_000) }
+      audio.onCaptureInterrupted?()
+    }
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.benchmark.terminalResult != nil }
+
+    XCTAssertTrue(reported)
+    XCTAssertEqual(fixture.benchmark.terminalResult, .failed)
+    XCTAssertEqual(fixture.benchmark.failureStage, .audioCapture)
+    XCTAssertFalse(fixture.benchmark.milestones.contains(.captureStarted))
+    XCTAssertEqual(fixture.coordinator.phase, .error(AppError.microphoneUnavailable.localizedDescription))
+    XCTAssertTrue(fixture.audio.didStop)
+  }
+
   func testCancelRightAfterThePressNeverRecords() async throws {
     let fixture = makeFixture(audioFrameCount: 3)
     fixture.coordinator.toggle()

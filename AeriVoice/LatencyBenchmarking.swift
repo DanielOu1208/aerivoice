@@ -96,6 +96,36 @@ enum BenchmarkFailureCategory: String, Codable, Sendable {
   case unknown
 }
 
+extension BenchmarkFailureCategory {
+  /// What kind of failure an error is, and the HTTP status when a provider gave one.
+  static func classify(_ error: Error) -> (category: BenchmarkFailureCategory, httpStatus: Int?) {
+    if let error = error as? ProviderHTTPError {
+      return (.provider, error.statusCode)
+    }
+    if let error = error as? GrokTransportError {
+      return (error.isProviderRejection ? .provider : .network, error.httpStatus)
+    }
+    if let error = error as? CartesiaTransportError {
+      return (error.isProviderRejection ? .provider : .network, error.httpStatus)
+    }
+    if error is CleanupNetworkError { return (.network, nil) }
+    if error is URLError { return (.network, nil) }
+    if let error = error as? AppError {
+      switch error {
+      case .missingSonioxKey, .missingMetaModelAPIKey, .missingXAIKey, .missingCartesiaKey,
+        .missingOpenRouterKey, .missingGroqKey, .missingCerebrasKey:
+        return (.missingCredential, nil)
+      case .microphoneUnavailable: return (.microphonePermission, nil)
+      case .connectionTimeout: return (.connectionTimeout, nil)
+      case .finalizeTimeout: return (.finalizeTimeout, nil)
+      case .emptyTranscript: return (.emptyTranscript, nil)
+      case .provider: return (.provider, nil)
+      }
+    }
+    return (.unknown, nil)
+  }
+}
+
 struct BenchmarkEnvironment: Codable, Equatable, Sendable {
   let appVersion: String?
   let appBuild: String?
@@ -266,6 +296,25 @@ protocol LatencyBenchmarkRecording: AnyObject {
     _ result: BenchmarkTerminalResult, stage: BenchmarkFailureStage?,
     category: BenchmarkFailureCategory?, httpStatus: Int?)
   func clearCompletedHistory()
+}
+
+extension LatencyBenchmarkRecording {
+  /// The audio queue's part of a capture start.
+  func recordSteps(_ report: AudioStartReport) {
+    recordStep(.audioQueueWait, report.queueWait)
+    recordStep(.audioRouteCheck, report.routeCheck)
+    if !report.usedPreparation { recordStep(.audioEngineCreate, report.engineCreation) }
+    recordStep(.audioTapInstall, report.engine.tapInstall)
+    recordStep(.audioEnginePrepare, report.engine.prepare)
+    recordStep(.audioEngineStart, report.engine.start)
+  }
+
+  /// The accessibility work around Paste; a step that was not reached is not recorded.
+  func recordSteps(_ steps: InsertionSteps) {
+    if let value = steps.editorLookup { recordStep(.editorLookup, value) }
+    if let value = steps.prePasteProbe { recordStep(.prePasteProbe, value) }
+    if let value = steps.revalidation { recordStep(.pasteRevalidation, value) }
+  }
 }
 
 extension LatencyBenchmarkRecording {
