@@ -1,0 +1,16 @@
+AeriVoice 0.2.3
+
+Cartesia transcription
+Choose Cartesia Ink 2 or Cartesia Ink Preview in Settings > Dictation and connect a Cartesia API key. Both models transcribe English, French, Hindi, Japanese, and Spanish only. Your Dictionary is sent as hints, up to 100 terms.
+
+Recording ends exactly at release
+AeriVoice keeps everything you said up to the moment you release the shortcut. Before, the last tenth of a second could be dropped, cutting off the end of the last word.
+
+Faster start with sounds off
+The microphone starts at the key press. After you cancel a dictation, the next one starts on a microphone engine that is already prepared.
+
+Recommended model
+The Dictation model picker marks Soniox as the recommended cloud model.
+
+Microphone lost while starting
+If your input device goes away as a dictation starts, AeriVoice now reports the microphone error instead of "No speech detected".
