@@ -3,9 +3,17 @@ import OSLog
 
 /// Cartesia takes at most 100 keyterms totalling 1,200 characters, fixed when the connection
 /// opens. Provider limits do not change the user's shared dictionary.
+///
+/// The terms travel in the request URL, and Cartesia refuses a URL past about 8 KB: live, a
+/// 7,612-byte URL connected and an 8,512-byte one got HTTP 414 (2026-10-05). A character
+/// outside ASCII takes six to twelve bytes once escaped, so a dictionary in Japanese or Hindi
+/// reaches that size well before 1,200 characters, and every dictation would then fail to
+/// connect. The escaped size is therefore limited too.
 struct CartesiaKeyterms: Equatable {
   static let maximumCount = 100
   static let maximumCharacters = 1_200
+  /// For the keyterm part of the URL. The rest of the URL is about 120 bytes.
+  static let maximumQueryBytes = 6_800
 
   let terms: [String]
   let excluded: [String]
@@ -14,12 +22,17 @@ struct CartesiaKeyterms: Equatable {
     var accepted: [String] = []
     var excluded: [String] = []
     var characters = 0
+    var queryBytes = 0
     for term in VocabularyNormalizer.parse(vocabulary.joined(separator: "\n")) {
       let length = term.unicodeScalars.count
+      let bytes = Self.queryItem(term).utf8.count + 1
       // A term that doesn't fit is skipped, so shorter terms after it can still be sent.
-      if accepted.count < Self.maximumCount, characters + length <= Self.maximumCharacters {
+      if accepted.count < Self.maximumCount, characters + length <= Self.maximumCharacters,
+        queryBytes + bytes <= Self.maximumQueryBytes
+      {
         accepted.append(term)
         characters += length
+        queryBytes += bytes
       } else {
         excluded.append(term)
       }
@@ -27,6 +40,15 @@ struct CartesiaKeyterms: Equatable {
     terms = accepted
     self.excluded = excluded
   }
+
+  /// One term as it appears in the URL. URLQueryItem leaves "+" and "&" readable, which
+  /// would change terms such as "C++".
+  static func queryItem(_ term: String) -> String {
+    "keyterm=" + (term.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "")
+  }
+
+  private static let unreserved = CharacterSet(
+    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 }
 
 enum CartesiaRealtimeRequest {
@@ -35,25 +57,16 @@ enum CartesiaRealtimeRequest {
 
   /// The manual-finalize endpoint: the client says when the speaker is done.
   static func make(apiKey: String, model: String, vocabulary: [String]) -> URLRequest {
-    var items = [
-      ("model", model), ("encoding", "pcm_s16le"), ("sample_rate", "16000"),
-      ("cartesia_version", apiVersion),
-    ]
-    items += CartesiaKeyterms(vocabulary).terms.map { ("keyterm", $0) }
+    let items =
+      [
+        "model=\(model)", "encoding=pcm_s16le", "sample_rate=16000",
+        "cartesia_version=\(apiVersion)",
+      ] + CartesiaKeyterms(vocabulary).terms.map(CartesiaKeyterms.queryItem)
     var components = URLComponents(string: "wss://api.cartesia.ai/stt/websocket")!
-    // URLQueryItem leaves "+" and "&" readable, which would change terms such as "C++".
-    components.percentEncodedQuery =
-      items.map { "\($0.0)=\(escaped($0.1))" }.joined(separator: "&")
+    components.percentEncodedQuery = items.joined(separator: "&")
     var request = URLRequest(url: components.url!)
     request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
     return request
-  }
-
-  private static let unreserved = CharacterSet(
-    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-
-  private static func escaped(_ value: String) -> String {
-    value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? ""
   }
 }
 
@@ -92,6 +105,7 @@ struct CartesiaTransportError: LocalizedError, Equatable {
   var errorDescription: String? {
     switch status {
     case 401, 403: "Cartesia rejected this API key."
+    case 414: "Cartesia refused the request as too large. Shorten the Dictionary and try again."
     case 429, 1013:
       "Cartesia is rate limited or at your plan's connection limit. Wait a moment and try again."
     default: "The Cartesia transcription connection failed. Try again."
@@ -229,6 +243,8 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
   private var audioBudget = CartesiaRealtimeClient.burstNanoseconds
   private var budgetRefilledAt: ContinuousClock.Instant?
   private var isFinishing = false
+  /// The connection whose handshake is still in flight; only that one can time out.
+  private var openingConnection: UUID?
   private var timedOutConnection: UUID?
   private var generation = UUID()
   private let logger = Logger(subsystem: "com.danielou.AeriVoice", category: "CartesiaRealtime")
@@ -259,13 +275,16 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
 
     let connectionGeneration = UUID()
     generation = connectionGeneration
+    openingConnection = connectionGeneration
     let transport = makeTransport(
       CartesiaRealtimeRequest.make(
         apiKey: apiKey, model: configuration.modelID, vocabulary: vocabulary))
     self.transport = transport
     connectionTimeoutTask = Task { @MainActor [weak self, connectionTimeout] in
       do { try await Task.sleep(for: connectionTimeout) } catch { return }
-      guard let self, self.generation == connectionGeneration else { return }
+      // A handshake that has finished is left alone, even when this sleep ended before the
+      // task could be cancelled.
+      guard let self, self.openingConnection == connectionGeneration else { return }
       self.timedOutConnection = connectionGeneration
       transport.cancel(with: .goingAway, reason: nil)
     }
@@ -285,9 +304,11 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
       cancel()
       throw timedOut ? AppError.connectionTimeout : error
     }
+    // A newer connection owns the timeout task from here on.
+    guard generation == connectionGeneration else { throw CancellationError() }
+    openingConnection = nil
     connectionTimeoutTask?.cancel()
     connectionTimeoutTask = nil
-    guard generation == connectionGeneration else { throw CancellationError() }
     // The timeout can fire in the same turn the handshake completes.
     if timedOutConnection == connectionGeneration {
       cancel()
@@ -383,6 +404,7 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
     audioBudget = Self.burstNanoseconds
     budgetRefilledAt = nil
     isFinishing = false
+    openingConnection = nil
     timedOutConnection = nil
   }
 

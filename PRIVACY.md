@@ -48,9 +48,13 @@ When Cartesia is selected, AeriVoice streams microphone audio as 16 kHz mono PCM
 to Cartesia's `ink-2` or `ink-preview` model, whichever is chosen. Your Cartesia
 API key is sent in a request header. Up to 100 dictionary terms totaling at most
 1,200 Unicode code points are sent as URL query parameters to help recognition;
-terms beyond those limits are excluded. The Dictionary displays exclusions
-without deleting saved terms. The connection opens when dictation starts and
-closes when it ends; nothing is sent to Cartesia between dictations. Keys,
+terms beyond those limits, or that would make the request URL larger than
+Cartesia accepts, are excluded. The Dictionary displays exclusions without
+deleting saved terms. The connection opens when dictation starts and closes
+when it ends. Between dictations no key, audio or dictionary term is sent;
+while Cartesia is selected, AeriVoice may send an empty request to
+`api.cartesia.ai` at launch, wake or selection so the next connection opens
+faster. Keys,
 request URLs, and provider response bodies are not written to AeriVoice
 diagnostics. Cartesia's current retention and account policies apply; AeriVoice
 does not request or claim a zero-data-retention guarantee for this provider.

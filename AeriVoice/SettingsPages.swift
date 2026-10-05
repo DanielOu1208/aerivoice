@@ -138,7 +138,7 @@ struct DictationSettingsPage: View {
           }
         }
         if preferences.effectiveTranscriptionProvider == .cartesia {
-          Text("Cartesia uses up to 100 dictionary terms totaling 1,200 characters. Spelling is not guaranteed.")
+          Text("Cartesia uses up to 100 dictionary terms totaling 1,200 characters, fewer in non-Latin scripts. Spelling is not guaranteed.")
             .font(.caption).foregroundStyle(.secondary)
           let excluded = CartesiaKeyterms(VocabularyNormalizer.normalize(preferences.vocabulary)).excluded
           if !excluded.isEmpty {

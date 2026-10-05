@@ -63,6 +63,47 @@ final class CartesiaRealtimeClientTests: XCTestCase {
       CartesiaKeyterms.maximumCharacters)
   }
 
+  func testANonLatinDictionaryIsCutToTheURLSizeCartesiaAccepts() throws {
+    // 100 terms of 12 Japanese characters are within both documented limits, but escaped they
+    // make a 9.4 KB URL, which Cartesia refused with HTTP 414.
+    let vocabulary = (0..<100).map { String(format: "辞書の単語その%03d番目", $0) }
+    XCTAssertEqual(vocabulary.reduce(0) { $0 + $1.unicodeScalars.count }, 1_200)
+
+    let keyterms = CartesiaKeyterms(vocabulary)
+    let request = CartesiaRealtimeRequest.make(apiKey: "key", model: "ink-2", vocabulary: vocabulary)
+    let url = try XCTUnwrap(request.url)
+
+    XCTAssertLessThan(url.absoluteString.utf8.count, 7_000)
+    XCTAssertEqual(keyterms.terms, Array(vocabulary.prefix(keyterms.terms.count)))
+    XCTAssertEqual(keyterms.terms + keyterms.excluded, vocabulary)
+    XCTAssertGreaterThan(keyterms.terms.count, 50)
+    XCTAssertFalse(keyterms.excluded.isEmpty)
+    XCTAssertEqual(
+      URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+        .filter { $0.name == "keyterm" }.compactMap(\.value),
+      keyterms.terms)
+  }
+
+  func testAFullLatinDictionaryIsNotCutByTheURLSize() {
+    let vocabulary = (0..<100).map { String(format: "term-%03d-abc", $0) }
+    XCTAssertEqual(vocabulary.reduce(0) { $0 + $1.count }, 1_200)
+    let keyterms = CartesiaKeyterms(vocabulary)
+    XCTAssertEqual(keyterms.terms, vocabulary)
+    XCTAssertTrue(keyterms.excluded.isEmpty)
+  }
+
+  func testATermTooLongForTheRemainingURLIsSkippedAndShorterOnesStillFit() {
+    // 70 twelve-character terms use 6,510 of the 6,800 bytes.
+    let japanese = (0..<70).map { String(format: "辞書の単語その%03d番目", $0) }
+    let long = String(repeating: "長", count: 40)
+    let keyterms = CartesiaKeyterms(japanese + [long, "AeriVoice"])
+    XCTAssertEqual(keyterms.terms, japanese + ["AeriVoice"])
+    XCTAssertEqual(keyterms.excluded, [long])
+    XCTAssertLessThanOrEqual(
+      keyterms.terms.reduce(0) { $0 + CartesiaKeyterms.queryItem($1).utf8.count + 1 },
+      CartesiaKeyterms.maximumQueryBytes)
+  }
+
   func testConnectSendsTheSelectedModelAndDictionary() async throws {
     let transport = CartesiaTransportSpy()
     var captured: URLRequest?
@@ -396,9 +437,59 @@ final class CartesiaRealtimeClientTests: XCTestCase {
     client.cancel()
   }
 
+  func testAConnectionThatOpenedIsNotTimedOutAfterwards() async throws {
+    let transport = CartesiaTransportSpy()
+    let client = CartesiaRealtimeClient(
+      connectionTimeout: .milliseconds(20), makeTransport: { _ in transport })
+    try await connect(client)
+
+    try await Task.sleep(for: .milliseconds(80))
+
+    XCTAssertTrue(transport.cancelCodes.isEmpty)
+    try await client.send(RealtimeAudioFrame(audio: Data([5]), queuedBytesAfterFrame: 0))
+    XCTAssertEqual(transport.sentData, [Data([5])])
+    client.cancel()
+  }
+
+  func testASupersededConnectionThatOpensLateLeavesTheNewOneItsTimeout() async throws {
+    let first = CartesiaTransportSpy()
+    first.openBehavior = .hangs
+    first.cancelFailsPendingOpen = false
+    let second = CartesiaTransportSpy()
+    second.openBehavior = .hangs
+    var transports = [first, second]
+    let client = CartesiaRealtimeClient(
+      connectionTimeout: .milliseconds(60), makeTransport: { _ in transports.removeFirst() })
+
+    let firstConnect = Task { try await self.connect(client) }
+    try await waitUntil { first.openCount == 1 }
+    let secondConnect = Task { try await self.connect(client) }
+    try await waitUntil { second.openCount == 1 }
+    // The first handshake completes only now, after the second connection took over.
+    first.completeOpen()
+
+    do {
+      try await firstConnect.value
+      XCTFail("Expected the superseded connection to be cancelled")
+    } catch is CancellationError {
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+    do {
+      try await secondConnect.value
+      XCTFail("Expected the second connection to time out")
+    } catch {
+      XCTAssertEqual(
+        error.localizedDescription, "The transcription provider did not connect in time.")
+    }
+  }
+
   func testTransportErrorsDescribeWhatTheUserCanDo() {
     XCTAssertEqual(
       CartesiaTransportError(status: 403).localizedDescription, "Cartesia rejected this API key.")
+    XCTAssertEqual(
+      CartesiaTransportError(status: 414).localizedDescription,
+      "Cartesia refused the request as too large. Shorten the Dictionary and try again.")
     XCTAssertEqual(
       CartesiaTransportError(status: 429).localizedDescription,
       "Cartesia is rate limited or at your plan's connection limit. Wait a moment and try again.")
@@ -565,6 +656,8 @@ private final class CartesiaTransportSpy: CartesiaWebSocketTransport {
   /// What the server sends after it receives a text command.
   var replies: [String: [Result<Message, Error>]] = [:]
   var sendFailure: Error?
+  /// False keeps a hanging handshake pending through `cancel`, to complete it late.
+  var cancelFailsPendingOpen = true
   private(set) var openCount = 0
   private(set) var sentMessages: [Message] = []
   private(set) var cancelCodes: [URLSessionWebSocketTask.CloseCode] = []
@@ -610,13 +703,20 @@ private final class CartesiaTransportSpy: CartesiaWebSocketTransport {
 
   func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
     cancelCodes.append(closeCode)
-    pendingOpen?.resume(throwing: CancellationError())
-    pendingOpen = nil
+    if cancelFailsPendingOpen {
+      pendingOpen?.resume(throwing: CancellationError())
+      pendingOpen = nil
+    }
     pendingReceive?.resume(throwing: CancellationError())
     pendingReceive = nil
   }
 
   func serverSends(_ json: String) { enqueue(.success(.string(json))) }
+
+  func completeOpen() {
+    pendingOpen?.resume()
+    pendingOpen = nil
+  }
 
   private func enqueue(_ result: Result<Message, Error>) {
     if let pendingReceive {

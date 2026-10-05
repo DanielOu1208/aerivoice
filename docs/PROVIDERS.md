@@ -42,7 +42,7 @@ AeriVoice keeps a prepared Grok connection ready for up to five minutes (replace
 
 Choose **Cartesia Ink 2** or **Cartesia Ink Preview** under Dictation and connect a Cartesia API key with credits. Ink 2 is Cartesia's stable model. Ink Preview is its preview model and can change without notice. Both transcribe English, French, Hindi, Japanese, and Spanish only.
 
-The Dictionary supplies up to 100 recognition hints totaling 1,200 characters; excluded entries stay saved and are listed in Dictation settings. Hints do not guarantee exact spelling.
+The Dictionary supplies up to 100 recognition hints totaling 1,200 characters; excluded entries stay saved and are listed in Dictation settings. Hints travel in the request URL, which Cartesia limits to about 8 KB, so fewer fit in non-Latin scripts: roughly 750 Japanese or Hindi characters in total. Hints do not guarantee exact spelling.
 
 AeriVoice uses Cartesia's manual-finalize endpoint: releasing the shortcut tells Cartesia the speaker is done, and the session closes once the transcript arrives. The connection opens when you press the shortcut, and nothing is kept open between dictations. Cartesia expects audio at about the rate it was spoken. Up to one second of audio buffered while the connection opens is sent at once, and anything beyond that catches up at 1.35× real time, with unchanged samples. Cartesia bills for the audio sent, including silence.
 
