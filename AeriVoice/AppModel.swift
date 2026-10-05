@@ -152,8 +152,10 @@ final class AppModel: ObservableObject {
     credentialManager.objectWillChange.sink { [weak self] in
       self?.objectWillChange.send()
     }.store(in: &cancellables)
-    shortcutMonitor.onHoldPress = { [weak coordinator] in coordinator?.holdShortcutPressed() }
-    shortcutMonitor.onPress = { [weak coordinator] in coordinator?.shortcutPressed() }
+    shortcutMonitor.onHoldPress = { [weak coordinator] age in
+      coordinator?.holdShortcutPressed(eventAge: age)
+    }
+    shortcutMonitor.onPress = { [weak coordinator] age in coordinator?.shortcutPressed(eventAge: age) }
     shortcutMonitor.onHoldRelease = { [weak coordinator] lifecycleGeneration in
       coordinator?.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
     }
@@ -230,6 +232,11 @@ final class AppModel: ObservableObject {
       let installed = localModel == .apple ? appleSpeech.assetsInstalled : self.localModel.assetsInstalled
       guard !preferences.offlineMode || installed else { return }
       setLocalTranscriptionModel(localModel)
+    }
+    if let cartesiaModel = choice.cartesiaModel,
+      cartesiaModel != preferences.cartesiaTranscriptionModel
+    {
+      preferences.cartesiaTranscriptionModel = cartesiaModel
     }
     selectTranscriptionProvider(choice.provider)
   }
@@ -415,14 +422,24 @@ final class AppModel: ObservableObject {
 
   func stopTranscriptionPreparation() { grokPreparation.stop() }
 
-  func refreshTranscriptionSessionEligibility() {
-    // An unavailable session state fails closed; waking does not imply unlocking.
+  /// Whether this user's session is on the console and its screen is unlocked. An unavailable
+  /// session state fails closed; waking does not imply unlocking.
+  static var sessionIsUnlocked: Bool {
     guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-      session[kCGSessionOnConsoleKey as String] as? Bool == true else {
-      grokPreparation.setLocked(true)
-      return
-    }
-    grokPreparation.setLocked(session["CGSSessionScreenIsLocked"] as? Bool == true)
+      session[kCGSessionOnConsoleKey as String] as? Bool == true
+    else { return false }
+    return session["CGSSessionScreenIsLocked"] as? Bool != true
+  }
+
+  func refreshTranscriptionSessionEligibility() {
+    grokPreparation.setLocked(!Self.sessionIsUnlocked)
+  }
+
+  /// After wake or a session switch, prepares the microphone engine again once the session is
+  /// unlocked, so the next dictation doesn't start cold.
+  func prepareAudioIfUnlocked() {
+    guard Self.sessionIsUnlocked else { return }
+    coordinator.prepareAudioIfIdle()
   }
 
   func clearCompletedBenchmarkHistory() {
@@ -432,13 +449,8 @@ final class AppModel: ObservableObject {
   private func credentialValidationConfiguration(
     for kind: CredentialKind
   ) -> CleanupConfiguration? {
-    switch kind {
-    case .soniox: nil
-    case .metaModelAPI: nil
-    case .xai: nil
-    case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
-    case .groq: preferences.cleanupConfiguration(for: .groq)
-    case .cerebras: preferences.cleanupConfiguration(for: .cerebras)
-    }
+    // Only a cleanup key is checked against a model; a transcription key needs none.
+    CleanupProvider.allCases.first { $0.credentialKind == kind }
+      .map { preferences.cleanupConfiguration(for: $0) }
   }
 }

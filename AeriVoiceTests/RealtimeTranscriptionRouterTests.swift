@@ -8,7 +8,7 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
   func testPreparationSurvivesConnectAndFlushAndSendsAreForwarded() async throws {
     let grok = RouterClientSpy()
     grok.reportsAudioSends = true
-    let router = RealtimeTranscriptionRouter(grok: grok)
+    let router = RealtimeTranscriptionRouter(clients: [.grok: grok])
     let configuration = TranscriptionConfiguration(provider: .grok)
     var events: [String] = []
     var bytes = 0
@@ -36,7 +36,7 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
 
   func testSwitchingAwayFromGrokInvalidatesStandby() async throws {
     let grok = RouterClientSpy()
-    let router = RealtimeTranscriptionRouter(soniox: RouterClientSpy(), grok: grok)
+    let router = RealtimeTranscriptionRouter(clients: [.soniox: RouterClientSpy(), .grok: grok])
     _ = await router.prepareConnection(configuration: TranscriptionConfiguration(provider: .grok), apiKey: "test", vocabulary: [])
     try await router.connect(configuration: TranscriptionConfiguration(provider: .soniox), apiKey: "test", vocabulary: [], sessionID: DictationSessionID())
     XCTAssertFalse(router.hasPreparedConnection)
@@ -45,7 +45,7 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
     let soniox = RouterClientSpy()
     let meta = RouterClientSpy()
     let grok = RouterClientSpy()
-    let router = RealtimeTranscriptionRouter(soniox: soniox, meta: meta, grok: grok)
+    let router = RealtimeTranscriptionRouter(clients: [.soniox: soniox, .meta: meta, .grok: grok])
     try await router.connect(configuration: TranscriptionConfiguration(provider: .grok),
       apiKey: "xai-test", vocabulary: ["AeriVoice"], sessionID: DictationSessionID())
     XCTAssertEqual(grok.connection?.vocabulary, ["AeriVoice"])
@@ -57,10 +57,44 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
     XCTAssertEqual(result, "Grok text")
   }
 
+  func testRoutesCartesiaWithItsModelAndInvalidatesGrokStandby() async throws {
+    let soniox = RouterClientSpy()
+    let grok = RouterClientSpy()
+    let cartesia = RouterClientSpy()
+    let router = RealtimeTranscriptionRouter(clients: [.soniox: soniox, .grok: grok, .cartesia: cartesia])
+    _ = await router.prepareConnection(
+      configuration: TranscriptionConfiguration(provider: .grok), apiKey: "test", vocabulary: [])
+    let configuration = TranscriptionConfiguration(provider: .cartesia, cartesiaModel: .inkPreview)
+    var transcripts: [String] = []
+    router.onTranscript = { transcripts.append($0.snapshot.displayText) }
+
+    try await router.connect(
+      configuration: configuration, apiKey: "cartesia-key", vocabulary: ["AeriVoice"],
+      sessionID: DictationSessionID())
+    XCTAssertFalse(router.hasPreparedConnection)
+    XCTAssertEqual(cartesia.connection?.configuration.modelID, "ink-preview")
+    XCTAssertEqual(cartesia.connection?.apiKey, "cartesia-key")
+    XCTAssertEqual(cartesia.connection?.vocabulary, ["AeriVoice"])
+    XCTAssertNil(soniox.connection)
+    XCTAssertNil(grok.connection)
+
+    let update = RealtimeTranscriptUpdate(
+      snapshot: TranscriptSnapshot(confirmed: "Cartesia"), hasFinalText: true,
+      finalAudioProcessedMS: nil, totalAudioProcessedMS: nil)
+    soniox.onTranscript?(update)
+    cartesia.onTranscript?(update)
+    XCTAssertEqual(transcripts, ["Cartesia"])
+    cartesia.finishResult = "Cartesia text"
+    let result = try await router.finish()
+    XCTAssertEqual(result, "Cartesia text")
+    router.cancel()
+    XCTAssertGreaterThan(cartesia.cancelCount, 0)
+  }
+
   func testRoutesMetaSessionWithoutConnectingSoniox() async throws {
     let soniox = RouterClientSpy()
     let meta = RouterClientSpy()
-    let router = RealtimeTranscriptionRouter(soniox: soniox, meta: meta)
+    let router = RealtimeTranscriptionRouter(clients: [.soniox: soniox, .meta: meta])
     let configuration = TranscriptionConfiguration(provider: .meta)
     let sessionID = DictationSessionID()
 
@@ -85,7 +119,7 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
   func testOnlyActiveProviderCallbacksAreForwarded() async throws {
     let soniox = RouterClientSpy()
     let meta = RouterClientSpy()
-    let router = RealtimeTranscriptionRouter(soniox: soniox, meta: meta)
+    let router = RealtimeTranscriptionRouter(clients: [.soniox: soniox, .meta: meta])
     var updates: [RealtimeTranscriptUpdate] = []
     var errors: [Error] = []
     router.onTranscript = { updates.append($0) }
@@ -109,7 +143,7 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
     let soniox = RouterClientSpy()
     let meta = RouterClientSpy()
     meta.connectError = AppError.provider("Meta failed")
-    let router = RealtimeTranscriptionRouter(soniox: soniox, meta: meta)
+    let router = RealtimeTranscriptionRouter(clients: [.soniox: soniox, .meta: meta])
 
     do {
       try await router.connect(
@@ -126,7 +160,7 @@ final class RealtimeTranscriptionRouterTests: XCTestCase {
   func testCancelledMetaConnectCannotClearNewMetaSession() async throws {
     let soniox = RouterClientSpy()
     let meta = ReconnectingRouterClientSpy()
-    let router = RealtimeTranscriptionRouter(soniox: soniox, meta: meta)
+    let router = RealtimeTranscriptionRouter(clients: [.soniox: soniox, .meta: meta])
     let configuration = TranscriptionConfiguration(provider: .meta)
 
     let oldConnection = Task { @MainActor in

@@ -36,11 +36,19 @@ Soniox: https://soniox.com/icons/favicon-96x96.png
 The official favicon is a third-party brand asset, not covered by AeriVoice's
 or LobeHub's MIT license.
 
+Cartesia: https://www.cartesia.ai/apple-touch-icon.png
+Retrieved: October 5, 2026
+The official 180 x 180 touch icon is scaled proportionally to 96 x 96. Only
+the tile corners are rounded, to match the other provider tiles; the complete
+mark remains visible. It is a third-party brand asset, not covered by
+AeriVoice's or LobeHub's MIT license.
+
 LobeHub provider icons
 =====================
 
 The following license applies to the LobeHub-derived Meta and Groq
-provider icons, not to the SpaceX, Soniox, OpenRouter, or Cerebras brand assets.
+provider icons, not to the SpaceX, Soniox, Cartesia, OpenRouter, or Cerebras
+brand assets.
 
 MIT License
 

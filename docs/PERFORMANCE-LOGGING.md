@@ -35,7 +35,24 @@ Turning logging off cancels the idle timer, stops signposts and new collection, 
 | `context.settings` | Selected provider/model/mode/reasoning, sound/mute/activation settings, and onboarding completion |
 | `environment` | App version/build, running executable UUID, Debug/Release, distribution flag, optional embedded source revision, macOS/architecture, machine model, RAM bytes, logical CPU count |
 
-`milestonesMS` contains monotonic offsets from activation. `durationsMS` retains the existing local/provider stage boundaries. `stopToOutputMS` ends at insertion completion; when `outcome.terminalResult` is `pasteSent`, that means Paste dispatch, **not confirmed destination consumption**. Interrupted recovery uses the last checkpoint time, not the next launch time.
+`milestonesMS` contains monotonic offsets from activation. `durationsMS` retains the existing local/provider stage boundaries. `stepsMS` holds durations measured where the work runs, often off the main thread, and only for the steps an attempt reached:
+
+| Step | Meaning |
+| --- | --- |
+| `shortcutEventToActivation` | From the shortcut's key event until activation on the main thread; absent for menu starts and for presses that stop a dictation |
+| `audioQueueWait` | From the capture start request until the audio queue ran it; preparation still running delays it |
+| `audioRouteCheck` | Reading the input route, and discarding a preparation made for another route |
+| `audioEngineCreate` | Creating a fresh engine; absent when a prepared engine was used |
+| `audioTapInstall` | Checking the input format and installing the capture tap |
+| `audioEnginePrepare` | Preparing the engine again now that it has a tap |
+| `audioEngineStart` | Starting the hardware |
+| `audioStop` | Closing the microphone at stop, from the release: the wait for the audio block holding the release (at most one ~100 ms block), the audio queue and the resampler flush. It runs alongside `targetPin`, so the two overlap |
+| `targetPin` | Pinning the target app, window, and field at stop, on the main thread |
+| `editorLookup` | Finding the editor from the pinned focus, off the main thread |
+| `prePasteProbe` | The read before Paste that serves clipboard restoration |
+| `pasteRevalidation` | Checking the target again after that read |
+
+The audio steps are timed on the audio queue. When the microphone starts at the shortcut press, `audioEngineStartRequested` precedes `credentialReadStarted`; `earlyAudioStartDeclined` marks a Bluetooth or unreadable input that was started after the checks instead. `stopToOutputMS` ends at insertion completion; when `outcome.terminalResult` is `pasteSent`, that means Paste dispatch, **not confirmed destination consumption**. Interrupted recovery uses the last checkpoint time, not the next launch time.
 
 A missing value is unavailable or not reached, never an assumed zero. Keep terminal outcomes and cleanup routing/fallback fields when analyzing timings. Do not compare successful insertion with clipboard-only or failed attempts as though they measured the same operation.
 
@@ -45,7 +62,7 @@ Every runtime record has `schemaVersion: 1`, `recordID`, `launchID`, `processID`
 
 `uptimeMS` uses the continuous Mach clock, which includes sleep. `sinceLaunchMS` measures app initialization from `main`, excluding OS work before it. Menu configuration and `shortcutEnabled` are separate events. `shortcutUnavailable` reflects an actual event-tap failure. Initialization completion does not mean asynchronous audio preparation or network warmup has completed.
 
-Events cover initialization start/end, menu and shortcut availability, preparation start/end/skip, network warmup start/end, interactions and phase changes, session cleanup, Settings visibility/changes, sleep/wake, logging changes, termination, and resource availability. Preparation `result` is `prepared`, `skipped`, `failed`, `cancelled`, or `unknown`.
+Events cover initialization start/end, menu and shortcut availability, preparation start/end/skip, network warmup start/end, interactions and phase changes, session cleanup, Settings visibility/changes, sleep/wake, screen `lock`/`unlock`, logging changes, termination, and resource availability. Audio preparation after wake, unlock, or a return to the session is recorded as preparation start/end like the launch preparation. Preparation `result` is `prepared`, `skipped`, `failed`, `cancelled`, or `unknown`.
 
 `activity` is one of `launching`, `preparing`, `dictating`, `settling`, `settings`, `idle`, or `sleeping`. Preparation and session settling are work even if no interaction record is being written. `activityGeneration` changes at measurement boundaries, including transitions within dictation, sleep/wake, and clear/enable changes. Only compare resource deltas inside the same generation. Settings changes include only the documented non-content settings.
 
@@ -104,7 +121,8 @@ Runner resource rows use `continuousMS` and `elapsedMS` for clocks, `lifetimePea
 Release packaging embeds `AeriVoiceSourceRevision` and writes executable and dSYM UUIDs to `release-info.txt`. A local build without an embedded revision leaves it absent. Version numbers alone do not establish identical builds; use UUID/hash and retain the corresponding symbols. `buildConfiguration` describes the compiled app; the separate synthetic provider harness additionally records `measurementBoundary: generated-audio-to-cleaned-text-no-capture-or-insertion`. Its measurements exclude real microphone startup, shortcut handling, and destination insertion.
 
 ```sh
-# Summarize current plus archived interactions (deduplicated by interactionID).
+# Summarize current plus archived interactions (deduplicated by interactionID): microphone
+# start and stop timings split by prepared and fresh engines, then Cerebras cleanup latency.
 swift scripts/summarize-latency.swift
 # Existing single-file input remains supported, including copied run files.
 swift scripts/summarize-latency.swift /path/to/run/interactions-v1.jsonl

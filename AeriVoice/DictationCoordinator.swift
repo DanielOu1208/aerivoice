@@ -2,28 +2,6 @@ import AVFoundation
 import AppKit
 
 @MainActor
-protocol DictationReadinessChecking: Sendable {
-  func requestMicrophone() async -> Bool
-  func accessibilityReady(prompt: Bool) -> Bool
-}
-
-struct SystemDictationReadiness: DictationReadinessChecking {
-  func requestMicrophone() async -> Bool {
-    switch AVCaptureDevice.authorizationStatus(for: .audio) {
-    case .authorized: true
-    case .notDetermined: await AVCaptureDevice.requestAccess(for: .audio)
-    default: false
-    }
-  }
-
-  func accessibilityReady(prompt: Bool) -> Bool {
-    guard !AXIsProcessTrusted(), prompt else { return AXIsProcessTrusted() }
-    _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-    return false
-  }
-}
-
-@MainActor
 final class DictationCoordinator: ObservableObject {
   private struct ActiveCleanupSettings {
     let instructions: CleanupInstructions
@@ -44,9 +22,8 @@ final class DictationCoordinator: ObservableObject {
   private let notch: NotchPresenting
   private let usageStats: UsageStatsRecording?
   private var usageSession: UsageSession?
-  private var captureStartedAt: ContinuousClock.Instant?
-  private var recordingSeconds: Double = 0
   private let benchmark: LatencyBenchmarkRecording
+  private let capture: DictationCapture
   private let readiness: DictationReadinessChecking
   private let cuePlayer: SoundCuePlaying
   private let runtimeDiagnostics: RuntimeDiagnosticsRecorder?
@@ -65,12 +42,7 @@ final class DictationCoordinator: ObservableObject {
   private var connectionTaskID: UUID?
   private var drainTask: Task<Void, Never>?
   private var limitTask: Task<Void, Never>?
-  private var audioStopped = true
-  private var audioStarting = false
   private var captureWarning: String?
-  /// Audio arrives in ~100 ms tap buffers and the partly filled one is dropped at stop;
-  /// a short tail keeps the words spoken right before release.
-  private let captureTail: Duration
   private var launchPreparationAttempted = false
   private var launchPreparationTask: Task<Void, Never>?
   private var lifecycleGeneration = UUID()
@@ -107,11 +79,9 @@ final class DictationCoordinator: ObservableObject {
       if !model.isReady { model.prepareIfNeeded() }
       return model.isReady
     },
-    notifications: DictationNotificationPosting = SystemDictationNotifications(),
-    captureTail: Duration = .milliseconds(50)
+    notifications: DictationNotificationPosting = SystemDictationNotifications()
   ) {
     self.localReadiness = localReadiness
-    self.captureTail = captureTail
     self.preferences = preferences
     self.credentials = credentials
     self.audio = audio
@@ -129,6 +99,7 @@ final class DictationCoordinator: ObservableObject {
       })
     self.notch = notch
     self.benchmark = benchmark
+    capture = DictationCapture(audio: audio, benchmark: benchmark)
     self.usageStats = usageStats
     self.readiness = readiness
     self.cuePlayer = cuePlayer
@@ -152,7 +123,7 @@ final class DictationCoordinator: ObservableObject {
     transcriber.onError = { [weak self] error in
       guard let self, let id = self.sessionID else { return }
       let stage: BenchmarkFailureStage =
-        self.phase == .starting && self.audioStopped ? .sttSetup : .sttStream
+        self.phase == .starting && !self.capture.isOpen ? .sttSetup : .sttStream
       self.fail(error, id: id, stage: stage)
     }
   }
@@ -195,28 +166,50 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
+  /// Prepares the next microphone engine after wake or unlock, when no dictation is running.
+  /// Preparing never opens the microphone, and an engine that is already prepared is kept.
+  func prepareAudioIfIdle() {
+    guard preferences.onboardingComplete, !canCancel, readiness.microphoneAuthorized else {
+      return
+    }
+    let audio = self.audio
+    let runtime = runtimeDiagnostics
+    let preparationToken = runtime?.beginPreparation()
+    let work = observeWork("audioPreparation")
+    // Kept, so sleep or lock right after it can cancel it before it prepares anything.
+    launchPreparationTask = Task.detached(priority: .utility) {
+      let result = await audio.prepareWithDiagnostics()
+      if let preparationToken {
+        await runtime?.finishPreparation(preparationToken, result: result)
+      }
+      if let work { await work.finish() }
+    }
+  }
+
   func toggle() {
     switch phase {
     case .idle, .success, .error:
       guard acceptsNewSessions, startTask == nil else { return }
-      inserter.prepareForNextDictation()
       let transcriptionConfiguration = preferences.transcriptionConfiguration
       skipsCleanup = preferences.offlineMode
       let cleanupConfiguration = preferences.cleanupConfiguration
       let cleanupMode = preferences.cleanupMode
+      benchmark.begin(
+        enabled: preferences.latencyLogging,
+        transcriptionConfiguration: transcriptionConfiguration, cleanupMode: cleanupMode,
+        cleanupConfiguration: cleanupConfiguration)
+      // First, so the engine's own start-up overlaps everything below and the checks in start().
+      startAudioEarlyIfPossible()
+      let generation = UUID()
+      lifecycleGeneration = generation
+      phase = .starting
+      inserter.prepareForNextDictation()
       sessionVocabulary = VocabularyNormalizer.normalize(preferences.vocabulary)
       activeTranscriptionConfiguration = transcriptionConfiguration
       activeCleanupSettings = ActiveCleanupSettings(
         instructions: CleanupInstructions(mode: cleanupMode,
           customInstructions: preferences.cleanupCustomInstructions),
         configuration: cleanupConfiguration)
-      benchmark.begin(
-        enabled: preferences.latencyLogging,
-        transcriptionConfiguration: transcriptionConfiguration, cleanupMode: cleanupMode,
-        cleanupConfiguration: cleanupConfiguration)
-      let generation = UUID()
-      lifecycleGeneration = generation
-      phase = .starting
       let work = observeWork("start")
       startTask = Task { @MainActor [weak self] in
         defer { work?.finish() }
@@ -224,10 +217,10 @@ final class DictationCoordinator: ObservableObject {
         if self?.lifecycleGeneration == generation { self?.startTask = nil }
       }
     case .starting:
-      if audioStopped {
-        cancel()
-      } else {
+      if capture.isOpen {
         beginStopTask()
+      } else {
+        cancel()
       }
     case .recording:
       beginStopTask()
@@ -235,7 +228,9 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
-  func shortcutPressed() -> UUID? {
+  /// `eventAge` is how long ago the key event happened, recorded for a press that starts a
+  /// dictation.
+  func shortcutPressed(eventAge: Duration? = nil) -> UUID? {
     let wasStartable: Bool
     switch phase {
     case .idle, .success, .error:
@@ -244,13 +239,15 @@ final class DictationCoordinator: ObservableObject {
       wasStartable = false
     }
     toggle()
-    return wasStartable && phase == .starting ? lifecycleGeneration : nil
+    guard wasStartable, phase == .starting else { return nil }
+    if let eventAge { benchmark.recordStep(.shortcutEventToActivation, eventAge) }
+    return lifecycleGeneration
   }
 
-  func holdShortcutPressed() -> UUID? {
+  func holdShortcutPressed(eventAge: Duration? = nil) -> UUID? {
     switch phase {
-    case .idle, .success, .error: return shortcutPressed()
-    case .starting, .recording: return audioStopped ? nil : lifecycleGeneration
+    case .idle, .success, .error: return shortcutPressed(eventAge: eventAge)
+    case .starting, .recording: return capture.isOpen ? lifecycleGeneration : nil
     case .processing, .cleaning, .inserting: return nil
     }
   }
@@ -273,10 +270,10 @@ final class DictationCoordinator: ObservableObject {
     guard self.lifecycleGeneration == lifecycleGeneration else { return }
     switch phase {
     case .starting:
-      if audioStopped {
-        cancel()
-      } else {
+      if capture.isOpen {
         beginStopTask()
+      } else {
+        cancel()
       }
     case .recording:
       beginStopTask()
@@ -285,12 +282,23 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
-  func cancel() {
+  /// A user cancel (Escape, menu Cancel, a second press during start-up, a cancelled
+  /// insertion) prepares the next engine, even when the cancel came during engine start:
+  /// saying it again right away is the usual next step.
+  func cancel() { cancel(preparingNext: true) }
+
+  /// Sleep, lock, a session switch and quit end any dictation and release the microphone
+  /// engine, prepared or not.
+  func cancelForSuspension() { cancel(preparingNext: false) }
+
+  private func cancel(preparingNext: Bool) {
     invalidatePreparedConnection()
     inserter.invalidatePendingRestoration()
-    launchPreparationTask?.cancel()
-    launchPreparationTask = nil
-    audio.discardPreparation()
+    if !preparingNext {
+      launchPreparationTask?.cancel()
+      launchPreparationTask = nil
+      capture.discardPreparation()
+    }
     guard phase != .idle else {
       muter.restore()
       return
@@ -313,7 +321,7 @@ final class DictationCoordinator: ObservableObject {
     drainTaskID = nil
     limitTask?.cancel()
     transcriber.cancel()
-    stopAudioIfNeeded(playCue: false, prepareNext: false)
+    stopAudioIfNeeded(playCue: false, prepareNext: preparingNext)
     resetAudioBuffer()
     benchmark.finish(
       .cancelled, stage: .lifecycle, category: .cancelled, httpStatus: nil)
@@ -402,12 +410,13 @@ final class DictationCoordinator: ObservableObject {
     let id = DictationSessionID()
     sessionID = id
     usageSession = usageStats?.begin()
-    captureStartedAt = nil
     captureWarning = nil
-    recordingSeconds = 0
-    bufferedAudio.removeAll(keepingCapacity: true)
-    bufferedBytes = 0
-    connected = false
+    // A microphone started at the press may already have delivered audio for this dictation.
+    if !capture.startedEarly {
+      bufferedAudio.removeAll(keepingCapacity: true)
+      bufferedBytes = 0
+      connected = false
+    }
 
     beginTranscriberConnection(
       configuration: transcriptionConfiguration, apiKey: transcriptionKey, id: id)
@@ -423,17 +432,16 @@ final class DictationCoordinator: ObservableObject {
       benchmark.mark(.startCueDelayFinished)
       muteOutput()
     }
-    audioStarting = true
-    benchmark.mark(.audioEngineStartRequested)
-    let usedPreparation: Bool
+    let report: AudioStartReport
     do {
-      usedPreparation = try await audio.start(discardingAudioBefore: cueDeadline)
+      report = try await capture.start(discardingAudioBefore: cueDeadline)
     } catch {
       guard lifecycleGeneration == generation, sessionID == id, !Task.isCancelled else { return }
       fail(error, id: id, stage: .audioCapture)
       return
     }
     guard lifecycleGeneration == generation, sessionID == id, !Task.isCancelled else { return }
+    benchmark.recordSteps(report)
     if let cueDeadline {
       try? await Task.sleep(until: cueDeadline)
       guard phase == .starting, lifecycleGeneration == generation, sessionID == id,
@@ -442,10 +450,8 @@ final class DictationCoordinator: ObservableObject {
       benchmark.mark(.startCueDelayFinished)
       muteOutput()
     }
-    audioStarting = false
-    audioStopped = false
-    if usedPreparation { benchmark.mark(.preparedAudioEngineUsed) }
-    captureStartedAt = .now
+    if report.usedPreparation { benchmark.mark(.preparedAudioEngineUsed) }
+    capture.beganRecording()
     benchmark.mark(.captureStarted)
     beginLimitTimer(id: id)
 
@@ -456,6 +462,16 @@ final class DictationCoordinator: ObservableObject {
       notch.present(state: state)
     }
     drain()
+  }
+
+  /// With sound cues off and microphone access already granted, the microphone starts at the
+  /// press, before start() reads credentials and checks Accessibility and the local model. If
+  /// a check then fails, the microphone stops and what it recorded is never sent. Output
+  /// muting stays in start(): in the slow case a few milliseconds are recorded unmuted.
+  private func startAudioEarlyIfPossible() {
+    guard !preferences.soundCues, readiness.microphoneAuthorized else { return }
+    resetAudioBuffer()
+    capture.startEarly()
   }
 
   private func muteOutput() {
@@ -497,7 +513,7 @@ final class DictationCoordinator: ObservableObject {
       drain()
       return true
     } catch {
-      fail(error, id: id, stage: audioStopped ? .sttSetup : .sttStream)
+      fail(error, id: id, stage: capture.isOpen ? .sttStream : .sttSetup)
       return false
     }
   }
@@ -577,11 +593,12 @@ final class DictationCoordinator: ObservableObject {
       let result = await inserter.insert(finalText, into: target)
       guard sessionID == id else { return }
       benchmark.mark(.insertionFinished)
+      if let steps = inserter.takeInsertionSteps() { benchmark.recordSteps(steps) }
       switch result {
       case .pasteSent, .copied:
         if let session = usageSession {
           usageStats?.complete(session, words: UsageWordCounter.count(finalText),
-                               recordingSeconds: recordingSeconds, at: Date())
+                               recordingSeconds: capture.recordingSeconds, at: Date())
           usageSession = nil
         }
       case .failed, .cancelled: break
@@ -709,25 +726,22 @@ final class DictationCoordinator: ObservableObject {
     }
   }
 
-  private func beginStopTask(keepingTail: Bool = true) {
+  private func beginStopTask() {
     guard stopTask == nil else { return }
     benchmark.mark(.stopRequested)
     let taskID = UUID()
     stopTaskID = taskID
-    let tail = keepingTail && !audioStopped && !audioStarting ? captureTail : .zero
-    if tail == .zero { stopAudioIfNeeded(playCue: true) }
-    // The insertion target is the app focused at release, not after the tail.
+    // The microphone learns the release before anything else, so no audio after it is kept.
+    let closingAudio = closeAudioAtRelease(mach_absolute_time())
+    // The insertion target is the app focused at release.
+    let pinStarted = ContinuousClock.now
     let targetCapture = inserter.captureTarget()
+    benchmark.recordStep(.targetPin, pinStarted.duration(to: .now))
     targetCaptureTask = targetCapture
     let work = observeWork("stop")
     stopTask = Task { @MainActor [weak self] in
       defer { work?.finish() }
-      if tail > .zero {
-        try? await Task.sleep(for: tail)
-        guard let self, self.stopTaskID == taskID, !Task.isCancelled else { return }
-        // The stop cue plays only after the microphone closes, so it is never transcribed.
-        self.stopAudioIfNeeded(playCue: true)
-      }
+      if let closingAudio { await self?.finishClosingAudio(closingAudio) }
       await self?.stop(targetCapture: targetCapture)
       guard let self, self.stopTaskID == taskID else { return }
       self.stopTask = nil
@@ -736,41 +750,57 @@ final class DictationCoordinator: ObservableObject {
   }
 
   private func captureInterrupted() {
-    guard let id = sessionID, phase == .starting || phase == .recording else { return }
-    if audioStarting {
+    guard phase == .starting || phase == .recording else { return }
+    guard let id = sessionID else {
+      // The microphone started at the press and start() is still checking: it fails once it
+      // takes the microphone over.
+      capture.inputLostBeforeSession()
+      return
+    }
+    if capture.isStarting {
       fail(AppError.microphoneUnavailable, id: id, stage: .audioCapture)
-    } else if !audioStopped {
+    } else if capture.isOpen {
       // Keep what was captured before the input disappeared.
       captureWarning = "Microphone disconnected"
       state.warning = captureWarning
       notch.present(state: state)
-      beginStopTask(keepingTail: false)
+      beginStopTask()
     }
   }
 
-  private func stopAudioIfNeeded(playCue: Bool, prepareNext: Bool = true) {
-    guard !audioStopped || audioStarting else { return }
-    audioStopped = true
-    if let started = captureStartedAt {
-      let duration = started.duration(to: .now).components
-      recordingSeconds = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
-      captureStartedAt = nil
+  /// A running microphone keeps recording until the block holding the release arrives. One
+  /// still starting stops at once.
+  private func closeAudioAtRelease(_ release: UInt64) -> DictationCapture.Closing? {
+    if let closing = capture.beginClose(atRelease: release) { return closing }
+    if let audioStop = stopAudioIfNeeded(playCue: true) {
+      benchmark.recordStep(.audioStop, audioStop)
     }
-    if audioStarting {
-      startTask?.cancel()
-      audio.cancelStart()
-      audioStarting = false
-    } else {
-      audio.stop()
-      // Engine preparation does not open the microphone and saves ~40 ms at the next start.
-      if prepareNext {
-        let audio = self.audio
-        Task.detached(priority: .utility) { await audio.prepare() }
-      }
-    }
+    return nil
+  }
+
+  /// The stop cue plays once the microphone has closed, so it is never transcribed.
+  private func finishClosingAudio(_ closing: DictationCapture.Closing) async {
+    // A cancel or failure during the wait already stopped capture and finished up.
+    guard await capture.finishClose(closing) else { return }
+    finishAudioStop(playCue: true, prepareNext: true)
+    benchmark.recordStep(.audioStop, closing.requested.duration(to: .now))
+  }
+
+  private func finishAudioStop(playCue: Bool, prepareNext: Bool) {
+    if prepareNext { capture.prepareNext() }
     muter.restore()
     if playCue { play(.stop) }
     limitTask?.cancel()
+  }
+
+  /// Returns how long closing a running microphone took.
+  @discardableResult
+  private func stopAudioIfNeeded(playCue: Bool, prepareNext: Bool = true) -> Duration? {
+    guard capture.isStarting || capture.isOpen else { return nil }
+    if capture.isStarting { startTask?.cancel() }
+    let stopDuration = capture.stop()
+    finishAudioStop(playCue: playCue, prepareNext: prepareNext)
+    return stopDuration
   }
 
   private func flushPendingAudioCallbacks() async {
@@ -796,7 +826,7 @@ final class DictationCoordinator: ObservableObject {
     category explicitCategory: BenchmarkFailureCategory? = nil
   ) {
     guard sessionID == id else { return }
-    let failure = benchmarkFailure(for: error)
+    let failure = BenchmarkFailureCategory.classify(error)
     benchmark.finish(
       .failed, stage: stage, category: explicitCategory ?? failure.category,
       httpStatus: failure.httpStatus)
@@ -848,6 +878,8 @@ final class DictationCoordinator: ObservableObject {
   }
 
   private func showReadinessError(_ error: Error, category: BenchmarkFailureCategory) {
+    // A check failed after the microphone started at the press: keep nothing it recorded.
+    if capture.abandonEarlyStart() { resetAudioBuffer() }
     benchmark.finish(.failed, stage: .readiness, category: category, httpStatus: nil)
     activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
@@ -864,32 +896,6 @@ final class DictationCoordinator: ObservableObject {
       guard let self, self.lifecycleGeneration == generation, self.sessionID == nil else { return }
       self.phase = .idle
     }
-  }
-
-  private func benchmarkFailure(for error: Error) -> (
-    category: BenchmarkFailureCategory, httpStatus: Int?
-  ) {
-    if let error = error as? ProviderHTTPError {
-      return (.provider, error.statusCode)
-    }
-    if let error = error as? GrokTransportError {
-      return (error.isProviderRejection ? .provider : .network, error.httpStatus)
-    }
-    if error is CleanupNetworkError { return (.network, nil) }
-    if error is URLError { return (.network, nil) }
-    if let error = error as? AppError {
-      switch error {
-      case .missingSonioxKey, .missingMetaModelAPIKey, .missingXAIKey, .missingOpenRouterKey, .missingGroqKey,
-        .missingCerebrasKey:
-        return (.missingCredential, nil)
-      case .microphoneUnavailable: return (.microphonePermission, nil)
-      case .connectionTimeout: return (.connectionTimeout, nil)
-      case .finalizeTimeout: return (.finalizeTimeout, nil)
-      case .emptyTranscript: return (.emptyTranscript, nil)
-      case .provider: return (.provider, nil)
-      }
-    }
-    return (.unknown, nil)
   }
 
   private func observeWork(_ kind: String) -> DictationLifecycleWork? {

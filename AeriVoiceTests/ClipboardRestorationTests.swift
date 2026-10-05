@@ -271,6 +271,36 @@ final class ClipboardRestorationTests: XCTestCase {
     XCTAssertEqual(fixture.editor.dispatches, 1)
   }
 
+  func testInsertionStepsCarryCaptureTimingsAndTimeTheProbe() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    var target = try await fixture.capture()
+    target.steps.editorLookup = .milliseconds(3)
+    let result = await fixture.service.insert(fixture.dictation, into: target)
+    XCTAssertEqual(result, .pasteSent)
+    let steps = try XCTUnwrap(fixture.service.takeInsertionSteps())
+    XCTAssertEqual(steps.editorLookup, .milliseconds(3), "Capture timings are carried over")
+    XCTAssertNotNil(steps.prePasteProbe)
+    XCTAssertNotNil(steps.revalidation)
+    XCTAssertNil(fixture.service.takeInsertionSteps())
+    try await waitUntil { fixture.outcomes == [.restored] }
+  }
+
+  func testInsertionStepsTimeTheProbeOnlyWhenItRuns() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    fixture.enabled = false
+    var probes = 0
+    fixture.editor.onPrepare = { probes += 1 }
+    let target = try await fixture.capture(waitForBackup: false)
+    let result = await fixture.service.insert(fixture.dictation, into: target)
+    XCTAssertEqual(result, .pasteSent)
+    XCTAssertEqual(probes, 0)
+    let steps = try XCTUnwrap(fixture.service.takeInsertionSteps())
+    XCTAssertNil(steps.prePasteProbe)
+    XCTAssertNil(steps.revalidation)
+  }
+
   func testIgnoredPasteTimesOutWithoutRestoring() async throws {
     let fixture = Fixture()
     defer { fixture.remove() }

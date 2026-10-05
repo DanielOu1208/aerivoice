@@ -13,11 +13,11 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(fixture.engines[0].prepareCount, 1)
     XCTAssertEqual(fixture.engines[0].startCount, 0)
 
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertTrue(reused)
     XCTAssertEqual(fixture.engines.count, 1)
     service.stop()
-    let reusedAgain = try await service.start()
+    let reusedAgain = try await service.start().usedPreparation
     XCTAssertFalse(reusedAgain)
     XCTAssertEqual(fixture.engines.count, 2)
     service.stop()
@@ -34,7 +34,7 @@ final class AudioCaptureServiceTests: XCTestCase {
       await service.prepare()
       let prepared = fixture.engines[0]
       fixture.route = changedRoute
-      let reused = try await service.start()
+      let reused = try await service.start().usedPreparation
       XCTAssertFalse(reused)
       XCTAssertEqual(prepared.startCount, 0)
       XCTAssertEqual(prepared.stopCount, 1)
@@ -49,7 +49,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     await service.prepare()
     NotificationCenter.default.post(
       name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     service.stop()
 
@@ -71,7 +71,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     let service = fixture.service()
     await service.prepare()
     XCTAssertEqual(fixture.engines[0].stopCount, 1)
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     XCTAssertEqual(fixture.engines.count, 2)
     service.stop()
@@ -88,7 +88,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     let activation = Task { try await service.start() }
     gate.signal()
     await preparation.value
-    let reused = try await activation.value
+    let reused = try await activation.value.usedPreparation
     XCTAssertTrue(reused)
     XCTAssertEqual(fixture.engines.count, 1)
     XCTAssertEqual(engine.prepareCount, 1)
@@ -109,7 +109,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     service.discardPreparation()
     gate.signal()
     await preparation.value
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     XCTAssertEqual(prepared.startCount, 0)
     XCTAssertEqual(prepared.stopCount, 1)
@@ -246,7 +246,12 @@ final class AudioCaptureServiceTests: XCTestCase {
       let engine = fixture.engines.last!
       NotificationCenter.default.post(
         name: .AVAudioEngineConfigurationChange, object: engine.notificationObject)
-      try await waitUntil { interrupted.value || fixture.engines.count == device }
+      // The replacement starts only after the service observes it, so the next notification
+      // can't be posted before anyone listens for it.
+      try await waitUntil {
+        interrupted.value
+          || (fixture.engines.count == device && fixture.engines[device - 1].startCount == 1)
+      }
     }
     XCTAssertTrue(interrupted.value)
     XCTAssertEqual(fixture.engines.count, AudioCaptureService.maximumRestarts + 1)
@@ -272,9 +277,53 @@ final class AudioCaptureServiceTests: XCTestCase {
     let result = await service.prepareWithDiagnostics()
     XCTAssertEqual(result, .skipped)
     XCTAssertTrue(fixture.engines.isEmpty)
-    let reused = try await service.start()
+    let reused = try await service.start().usedPreparation
     XCTAssertFalse(reused)
     XCTAssertEqual(fixture.engines.count, 1)
+    service.stop()
+  }
+
+  func testStartReportsTheEngineStepsAndWhetherPreparationWasUsed() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    await service.prepare()
+    let prepared = try await service.start()
+    XCTAssertTrue(prepared.usedPreparation)
+    XCTAssertEqual(prepared.engine, FakeCaptureAudioEngine.steps)
+    XCTAssertEqual(prepared.engineCreation, .zero)
+    XCTAssertGreaterThanOrEqual(prepared.queueWait, .zero)
+    service.stop()
+
+    let cold = try await service.start()
+    XCTAssertFalse(cold.usedPreparation)
+    XCTAssertEqual(cold.engine, FakeCaptureAudioEngine.steps)
+    XCTAssertEqual(fixture.engines.count, 2)
+    service.stop()
+  }
+
+  func testStartDecliningBluetoothLeavesTheEngineUntouched() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    await service.prepare()
+    let prepared = fixture.engines[0]
+    for route in [
+      AudioInputRoute(deviceID: 3, sampleRate: 24_000, channels: 1, isBluetooth: true), nil,
+    ] {
+      fixture.optionalRoute = route
+      do {
+        _ = try await service.start(discardingAudioBefore: nil, declinesBluetooth: true)
+        XCTFail("A start declining Bluetooth started on \(String(describing: route))")
+      } catch is AudioStartDeclined {}
+      XCTAssertEqual(prepared.stopCount, 0)
+      XCTAssertEqual(prepared.startCount, 0)
+      XCTAssertEqual(fixture.engines.count, 1)
+    }
+
+    // The same input that was prepared starts normally, and the preparation is used.
+    fixture.route = AudioInputRoute(deviceID: 1, sampleRate: 48_000, channels: 1)
+    let report = try await service.start(discardingAudioBefore: nil, declinesBluetooth: true)
+    XCTAssertTrue(report.usedPreparation)
+    XCTAssertEqual(prepared.startCount, 1)
     service.stop()
   }
 
@@ -305,6 +354,193 @@ final class AudioCaptureServiceTests: XCTestCase {
     service.stop()
     XCTAssertGreaterThanOrEqual(delivered.count, beforeStop)
     XCTAssertEqual(delivered.count / MemoryLayout<Int16>.size, 1_600, accuracy: 32)
+  }
+
+  // MARK: Ending at the release
+
+  /// 100 ms at 48 kHz, as the hardware tap delivers it; 1,600 samples once converted to 16 kHz.
+  private let block: AVAudioFrameCount = 4_800
+
+  private func host(_ base: UInt64, plus milliseconds: Double) -> UInt64 {
+    AVAudioTime.hostTime(
+      forSeconds: AVAudioTime.seconds(forHostTime: base) + milliseconds / 1_000)
+  }
+
+  private func samples(_ bytes: LockedBytes) -> Int { bytes.count / MemoryLayout<Int16>.size }
+
+  /// Starts a release stop and waits until it is waiting for its block.
+  private func beginReleaseStop(
+    _ service: AudioCaptureService, at release: UInt64
+  ) async throws -> Task<Void, Never> {
+    let stop = service.beginStop(atHostTime: release)
+    let stopping = Task { await stop.wait() }
+    try await waitUntil { service.isWaitingForReleaseBlock }
+    return stopping
+  }
+
+  func testReleaseKeepsOnlyTheAudioBeforeIt() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let start = mach_absolute_time()
+    let stopping = try await beginReleaseStop(service, at: host(start, plus: 50))
+    XCTAssertEqual(fixture.engines[0].stopCount, 0, "The block holding the release is awaited")
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: start)
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 800, accuracy: 48)
+  }
+
+  func testBlocksBeforeTheReleaseAreKeptWholeWhileWaiting() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let start = mach_absolute_time()
+    let stopping = try await beginReleaseStop(service, at: host(start, plus: 150))
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: start)
+    // The first block ends before the release, so capture keeps waiting.
+    XCTAssertTrue(service.isWaitingForReleaseBlock)
+    XCTAssertEqual(fixture.engines[0].stopCount, 0)
+    fixture.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: host(start, plus: 100))
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 2_400, accuracy: 48)
+  }
+
+  func testBlockThatStartsAfterTheReleaseIsDropped() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let release = mach_absolute_time()
+    let stopping = try await beginReleaseStop(service, at: release)
+    fixture.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: host(release, plus: 10))
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 0)
+  }
+
+  func testBlockWithoutATimeIsKeptWholeAndEndsCapture() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let stopping = try await beginReleaseStop(service, at: mach_absolute_time())
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: nil)
+    await stopping.value
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 1_600, accuracy: 32)
+  }
+
+  func testReleaseStopGivesUpWhenNoBlockArrives() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service(releaseBlockTimeout: .milliseconds(100))
+    _ = try await service.start()
+    let started = ContinuousClock.now
+    await service.beginStop(atHostTime: mach_absolute_time()).wait()
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertLessThan(started.duration(to: .now), .seconds(3))
+  }
+
+  func testStopDuringAReleaseWaitEndsItAtOnce() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    _ = try await service.start()
+    let stopping = try await beginReleaseStop(service, at: host(mach_absolute_time(), plus: 500))
+    let stopped = ContinuousClock.now
+    service.stop()
+    await stopping.value
+    XCTAssertLessThan(stopped.duration(to: .now), .seconds(1))
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+  }
+
+  func testReleaseStopDoesNotWaitForAnEngineThatStopped() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    _ = try await service.start()
+    fixture.engines[0].stop()
+    let started = ContinuousClock.now
+    await service.beginStop(atHostTime: host(mach_absolute_time(), plus: 500)).wait()
+    XCTAssertLessThan(started.duration(to: .now), .seconds(1))
+  }
+
+  func testReleaseAfterItsBlockWasDeliveredEndsCaptureAtOnce() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let start = mach_absolute_time()
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: start)
+    XCTAssertFalse(service.isWaitingForReleaseBlock)
+    // The block holding the release went through before the release reached the service.
+    let stopping = ContinuousClock.now
+    await service.beginStop(atHostTime: host(start, plus: 60)).wait()
+    XCTAssertLessThan(stopping.duration(to: .now), .seconds(1), "No block is left to wait for")
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(samples(delivered), 1_600, accuracy: 32)
+  }
+
+  func testInputChangeDuringAReleaseWaitOpensNoOtherMicrophone() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    _ = try await service.start()
+    let stopping = try await beginReleaseStop(service, at: host(mach_absolute_time(), plus: 500))
+    fixture.route = AudioInputRoute(deviceID: AudioDeviceID(2), sampleRate: 48_000, channels: 1)
+    // A running engine can still deliver the block holding the release.
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertTrue(service.isWaitingForReleaseBlock)
+    // A stopped one cannot, so capture ends without moving to the new input.
+    let waited = ContinuousClock.now
+    fixture.engines[0].stop()
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    await stopping.value
+    XCTAssertLessThan(waited.duration(to: .now), .seconds(1))
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(fixture.engines.count, 1)
+  }
+
+  func testReleaseCutArithmetic() {
+    let start = mach_absolute_time()
+    func cut(_ milliseconds: Double, start blockStart: UInt64? = start) -> (AVAudioFrameCount, Bool) {
+      let result = CaptureRelease.cut(
+        release: host(start, plus: milliseconds), blockStart: blockStart, frames: block,
+        sampleRate: 48_000)
+      return (result.keep, result.reachesRelease)
+    }
+    let half = cut(50)
+    XCTAssertEqual(Double(half.0), 2_400, accuracy: 2)
+    XCTAssertTrue(half.1)
+    let before = cut(150)
+    XCTAssertEqual(before.0, block)
+    XCTAssertFalse(before.1)
+    let after = cut(-10)
+    XCTAssertEqual(after.0, 0)
+    XCTAssertTrue(after.1)
+    let unknown = cut(50, start: nil)
+    XCTAssertEqual(unknown.0, block)
+    XCTAssertTrue(unknown.1)
+  }
+
+  func testPrefixCopiesTheFirstFrames() throws {
+    let buffer = try makeBuffer(sampleRate: 48_000, frameCount: 480)
+    let prefix = try XCTUnwrap(buffer.prefix(100))
+    XCTAssertEqual(prefix.frameLength, 100)
+    XCTAssertEqual(prefix.format, buffer.format)
+    let source = try XCTUnwrap(buffer.floatChannelData?[0])
+    let copied = try XCTUnwrap(prefix.floatChannelData?[0])
+    for frame in 0..<100 { XCTAssertEqual(copied[frame], source[frame]) }
   }
 
   func testConverterMixesAllInputChannels() throws {
@@ -352,7 +588,8 @@ final class AudioCaptureServiceTests: XCTestCase {
   }
 
   private func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    // Generous for a loaded machine; a passing condition returns as soon as it holds.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
     while !condition(), ContinuousClock.now < deadline {
       try await Task.sleep(for: .milliseconds(5))
     }
@@ -395,7 +632,8 @@ final class AudioCaptureServiceTests: XCTestCase {
 
 private final class AudioPreparationFixture: @unchecked Sendable {
   private let lock = NSLock()
-  private var inputRoute = AudioInputRoute(deviceID: 1, sampleRate: 48_000, channels: 1)
+  private var inputRoute: AudioInputRoute? = AudioInputRoute(
+    deviceID: 1, sampleRate: 48_000, channels: 1)
   private var created: [FakeCaptureAudioEngine] = []
   private let factory: @Sendable (Int) -> FakeCaptureAudioEngine
 
@@ -406,12 +644,20 @@ private final class AudioPreparationFixture: @unchecked Sendable {
   }
 
   var route: AudioInputRoute {
+    get { lock.withLock { inputRoute! } }
+    set { lock.withLock { inputRoute = newValue } }
+  }
+  /// Nil models an input whose route can't be read.
+  var optionalRoute: AudioInputRoute? {
     get { lock.withLock { inputRoute } }
     set { lock.withLock { inputRoute = newValue } }
   }
   var engines: [FakeCaptureAudioEngine] { lock.withLock { created } }
 
-  func service(restartDebounce: DispatchTimeInterval = .milliseconds(10)) -> AudioCaptureService {
+  func service(
+    restartDebounce: DispatchTimeInterval = .milliseconds(10),
+    releaseBlockTimeout: DispatchTimeInterval = .seconds(5)
+  ) -> AudioCaptureService {
     AudioCaptureService(
       makeEngine: { _ in
         self.lock.withLock {
@@ -419,7 +665,8 @@ private final class AudioPreparationFixture: @unchecked Sendable {
           self.created.append(engine)
           return engine
         }
-      }, currentRoute: { self.route }, restartDebounce: restartDebounce)
+      }, currentRoute: { self.optionalRoute }, restartDebounce: restartDebounce,
+      releaseBlockTimeout: releaseBlockTimeout)
   }
 }
 
@@ -428,7 +675,7 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   private let object = NSObject()
   private let prepareFails: Bool
   private let startFails: Bool
-  private var bufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)?
+  private var bufferHandler: (@Sendable (AVAudioPCMBuffer, UInt64?) -> Void)?
   private let prepareEntered: XCTestExpectation?
   private let prepareGate: DispatchSemaphore?
   private let startEntered: XCTestExpectation?
@@ -465,8 +712,8 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
 
   func start(
     checkCancellation: @Sendable () throws -> Void,
-    onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
-  ) throws {
+    onBuffer: @escaping @Sendable (AVAudioPCMBuffer, UInt64?) -> Void
+  ) throws -> CaptureEngineStartSteps {
     startEntered?.fulfill()
     if let startGate { XCTAssertEqual(startGate.wait(timeout: .now() + 3), .success) }
     try checkCancellation()
@@ -475,10 +722,15 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
       starts += 1
       bufferHandler = onBuffer
     }
+    return Self.steps
   }
 
-  func emit(_ buffer: AVAudioPCMBuffer) {
-    lock.withLock { bufferHandler }?(buffer)
+  static let steps = CaptureEngineStartSteps(
+    tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6))
+
+  /// `hostTime` is when the block's first frame was captured; nil models an unknown time.
+  func emit(_ buffer: AVAudioPCMBuffer, hostTime: UInt64? = nil) {
+    lock.withLock { bufferHandler }?(buffer, hostTime)
   }
 
   func stop() { lock.withLock { stops += 1 } }

@@ -1,5 +1,20 @@
 import Foundation
 
+extension TranscriptionProvider {
+  /// A client that has not been used yet. The router keeps one per provider; checking a key
+  /// uses its own.
+  @MainActor
+  func makeClient() -> RealtimeTranscribing {
+    switch self {
+    case .soniox: SonioxRealtimeClient()
+    case .meta: MetaRealtimeClient()
+    case .grok: GrokRealtimeClient()
+    case .cartesia: CartesiaRealtimeClient()
+    case .local: LocalRealtimeClient()
+    }
+  }
+}
+
 @MainActor
 final class RealtimeTranscriptionRouter: RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
@@ -9,44 +24,42 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
   var reportsAudioSends: Bool {
     activeProvider.map { client(for: $0).reportsAudioSends } ?? false
   }
-  var hasPreparedConnection: Bool { grok.hasPreparedConnection }
+  var hasPreparedConnection: Bool { clients.values.contains { $0.hasPreparedConnection } }
 
-  private let soniox: RealtimeTranscribing
-  private let meta: RealtimeTranscribing
-  private let grok: RealtimeTranscribing
-  private let local: RealtimeTranscribing
+  private let clients: [TranscriptionProvider: RealtimeTranscribing]
+  /// Local's other engine; `clients[.local]` is Nemotron.
   private let apple: RealtimeTranscribing
   private var activeLocalModel: LocalTranscriptionModel = .nemotron
   private var activeProvider: TranscriptionProvider?
   private var connectionGeneration = UUID()
 
+  /// `clients` replaces the usual client of each provider it names.
   init(
-    soniox: RealtimeTranscribing = SonioxRealtimeClient(),
-    meta: RealtimeTranscribing = MetaRealtimeClient(),
-    grok: RealtimeTranscribing = GrokRealtimeClient(),
-    local: RealtimeTranscribing = LocalRealtimeClient(),
+    clients replacements: [TranscriptionProvider: RealtimeTranscribing] = [:],
     apple: RealtimeTranscribing = AppleRealtimeClient()
   ) {
-    self.soniox = soniox
-    self.meta = meta
-    self.grok = grok
-    self.local = local
+    var clients: [TranscriptionProvider: RealtimeTranscribing] = [:]
+    for provider in TranscriptionProvider.allCases {
+      clients[provider] = replacements[provider] ?? provider.makeClient()
+    }
+    self.clients = clients
     self.apple = apple
-    wire(local, provider: .local, localModel: .nemotron)
+    for (provider, client) in clients {
+      wire(client, provider: provider, localModel: provider == .local ? .nemotron : nil)
+    }
     wire(apple, provider: .local, localModel: .apple)
-    wire(soniox, provider: .soniox)
-    wire(meta, provider: .meta)
-    wire(grok, provider: .grok)
   }
 
   func connect(
     configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String],
     sessionID: DictationSessionID
   ) async throws {
-    // A ready, unused Grok session belongs to preparation until connect adopts it.
-    // Ordinary cancellation still disposes of both active and prepared work.
+    // A ready, unused session of this provider belongs to preparation until connect adopts
+    // it. Ordinary cancellation still disposes of both active and prepared work.
     cancelActiveConnection()
-    if configuration.provider != .grok { invalidatePreparedConnection() }
+    for (provider, client) in clients where provider != configuration.provider {
+      client.invalidatePreparedConnection()
+    }
     let generation = UUID()
     connectionGeneration = generation
     activeProvider = configuration.provider
@@ -82,32 +95,30 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
     try await client(for: activeProvider).flushAudio()
   }
 
+  /// False for a provider whose client cannot prepare a connection ahead of time.
   func prepareConnection(
     configuration: TranscriptionConfiguration, apiKey: String, vocabulary: [String]
   ) async -> Bool {
-    guard activeProvider == nil, configuration.provider == .grok else { return false }
-    return await grok.prepareConnection(configuration: configuration, apiKey: apiKey, vocabulary: vocabulary)
+    guard activeProvider == nil, let client = clients[configuration.provider] else { return false }
+    return await client.prepareConnection(
+      configuration: configuration, apiKey: apiKey, vocabulary: vocabulary)
   }
 
-  func invalidatePreparedConnection() { grok.invalidatePreparedConnection() }
+  func invalidatePreparedConnection() {
+    clients.values.forEach { $0.invalidatePreparedConnection() }
+  }
 
   func cancelActiveConnection() {
     connectionGeneration = UUID()
     activeProvider = nil
-    soniox.cancelActiveConnection()
-    meta.cancelActiveConnection()
-    grok.cancelActiveConnection()
-    local.cancelActiveConnection()
+    clients.values.forEach { $0.cancelActiveConnection() }
     apple.cancelActiveConnection()
   }
 
   func cancel() {
     connectionGeneration = UUID()
     activeProvider = nil
-    soniox.cancel()
-    meta.cancel()
-    grok.cancel()
-    local.cancel()
+    clients.values.forEach { $0.cancel() }
     apple.cancel()
   }
 
@@ -128,45 +139,30 @@ final class RealtimeTranscriptionRouter: RealtimeTranscribing {
   }
 
   private func client(for provider: TranscriptionProvider) -> RealtimeTranscribing {
-    switch provider {
-    case .soniox: soniox
-    case .meta: meta
-    case .grok: grok
-    case .local: activeLocalModel == .apple ? apple : local
+    if provider == .local, activeLocalModel == .apple { return apple }
+    guard let client = clients[provider] else {
+      preconditionFailure("The router is built with a client for every provider.")
     }
+    return client
   }
 }
 
 enum RealtimeTranscriptionPrewarmer {
+  /// Contacts the provider's host so the next connection opens faster. No key, audio or
+  /// dictionary term is sent. Succeeds at once for a provider with nothing to contact.
   nonisolated static func prewarm(
-    provider: TranscriptionProvider? = nil, completion: (@Sendable (Bool) -> Void)? = nil
+    provider: TranscriptionProvider, completion: (@Sendable (Bool) -> Void)? = nil
   ) {
     Task.detached(priority: .utility) {
-      var succeeded = true
-      let urls: [URL]
-      switch provider {
-      case .local:
-        urls = []
-      case .grok:
-        urls = [URL(string: "https://api.x.ai")].compactMap { $0 }
-      case .meta:
-        urls = [URL(string: "https://api.meta.ai")].compactMap { $0 }
-      case .soniox:
-        urls = [URL(string: "https://stt-rt.soniox.com")].compactMap { $0 }
-      case nil:
-        urls = [
-          URL(string: "https://api.meta.ai"),
-          URL(string: "https://api.x.ai"),
-          URL(string: "https://stt-rt.soniox.com"),
-        ].compactMap { $0 }
+      guard let host = provider.descriptor.prewarmHost, let url = URL(string: "https://\(host)")
+      else {
+        completion?(true)
+        return
       }
-      for url in urls {
-        var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = 3
-        if (try? await AppNetworkPolicy.shared.data(for: request)) == nil { succeeded = false }
-      }
-      completion?(succeeded)
+      var request = URLRequest(url: url)
+      request.httpMethod = "HEAD"
+      request.timeoutInterval = 3
+      completion?((try? await AppNetworkPolicy.shared.data(for: request)) != nil)
     }
   }
 }

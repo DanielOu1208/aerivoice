@@ -10,12 +10,12 @@ final class GrokRealtimeSession {
   private(set) var isTerminated = false
 
   private let packetPolicy: GrokAudioPacketPolicy
-  private let clock: GrokRealtimeClock
+  private let clock: RealtimeClock
   private var bufferedAudio = Data()
-  private let makeTransport: (URLRequest) -> any GrokWebSocketTransport
+  private let makeTransport: (URLRequest) -> any RealtimeWebSocketTransport
   private let connectionTimeout: Duration
   private let finalizationTimeout: Duration
-  private var transport: (any GrokWebSocketTransport)?
+  private var transport: (any RealtimeWebSocketTransport)?
   private var receiver: Task<Void, Never>?
   private var timeout: Task<Void, Never>?
   private var readyContinuation: CheckedContinuation<Void, Error>?
@@ -29,8 +29,8 @@ final class GrokRealtimeSession {
   init(
     connectionTimeout: Duration = .seconds(3), finalizationTimeout: Duration = .seconds(3),
     packetPolicy: GrokAudioPacketPolicy = .captureFrames,
-    clock: GrokRealtimeClock = .continuous,
-    makeTransport: @escaping (URLRequest) -> any GrokWebSocketTransport
+    clock: RealtimeClock = .continuous,
+    makeTransport: @escaping (URLRequest) -> any RealtimeWebSocketTransport
   ) {
     self.packetPolicy = packetPolicy
     self.clock = clock
@@ -169,7 +169,7 @@ final class GrokRealtimeSession {
     }
   }
 
-  private func receive(_ socket: any GrokWebSocketTransport, generation id: UUID) async {
+  private func receive(_ socket: any RealtimeWebSocketTransport, generation id: UUID) async {
     do {
       while generation == id && !Task.isCancelled {
         let message = try await socket.receive()

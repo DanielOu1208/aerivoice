@@ -1,54 +1,6 @@
 import Foundation
 
 @MainActor
-protocol GrokWebSocketTransport: AnyObject {
-  func resume()
-  func send(_ message: URLSessionWebSocketTask.Message) async throws
-  func receive() async throws -> URLSessionWebSocketTask.Message
-  func ping() async throws
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
-}
-
-@MainActor
-private final class URLSessionGrokTransport: GrokWebSocketTransport {
-  private let session: URLSession
-  private let task: URLSessionWebSocketTask
-
-  init(request: URLRequest) {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.timeoutIntervalForRequest = 3
-    session = URLSession(configuration: configuration)
-    task = session.webSocketTask(with: request)
-  }
-
-  func resume() { AppNetworkPolicy.shared.resume(task) }
-  func send(_ message: URLSessionWebSocketTask.Message) async throws {
-    do { try await task.send(message) } catch { throw sanitizedError() }
-  }
-  func receive() async throws -> URLSessionWebSocketTask.Message {
-    do { return try await task.receive() } catch { throw sanitizedError() }
-  }
-  func ping() async throws {
-    let task = self.task
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-      task.sendPing { error in
-        if error != nil { continuation.resume(throwing: GrokTransportError(status: nil)) }
-        else { continuation.resume() }
-      }
-    }
-  }
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-    AppNetworkPolicy.shared.forget(task)
-    task.cancel(with: closeCode, reason: nil)
-    session.invalidateAndCancel()
-  }
-  private func sanitizedError() -> GrokTransportError {
-    let status = (task.response as? HTTPURLResponse)?.statusCode
-    return GrokTransportError(status: status == 101 ? task.closeCode.rawValue : status)
-  }
-}
-
-@MainActor
 final class GrokRealtimeClient: RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
@@ -57,8 +9,8 @@ final class GrokRealtimeClient: RealtimeTranscribing {
   var reportsAudioSends: Bool { true }
 
   private let packetPolicy: GrokAudioPacketPolicy
-  private let clock: GrokRealtimeClock
-  private let makeTransport: (URLRequest) -> any GrokWebSocketTransport
+  private let clock: RealtimeClock
+  private let makeTransport: (URLRequest) -> any RealtimeWebSocketTransport
   private let connectionTimeout: Duration
   private let finalizationTimeout: Duration
   private let preparedLifetime: Duration
@@ -100,8 +52,12 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     connectionTimeout: Duration = .seconds(3), finalizationTimeout: Duration = .seconds(3),
     preparedLifetime: Duration = GrokRealtimeClient.preparedLifetime,
     packetPolicy: GrokAudioPacketPolicy = .captureFrames,
-    clock: GrokRealtimeClock = .continuous,
-    makeTransport: @escaping (URLRequest) -> any GrokWebSocketTransport = { URLSessionGrokTransport(request: $0) }
+    clock: RealtimeClock = .continuous,
+    makeTransport: @escaping (URLRequest) -> any RealtimeWebSocketTransport = {
+      URLSessionRealtimeTransport(request: $0) {
+        GrokTransportError(status: $0.httpStatus ?? $0.closeCode)
+      }
+    }
   ) {
     self.packetPolicy = packetPolicy
     self.clock = clock

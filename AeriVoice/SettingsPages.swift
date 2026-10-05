@@ -100,13 +100,21 @@ struct DictationSettingsPage: View {
         .disabled(model.coordinator.canCancel || model.changingOfflineMode)
         if preferences.effectiveTranscriptionProvider != .local {
           LabeledContent {
-            Text(preferences.transcriptionProvider.modelDisplayName).foregroundStyle(.secondary)
+            Text(preferences.transcriptionConfiguration.modelDisplayName)
+              .foregroundStyle(.secondary)
           } label: {
             if preferences.transcriptionProvider == .meta {
               SettingsHelpLabel(
                 title: "Model",
                 message:
                   "Meta streams use Muse Voice Transcribe and request Zero Data Retention for every session."
+              )
+            } else if preferences.transcriptionProvider == .cartesia {
+              SettingsHelpLabel(
+                title: "Model",
+                message: preferences.cartesiaTranscriptionModel == .inkPreview
+                  ? "Ink Preview is Cartesia's preview model and can change without notice. Cartesia's Ink models transcribe English, French, Hindi, Japanese, and Spanish."
+                  : "Cartesia's Ink models transcribe English, French, Hindi, Japanese, and Spanish."
               )
             } else {
               Text("Model")
@@ -126,6 +134,15 @@ struct DictationSettingsPage: View {
           let excluded = GrokVocabulary(VocabularyNormalizer.normalize(preferences.vocabulary)).excluded
           if !excluded.isEmpty {
             Text("Not sent to Grok (\(excluded.count)): " + excluded.joined(separator: ", "))
+              .font(.caption).foregroundStyle(.orange)
+          }
+        }
+        if preferences.effectiveTranscriptionProvider == .cartesia {
+          Text("Cartesia uses up to 100 dictionary terms totaling 1,200 characters, fewer in non-Latin scripts. Spelling is not guaranteed.")
+            .font(.caption).foregroundStyle(.secondary)
+          let excluded = CartesiaKeyterms(VocabularyNormalizer.normalize(preferences.vocabulary)).excluded
+          if !excluded.isEmpty {
+            Text("Not sent to Cartesia (\(excluded.count)): " + excluded.joined(separator: ", "))
               .font(.caption).foregroundStyle(.orange)
           }
         }
@@ -300,9 +317,9 @@ struct ProviderSettingsPage: View {
     Form {
       Section("Transcription") {
         Group {
-          ProviderAccountRow(model: model, kind: .soniox)
-          ProviderAccountRow(model: model, kind: .metaModelAPI)
-          ProviderAccountRow(model: model, kind: .xai)
+          ForEach(TranscriptionProvider.allCases.compactMap(\.credentialKind), id: \.self) {
+            ProviderAccountRow(model: model, kind: $0)
+          }
         }
         .disabled(model.preferences.offlineMode || model.changingOfflineMode)
         LocalProviderAccountRow(model: model)

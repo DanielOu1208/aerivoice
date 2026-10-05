@@ -12,6 +12,10 @@ enum BenchmarkMilestone: String, Codable, CaseIterable, Sendable {
   case outputMuteStarted
   case outputMuteFinished
   case audioEngineStartRequested
+  /// The start requested at the press was declined (a Bluetooth or unreadable input) and was
+  /// requested again after the checks, so `audioEngineStartRequested` to `captureStarted`
+  /// includes them.
+  case earlyAudioStartDeclined
   case preparedAudioEngineUsed
   case captureStarted
   case sttConfigured
@@ -30,6 +34,22 @@ enum BenchmarkMilestone: String, Codable, CaseIterable, Sendable {
   case insertionStarted
   case insertionFinished
   case terminal
+}
+
+/// Durations measured where the work runs, often off the main thread, rather than as the
+/// gap between two milestones.
+enum BenchmarkStep: String, Codable, CaseIterable, Sendable {
+  /// From the shortcut's key event until the dictation began on the main thread.
+  case shortcutEventToActivation
+  /// Capture start on the audio queue: waiting for the queue, reading the input route,
+  /// creating an engine (cold starts only), installing the tap, preparing again, and
+  /// starting the hardware.
+  case audioQueueWait, audioRouteCheck, audioEngineCreate, audioTapInstall, audioEnginePrepare
+  case audioEngineStart
+  /// Stop path: closing the microphone, pinning the target app and field on the main
+  /// thread, finding the editor (off the main thread), the read before Paste, and checking
+  /// the target again after it.
+  case audioStop, targetPin, editorLookup, prePasteProbe, pasteRevalidation
 }
 
 enum BenchmarkTerminalResult: String, Codable, Sendable {
@@ -74,6 +94,34 @@ enum BenchmarkFailureCategory: String, Codable, Sendable {
   case cancelled
   case emptyTranscript
   case unknown
+}
+
+extension BenchmarkFailureCategory {
+  /// What kind of failure an error is, and the HTTP status when a provider gave one.
+  static func classify(_ error: Error) -> (category: BenchmarkFailureCategory, httpStatus: Int?) {
+    if let error = error as? ProviderHTTPError {
+      return (.provider, error.statusCode)
+    }
+    if let error = error as? GrokTransportError {
+      return (error.isProviderRejection ? .provider : .network, error.httpStatus)
+    }
+    if let error = error as? CartesiaTransportError {
+      return (error.isProviderRejection ? .provider : .network, error.httpStatus)
+    }
+    if error is CleanupNetworkError { return (.network, nil) }
+    if error is URLError { return (.network, nil) }
+    if let error = error as? AppError {
+      switch error {
+      case .missingCredential: return (.missingCredential, nil)
+      case .microphoneUnavailable: return (.microphonePermission, nil)
+      case .connectionTimeout: return (.connectionTimeout, nil)
+      case .finalizeTimeout: return (.finalizeTimeout, nil)
+      case .emptyTranscript: return (.emptyTranscript, nil)
+      case .provider: return (.provider, nil)
+      }
+    }
+    return (.unknown, nil)
+  }
 }
 
 struct BenchmarkEnvironment: Codable, Equatable, Sendable {
@@ -220,6 +268,8 @@ struct LatencyBenchmarkRecord: Codable, Equatable, Sendable {
   var outcome: BenchmarkOutcome?
   var context: InteractionDiagnosticContext? = nil
   var recordingGeneration: UUID? = nil
+  /// Milliseconds per `BenchmarkStep`, present only for the steps this attempt reached.
+  var stepsMS: [String: Double]? = nil
 }
 
 @MainActor
@@ -231,6 +281,7 @@ protocol LatencyBenchmarkRecording: AnyObject {
     enabled: Bool, transcriptionConfiguration: TranscriptionConfiguration,
     cleanupMode: CleanupMode, cleanupConfiguration: CleanupConfiguration)
   func mark(_ milestone: BenchmarkMilestone)
+  func recordStep(_ step: BenchmarkStep, _ duration: Duration)
   func recordAudioCaptured(bytes: Int, bufferedBytes: Int)
   func recordAudioSent(bytes: Int)
   func recordSTTUpdate(_ update: STTBenchmarkUpdate)
@@ -243,6 +294,29 @@ protocol LatencyBenchmarkRecording: AnyObject {
     _ result: BenchmarkTerminalResult, stage: BenchmarkFailureStage?,
     category: BenchmarkFailureCategory?, httpStatus: Int?)
   func clearCompletedHistory()
+}
+
+extension LatencyBenchmarkRecording {
+  /// The audio queue's part of a capture start.
+  func recordSteps(_ report: AudioStartReport) {
+    recordStep(.audioQueueWait, report.queueWait)
+    recordStep(.audioRouteCheck, report.routeCheck)
+    if !report.usedPreparation { recordStep(.audioEngineCreate, report.engineCreation) }
+    recordStep(.audioTapInstall, report.engine.tapInstall)
+    recordStep(.audioEnginePrepare, report.engine.prepare)
+    recordStep(.audioEngineStart, report.engine.start)
+  }
+
+  /// The accessibility work around Paste; a step that was not reached is not recorded.
+  func recordSteps(_ steps: InsertionSteps) {
+    if let value = steps.editorLookup { recordStep(.editorLookup, value) }
+    if let value = steps.prePasteProbe { recordStep(.prePasteProbe, value) }
+    if let value = steps.revalidation { recordStep(.pasteRevalidation, value) }
+  }
+}
+
+extension LatencyBenchmarkRecording {
+  func recordStep(_ step: BenchmarkStep, _ duration: Duration) {}
 }
 
 @MainActor
@@ -361,6 +435,16 @@ final class LatencyBenchmarkRecorder: LatencyBenchmarkRecording {
     active.record.lastCheckpointAt = wallNow()
     self.active = active
     checkpoint()
+  }
+
+  func recordStep(_ step: BenchmarkStep, _ duration: Duration) {
+    guard var active else { return }
+    let components = duration.components
+    var steps = active.record.stepsMS ?? [:]
+    steps[step.rawValue] = max(
+      0, Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1e15)
+    active.record.stepsMS = steps
+    self.active = active
   }
 
   func recordAudioCaptured(bytes: Int, bufferedBytes: Int) {

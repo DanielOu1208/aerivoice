@@ -9,9 +9,13 @@ activation reads the current credentials again.
 
 The first activation can consume the prepared engine. The app checks the input
 device, sample rate, and channel count before reuse. Engine configuration changes,
-sleep, lock, cancellation, and quit discard unused preparation. Recording sessions
-still release their engine when stopped; subsequent sessions use a fresh engine.
-The converter still adapts to the actual audio callback's format.
+sleep, screen lock, a session switch, and quit discard unused preparation. Recording
+sessions still release their engine when stopped, and the next engine is prepared right
+away: after a completed dictation and after a cancelled one (Escape, menu Cancel, a
+second press during start-up), including a cancel while the engine was starting.
+Waking, unlocking, and returning to the session prepare it again when no dictation is
+running, onboarding is complete, and microphone access is granted. The converter still
+adapts to the actual audio callback's format.
 
 Audio preparation and startup run on the audio queue. Activation during preparation
 queues behind that work instead of creating another engine. Cancelled startup
@@ -20,10 +24,28 @@ starting the hardware. Cancellation of pending startup does not block the main
 thread. Failure of optional preparation falls back to normal startup.
 
 The existing notch, sound objects, and preliminary provider network request are
-already prepared at launch. Sound playback, the 300 ms cue delay, and output muting
+already prepared at launch. Sound playback, the 200 ms cue delay, and output muting
 remain activation-time actions. No microphone capture or permission prompt is
-part of launch preparation. Preparation is not retried on wake or after onboarding
-in this initial version; the ordinary startup path remains available.
+part of preparation. Preparation is not retried after onboarding; the ordinary
+startup path remains available.
+
+## Microphone start at the press
+
+With sound cues off and microphone access already granted, the engine start is requested
+the moment a dictation is activated (inside the shortcut handler for a key press), before
+the credential, Accessibility, and local-model checks. It runs off the main actor, so the
+checks overlap the
+engine's own start-up. If a check fails, the engine is stopped, the next one is prepared,
+and audio it delivered is discarded unsent before the readiness error appears. If the
+input goes away while the checks run, the dictation fails with the microphone error once
+they pass, instead of recording from a stopped engine. Audio recorded while the checks run
+belongs to the dictation and is kept. Output muting stays
+in the activation path, so in the slow case a few milliseconds can be recorded before
+output is muted. A Bluetooth or unreadable input is declined at the press (opening a
+headset's microphone switches it to its call profile even if the dictation is then
+abandoned) and started after the checks instead; `earlyAudioStartDeclined` marks those
+attempts. With cues on, the cue wait already hides the engine start, and the order is
+unchanged.
 
 ## Timing evidence
 
@@ -43,6 +65,15 @@ New content-free milestones in the existing interaction JSONL separate:
 | Cue wait and scheduling | `startCuePlaybackReturned` to `startCueDelayFinished` |
 | Output muting | `outputMuteStarted` to `outputMuteFinished` |
 | Audio startup and queue wait | `audioEngineStartRequested` to `captureStarted` |
+
+When the microphone starts at the press, `audioEngineStartRequested` comes before
+`credentialReadStarted`, and `captureStarted` is when the activation path finds the
+engine running after its checks, which can be later than the moment the microphone went
+live. `stepsMS` breaks the start-up down further, timed on the audio queue: queue wait,
+route check, engine creation (fresh engines only), tap installation, the second prepare,
+and the hardware start, plus the delay from the shortcut's key event to activation (see
+[Performance logging](PERFORMANCE-LOGGING.md)). `scripts/summarize-latency.swift` prints
+them split by prepared and fresh engines.
 
 `preparedAudioEngineUsed` is present when preparation was reused. For new records
 with both `audioEngineStartRequested` and `captureStarted`, its absence means a

@@ -40,60 +40,76 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
   case soniox
   case meta
   case grok
+  case cartesia
   case local
 
   var id: Self { self }
 
-  var displayName: String {
+  /// What the app knows about a provider, kept together so adding one is one entry here.
+  struct Descriptor: Sendable {
+    let displayName: String
+    let modelDisplayName: String
+    let modelID: String
+    /// Nil for Local, which needs a downloaded model instead of an account.
+    let credentialKind: CredentialKind?
+    /// How much captured audio may wait for a connected provider before the dictation fails.
+    let connectedBufferLimitBytes: Int
+    /// Contacted ahead of a dictation so its connection opens faster. Nil contacts nothing.
+    let prewarmHost: String?
+  }
+
+  var descriptor: Descriptor {
     switch self {
-    case .soniox: "Soniox"
-    case .meta: "Meta"
-    case .grok: "Grok"
-    case .local: "Local"
+    case .soniox:
+      Descriptor(
+        displayName: "Soniox", modelDisplayName: "Soniox Realtime", modelID: "stt-rt-v5",
+        credentialKind: .soniox, connectedBufferLimitBytes: 512_000,
+        prewarmHost: "stt-rt.soniox.com")
+    case .meta:
+      Descriptor(
+        displayName: "Meta", modelDisplayName: "Muse Voice Transcribe 1.0",
+        modelID: "muse-voice-transcribe-1.0", credentialKind: .metaModelAPI,
+        connectedBufferLimitBytes: 160_000, prewarmHost: "api.meta.ai")
+    case .grok:
+      Descriptor(
+        displayName: "Grok", modelDisplayName: "Grok Voice Transcribe 2.0",
+        modelID: "grok-voice-transcribe-2.0", credentialKind: .xai,
+        connectedBufferLimitBytes: 160_000, prewarmHost: "api.x.ai")
+    case .cartesia:
+      Descriptor(
+        displayName: "Cartesia", modelDisplayName: CartesiaTranscriptionModel.ink2.displayName,
+        modelID: CartesiaTranscriptionModel.ink2.rawValue, credentialKind: .cartesia,
+        connectedBufferLimitBytes: 160_000, prewarmHost: "api.cartesia.ai")
+    case .local:
+      Descriptor(
+        displayName: "Local", modelDisplayName: "Nemotron 3.5 — English",
+        modelID: "nemotron-3.5-asr-0.6b-560ms", credentialKind: nil,
+        connectedBufferLimitBytes: 160_000, prewarmHost: nil)
     }
   }
 
-  var modelDisplayName: String {
-    switch self {
-    case .soniox: "Soniox Realtime"
-    case .meta: "Muse Voice Transcribe 1.0"
-    case .grok: "Grok Voice Transcribe 2.0"
-    case .local: "Nemotron 3.5 — English"
-    }
-  }
-
-  var modelID: String {
-    switch self {
-    case .soniox: "stt-rt-v5"
-    case .meta: "muse-voice-transcribe-1.0"
-    case .grok: "grok-voice-transcribe-2.0"
-    case .local: "nemotron-3.5-asr-0.6b-560ms"
-    }
-  }
-
-  var credentialKind: CredentialKind? {
-    switch self {
-    case .soniox: .soniox
-    case .meta: .metaModelAPI
-    case .grok: .xai
-    case .local: nil
-    }
-  }
+  var displayName: String { descriptor.displayName }
+  var modelDisplayName: String { descriptor.modelDisplayName }
+  var modelID: String { descriptor.modelID }
+  var credentialKind: CredentialKind? { descriptor.credentialKind }
+  var connectedBufferLimitBytes: Int { descriptor.connectedBufferLimitBytes }
 
   var missingCredentialError: AppError {
-    switch self {
-    case .soniox: .missingSonioxKey
-    case .meta: .missingMetaModelAPIKey
-    case .grok: .missingXAIKey
-    case .local: .provider("Download the Local model in Dictation settings.")
-    }
+    credentialKind.map(AppError.missingCredential)
+      ?? .provider("Download the Local model in Dictation settings.")
   }
+}
 
-  var connectedBufferLimitBytes: Int {
+/// Raw values are Cartesia's model IDs. Both use the same endpoint and protocol.
+enum CartesiaTranscriptionModel: String, CaseIterable, Codable, Identifiable, Sendable {
+  case ink2 = "ink-2"
+  case inkPreview = "ink-preview"
+
+  var id: Self { self }
+  var displayName: String {
     switch self {
-    case .soniox: 512_000
-    case .meta, .grok: 160_000
-    case .local: 160_000
+    case .ink2: "Ink 2"
+    case .inkPreview: "Ink Preview"
     }
   }
 }
@@ -124,9 +140,17 @@ struct TranscriptionConfiguration: Equatable, Sendable {
   let provider: TranscriptionProvider
   var localModel: LocalTranscriptionModel = .nemotron
   var appleLocaleIdentifier: String = ""
+  var cartesiaModel: CartesiaTranscriptionModel = .ink2
 
   var modelID: String {
-    provider == .local && localModel == .apple ? "apple-speech-transcriber" : provider.modelID
+    switch provider {
+    case .local where localModel == .apple: "apple-speech-transcriber"
+    case .cartesia: cartesiaModel.rawValue
+    default: provider.modelID
+    }
+  }
+  var modelDisplayName: String {
+    provider == .cartesia ? cartesiaModel.displayName : provider.modelDisplayName
   }
   var audioEncoding: String { "pcm_s16le_16000" }
   var zeroDataRetentionRequired: Bool? { provider == .meta ? true : nil }
@@ -284,13 +308,7 @@ enum CleanupProvider: String, CaseIterable, Codable, Sendable {
     }
   }
 
-  var missingCredentialError: AppError {
-    switch self {
-    case .openRouter: .missingOpenRouterKey
-    case .groq: .missingGroqKey
-    case .cerebras: .missingCerebrasKey
-    }
-  }
+  var missingCredentialError: AppError { .missingCredential(credentialKind) }
 }
 
 struct CleanupProviderRoute: Equatable, Sendable {
@@ -579,6 +597,39 @@ enum VocabularyNormalizer {
   }
 }
 
+/// A microphone closing at the release. It may finish before anyone waits on it.
+final class ReleaseStop: @unchecked Sendable {
+  private let lock = NSLock()
+  private var done = false
+  private var waiter: CheckedContinuation<Void, Never>?
+
+  static var finished: ReleaseStop {
+    let stop = ReleaseStop()
+    stop.finish()
+    return stop
+  }
+
+  func finish() {
+    let waiter = lock.withLock {
+      done = true
+      defer { self.waiter = nil }
+      return self.waiter
+    }
+    waiter?.resume()
+  }
+
+  /// Returns once the microphone has closed. One waiter at a time.
+  func wait() async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      let finished = lock.withLock {
+        if !done { waiter = continuation }
+        return done
+      }
+      if finished { continuation.resume() }
+    }
+  }
+}
+
 protocol AudioCapturing: AnyObject, Sendable {
   var onAudio: ((Data) -> Void)? { get set }
   /// Called off the main thread when capture stops itself and cannot resume on another input.
@@ -586,20 +637,55 @@ protocol AudioCapturing: AnyObject, Sendable {
   func prepare() async
   func prepareWithDiagnostics() async -> DiagnosticPreparationResult
   func discardPreparation()
-  /// Returns whether earlier preparation was reused. Audio recorded before the deadline is dropped.
-  func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws -> Bool
+  /// Audio recorded before the deadline is dropped. A start that `declinesBluetooth` throws
+  /// `AudioStartDeclined` before touching the engine when the input is, or may be, a
+  /// Bluetooth headset.
+  func start(discardingAudioBefore deadline: ContinuousClock.Instant?, declinesBluetooth: Bool)
+    async throws -> AudioStartReport
   func cancelStart()
   func stop()
+  /// Ends capture at the release (a host time), keeping audio said up to it. Returns at once;
+  /// the microphone has closed when the returned stop finishes.
+  func beginStop(atHostTime hostTime: UInt64) -> ReleaseStop
 }
 
 extension AudioCapturing {
-  func start() async throws -> Bool { try await start(discardingAudioBefore: nil) }
+  func beginStop(atHostTime hostTime: UInt64) -> ReleaseStop {
+    stop()
+    return .finished
+  }
+
+  func start(discardingAudioBefore deadline: ContinuousClock.Instant?) async throws
+    -> AudioStartReport
+  {
+    try await start(discardingAudioBefore: deadline, declinesBluetooth: false)
+  }
+
+  func start() async throws -> AudioStartReport { try await start(discardingAudioBefore: nil) }
 
   func prepareWithDiagnostics() async -> DiagnosticPreparationResult {
     await prepare()
     return Task.isCancelled ? .cancelled : .unknown
   }
 }
+
+/// How one capture start went, timed on the audio queue. Content-free.
+struct AudioStartReport: Equatable, Sendable {
+  /// Whether earlier preparation was reused.
+  var usedPreparation: Bool
+  /// From the request until the audio queue ran it; preparation in progress delays it.
+  var queueWait: Duration = .zero
+  /// Reading the input route, and discarding a preparation made for another route.
+  var routeCheck: Duration = .zero
+  /// Creating an engine; zero when a prepared one was reused.
+  var engineCreation: Duration = .zero
+  var engine = CaptureEngineStartSteps()
+}
+
+/// A start asked to avoid Bluetooth found a Bluetooth input, or couldn't read the input.
+/// Opening a headset's microphone switches it to its call profile, even for a dictation that
+/// is then abandoned.
+struct AudioStartDeclined: Error, Equatable {}
 
 @MainActor
 protocol RealtimeTranscribing: AnyObject {
@@ -757,12 +843,25 @@ protocol TextInserting: Sendable {
   func invalidatePendingRestoration()
   func prepareForNextDictation()
   func finishPendingRestoration() async
+  /// Timings of the last insertion's accessibility work. Returned once.
+  func takeInsertionSteps() -> InsertionSteps?
 }
 
 extension TextInserting {
   func invalidatePendingRestoration() {}
   func prepareForNextDictation() { invalidatePendingRestoration() }
   func finishPendingRestoration() async {}
+  func takeInsertionSteps() -> InsertionSteps? { nil }
+}
+
+/// How long the accessibility work around Paste took. Content-free; nil means not reached.
+struct InsertionSteps: Equatable, Sendable {
+  /// Finding the editor from the focus pinned at stop, off the main thread.
+  var editorLookup: Duration?
+  /// The read before Paste that serves clipboard restoration.
+  var prePasteProbe: Duration?
+  /// Checking the target again after that read.
+  var revalidation: Duration?
 }
 
 enum InsertionResult: Equatable, Sendable {
@@ -805,12 +904,7 @@ struct NotchState: Equatable, Sendable {
 }
 
 enum AppError: LocalizedError {
-  case missingSonioxKey
-  case missingMetaModelAPIKey
-  case missingXAIKey
-  case missingOpenRouterKey
-  case missingGroqKey
-  case missingCerebrasKey
+  case missingCredential(CredentialKind)
   case microphoneUnavailable
   case connectionTimeout
   case finalizeTimeout
@@ -819,12 +913,8 @@ enum AppError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
-    case .missingSonioxKey: "Add and verify a Soniox API key in Settings."
-    case .missingMetaModelAPIKey: "Add and verify a Meta Model API key in Settings."
-    case .missingXAIKey: "Add and verify an xAI API key in Settings."
-    case .missingOpenRouterKey: "Add and verify an OpenRouter API key in Settings."
-    case .missingGroqKey: "Add and verify a Groq API key in Settings."
-    case .missingCerebrasKey: "Add and verify a Cerebras API key in Settings."
+    case .missingCredential(let kind):
+      "Add and verify \(kind.indefiniteArticle) \(kind.apiKeyLabel) in Settings."
     case .microphoneUnavailable: "Microphone access is required."
     case .connectionTimeout: "The transcription provider did not connect in time."
     case .finalizeTimeout: "The transcription provider did not finish in time."

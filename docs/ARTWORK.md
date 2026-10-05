@@ -50,6 +50,7 @@ respective owners. They are not original AeriVoice artwork or an endorsement.
 | `images/providers/soniox.png` | [Soniox's official favicon](https://soniox.com/icons/favicon-96x96.png), retrieved September 7, 2026; unchanged |
 | `images/providers/meta.svg` | Lobe Icons `meta-color.svg` |
 | `images/providers/spacex.png` | [SpaceX's official favicon](https://www.spacex.com/assets/favicon-spacex.ico), retrieved September 19, 2026 |
+| `images/providers/cartesia.png` | [Cartesia's official touch icon](https://www.cartesia.ai/apple-touch-icon.png), retrieved October 5, 2026; scaled from 180 × 180 to 96 × 96, with the tile corners rounded to match the other provider tiles |
 | `images/providers/openrouter.svg` | [OpenRouter's official light-background mark](https://github.com/OpenRouterTeam/sign-in-with-openrouter/blob/main/public/openrouter-logo-light.svg), retrieved September 20, 2026 |
 | `images/providers/cerebras.svg` | `Cerebras C logo.svg` from the [official press kit](https://www.cerebras.ai/company/press-kit), retrieved September 20, 2026 |
 | `images/providers/groq.svg` | Lobe Icons `groq.svg` |
@@ -73,7 +74,7 @@ tile with 9 pixels of clear space on each side, protecting the mark from the
 native icon's rounded clipping. The app and README use the same PNG. The SpaceX
 mark identifies the Grok (xAI) provider at Daniel's direction.
 
-SpaceX, Soniox, OpenRouter, and Cerebras assets are third-party brand assets and
+SpaceX, Soniox, Cartesia, OpenRouter, and Cerebras assets are third-party brand assets and
 are not covered by AeriVoice's or LobeHub's MIT license. No permissive license is
 asserted for these official marks. App asset notices are recorded in
 [`../AeriVoice/ProviderIcons-LICENSE.txt`](../AeriVoice/ProviderIcons-LICENSE.txt).

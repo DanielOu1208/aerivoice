@@ -64,6 +64,7 @@ extension CredentialKind {
     case .soniox: "ProviderSoniox"
     case .metaModelAPI: "ProviderMeta"
     case .xai: "ProviderSpaceX"
+    case .cartesia: "ProviderCartesia"
     case .openRouter: "ProviderOpenRouter"
     case .groq: "ProviderGroq"
     case .cerebras: "ProviderCerebras"

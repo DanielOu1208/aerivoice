@@ -94,8 +94,9 @@ enum TargetedPasteEvent {
 
 @MainActor
 final class GlobalShortcutMonitor {
-  var onPress: (() -> UUID?)?
-  var onHoldPress: (() -> UUID?)?
+  /// Receives how long ago the key event happened, when known.
+  var onPress: ((Duration?) -> UUID?)?
+  var onHoldPress: ((Duration?) -> UUID?)?
   var onHoldRelease: ((UUID) -> Void)?
   var onCancel: (() -> Void)?
   var shouldCancel: (() -> Bool)?
@@ -173,8 +174,20 @@ final class GlobalShortcutMonitor {
     heldLifecycleGeneration = nil
   }
 
-  private func press(at timestamp: CGEventTimestamp) {
-    let lifecycleGeneration = activationMode == .hold ? onHoldPress?() : onPress?()
+  /// Time from the key event to now: how long the main thread took to reach the shortcut.
+  /// NSEvent's timestamp shares `systemUptime`'s clock, avoiding any doubt about the units of
+  /// the raw event timestamp.
+  static func age(of event: CGEvent, now: TimeInterval = ProcessInfo.processInfo.systemUptime)
+    -> Duration?
+  {
+    guard let timestamp = NSEvent(cgEvent: event)?.timestamp, timestamp > 0 else { return nil }
+    let age = now - timestamp
+    guard age >= 0, age < 60 else { return nil }
+    return .seconds(age)
+  }
+
+  private func press(at timestamp: CGEventTimestamp, age: Duration?) {
+    let lifecycleGeneration = activationMode == .hold ? onHoldPress?(age) : onPress?(age)
     heldLifecycleGeneration = activationMode == .toggle ? nil : lifecycleGeneration
     pressTracker.press(
       at: timestamp, finishesOnRelease: heldLifecycleGeneration != nil,
@@ -197,7 +210,7 @@ final class GlobalShortcutMonitor {
         current: modifierBits, required: definition.requiredModifierBits)
       {
       case .press:
-        press(at: event.timestamp)
+        press(at: event.timestamp, age: Self.age(of: event))
         return true
       case .release:
         release(at: event.timestamp)
@@ -219,7 +232,7 @@ final class GlobalShortcutMonitor {
       definition.matchesModifiers(event.flags)
     {
       if event.getIntegerValueField(.keyboardEventAutorepeat) == 0, !pressTracker.isPressed {
-        press(at: event.timestamp)
+        press(at: event.timestamp, age: Self.age(of: event))
       }
       return true
     }

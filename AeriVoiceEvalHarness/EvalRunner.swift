@@ -94,16 +94,19 @@ final class EvalRunner {
     let soniox: SonioxRealtimeClient
     let meta: MetaRealtimeClient
     let grok: GrokRealtimeClient
+    let cartesia: CartesiaRealtimeClient
     if scenario.live {
       soniox = SonioxRealtimeClient()
       meta = MetaRealtimeClient()
       grok = GrokRealtimeClient(packetPolicy: scenario.grokPacketPolicy)
+      cartesia = CartesiaRealtimeClient()
     } else {
       let script = scenario.script
       let text = scenario.scriptedTranscript
-      soniox = SonioxRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .soniox, script: script, text: text) })
-      grok = GrokRealtimeClient(packetPolicy: scenario.grokPacketPolicy, makeTransport: { _ in EvalScriptedSocket(provider: .grok, script: script, text: text) })
-      meta = MetaRealtimeClient(makeTransport: { _ in EvalScriptedSocket(provider: .meta, script: script, text: text) })
+      soniox = SonioxRealtimeClient(makeTransport: { _ in EvalScriptedSocket(dialect: .soniox, script: script, text: text) })
+      grok = GrokRealtimeClient(packetPolicy: scenario.grokPacketPolicy, makeTransport: { _ in EvalScriptedSocket(dialect: .grok, script: script, text: text) })
+      meta = MetaRealtimeClient(makeTransport: { _ in EvalScriptedSocket(dialect: .meta, script: script, text: text) })
+      cartesia = CartesiaRealtimeClient(makeTransport: { _ in EvalScriptedSocket(dialect: .cartesia, script: script, text: text) })
     }
     let localRuntime = LocalSpeechRuntime()
     let appleController = AppleSpeechController()
@@ -161,7 +164,8 @@ final class EvalRunner {
       appleClient = EvalControlledLocalClient(text: scenario.scriptedTranscript, script: scenario.script)
     }
     let transcriber = EvalTranscriber(client: RealtimeTranscriptionRouter(
-      soniox: soniox, meta: meta, grok: grok, local: localClient, apple: appleClient), events: events)
+      clients: [.soniox: soniox, .meta: meta, .grok: grok, .cartesia: cartesia, .local: localClient],
+      apple: appleClient), events: events)
     let cleaner = makeCleaner()
     let benchmark = EvalBenchmark(events: events)
     let lifecycle = EvalLifecycle(events: events)
@@ -173,6 +177,7 @@ final class EvalRunner {
     preferences.onTranscriptionProviderChange = {}
     preferences.transcriptionProvider = scenario.provider
     preferences.localTranscriptionModel = scenario.localEngine
+    preferences.cartesiaTranscriptionModel = scenario.cartesiaEngine
     preferences.appleSpeechLocale = scenario.appleLocale ?? ""
     preferences.setOfflineMode(scenario.offlineMode == true)
     preferences.cleanupProvider = scenario.model.provider

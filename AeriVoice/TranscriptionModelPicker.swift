@@ -1,14 +1,21 @@
 import SwiftUI
 
 enum TranscriptionChoice: String, CaseIterable, Identifiable {
-  case soniox, meta, grok, nemotron, apple
+  case soniox, meta, grok, cartesiaInk2, cartesiaInkPreview, nemotron, apple
 
   var id: Self { self }
   var localModel: LocalTranscriptionModel? {
     switch self {
-    case .soniox, .meta, .grok: nil
+    case .soniox, .meta, .grok, .cartesiaInk2, .cartesiaInkPreview: nil
     case .nemotron: .nemotron
     case .apple: .apple
+    }
+  }
+  var cartesiaModel: CartesiaTranscriptionModel? {
+    switch self {
+    case .cartesiaInk2: .ink2
+    case .cartesiaInkPreview: .inkPreview
+    case .soniox, .meta, .grok, .nemotron, .apple: nil
     }
   }
   var provider: TranscriptionProvider {
@@ -16,16 +23,26 @@ enum TranscriptionChoice: String, CaseIterable, Identifiable {
     case .soniox: .soniox
     case .meta: .meta
     case .grok: .grok
+    case .cartesiaInk2, .cartesiaInkPreview: .cartesia
     case .nemotron, .apple: .local
     }
   }
-  var title: String { localModel?.title ?? provider.displayName }
+  var title: String {
+    if let cartesiaModel { return "\(provider.displayName) \(cartesiaModel.displayName)" }
+    if let localModel { return localModel.title }
+    // The default cloud provider is marked the way the default local model is.
+    return self == .soniox ? "\(provider.displayName) — Recommended" : provider.displayName
+  }
 
-  init(provider: TranscriptionProvider, localModel: LocalTranscriptionModel) {
+  init(
+    provider: TranscriptionProvider, localModel: LocalTranscriptionModel,
+    cartesiaModel: CartesiaTranscriptionModel = .ink2
+  ) {
     switch provider {
     case .soniox: self = .soniox
     case .meta: self = .meta
     case .grok: self = .grok
+    case .cartesia: self = cartesiaModel == .inkPreview ? .cartesiaInkPreview : .cartesiaInk2
     case .local: self = localModel == .apple ? .apple : .nemotron
     }
   }
@@ -48,14 +65,15 @@ struct TranscriptionModelPicker: View {
     Picker("Model", selection: Binding(
       get: {
         TranscriptionChoice(provider: preferences.effectiveTranscriptionProvider,
-                                      localModel: preferences.localTranscriptionModel)
+                                      localModel: preferences.localTranscriptionModel,
+                                      cartesiaModel: preferences.cartesiaTranscriptionModel)
       }, set: { model.selectTranscriptionChoice($0) }
     )) {
       Section("Cloud") {
-        choices([.soniox, .meta, .grok])
+        choices(TranscriptionChoice.allCases.filter { $0.localModel == nil })
       }
       Section("On this Mac") {
-        choices([.nemotron, .apple])
+        choices(TranscriptionChoice.allCases.filter { $0.localModel != nil })
       }
     }
     .disabled(busy)

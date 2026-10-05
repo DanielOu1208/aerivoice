@@ -35,7 +35,7 @@ AeriVoice is a native macOS menu-bar dictation app. Press a shortcut, watch your
 
 - **Live transcript, anywhere.** A notch-style overlay shows your words as you speak; the finished text lands in the focused app.
 - **Fast.** About 500 ms median from finishing dictation to cleaned text with Soniox + Cerebras ([benchmark](docs/CLEANUP-PERFORMANCE.md#readme-performance-checkpoint-2026-09-07)).
-- **Your choice of providers.** Soniox, Grok, Meta, or on-device Nemotron and Apple Speech for transcription; OpenRouter, Cerebras, or Groq for cleanup. [Providers and models](docs/PROVIDERS.md)
+- **Your choice of providers.** Soniox, Grok, Meta, Cartesia, or on-device Nemotron and Apple Speech for transcription; OpenRouter, Cerebras, or Groq for cleanup. [Providers and models](docs/PROVIDERS.md)
 - **Cleanup styles.** Faithful, Polished, Compose, or your own instructions. [Cleanup styles](docs/CLEANUP-STYLES.md)
 - **Offline mode.** On-device transcription with no API keys and no network requests. [Local dictation](docs/LOCAL-DICTATION.md)
 - **Reliable capture.** Pick your microphone, keep recording when you switch inputs, and lose fewer words at the start and end. [Microphone](docs/MICROPHONE.md)

@@ -5,6 +5,7 @@ enum CredentialKind: String, CaseIterable, Sendable {
   case soniox
   case metaModelAPI
   case xai
+  case cartesia
   case openRouter
   case groq
   case cerebras
@@ -14,6 +15,7 @@ enum CredentialKind: String, CaseIterable, Sendable {
     case .soniox: "Soniox"
     case .metaModelAPI: "Meta Model API"
     case .xai: "xAI"
+    case .cartesia: "Cartesia"
     case .openRouter: "OpenRouter"
     case .groq: "Groq"
     case .cerebras: "Cerebras"
@@ -24,6 +26,14 @@ enum CredentialKind: String, CaseIterable, Sendable {
     switch self {
     case .metaModelAPI: "Meta Model API key"
     default: "\(label) API key"
+    }
+  }
+
+  /// For a sentence that names the key: "an xAI API key", "a Soniox API key".
+  var indefiniteArticle: String {
+    switch self {
+    case .xai, .openRouter: "an"
+    default: "a"
     }
   }
 }

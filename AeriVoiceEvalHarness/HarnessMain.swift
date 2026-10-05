@@ -26,6 +26,9 @@ struct HarnessMain {
               entry["local_models"] = ["nemotron", "apple"]
               entry["apple_locale_selection"] = true
             }
+            if $0 == .cartesia {
+              entry["cartesia_models"] = CartesiaTranscriptionModel.allCases.map(\.rawValue)
+            }
             return entry
           },
           "cleanup_models": CleanupModel.allCases.map {
@@ -40,6 +43,8 @@ struct HarnessMain {
             "grok_packet_mode": ["type": "string", "values": ["captureFrames", "100ms"], "test_only": true],
             "grok_connection_mode": ["type": "string", "values": ["cold", "ready"], "test_only": true],
             "grok_ready_age_ms": ["type": "number", "min": 0, "max": 60_000, "requires": "ready", "test_only": true],
+            "cartesia_model": ["type": "string",
+              "values": CartesiaTranscriptionModel.allCases.map(\.rawValue), "requires": "cartesia"],
             "cleanup_custom_instructions": ["type": "string",
               "max_characters": CleanupInstructions.maxCustomInstructionCharacters],
             "cleanup_prompt_override": ["type": "string", "kinds": ["cleanup"],
