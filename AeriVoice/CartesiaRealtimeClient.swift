@@ -113,108 +113,6 @@ struct CartesiaTransportError: LocalizedError, Equatable {
   }
 }
 
-@MainActor
-protocol CartesiaWebSocketTransport: AnyObject {
-  /// Starts the handshake and returns once the server has accepted the socket.
-  func open() async throws
-  func send(_ message: URLSessionWebSocketTask.Message) async throws
-  func receive() async throws -> URLSessionWebSocketTask.Message
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
-}
-
-/// Drives audio pacing; tests substitute a manual clock.
-@MainActor
-struct CartesiaPacingClock {
-  var now: () -> ContinuousClock.Instant
-  var sleep: (ContinuousClock.Instant) async throws -> Void
-
-  static var continuous: Self {
-    Self(now: { ContinuousClock.now }, sleep: { try await ContinuousClock().sleep(until: $0) })
-  }
-}
-
-@MainActor
-private final class URLSessionCartesiaTransport: NSObject, CartesiaWebSocketTransport,
-  URLSessionWebSocketDelegate
-{
-  private var session: URLSession!
-  private var task: URLSessionWebSocketTask!
-  private var openContinuation: CheckedContinuation<Void, Error>?
-  private var closeCode: Int?
-
-  init(request: URLRequest) {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.timeoutIntervalForRequest = 3
-    super.init()
-    session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-    task = session.webSocketTask(with: request)
-  }
-
-  func open() async throws {
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-      openContinuation = continuation
-      AppNetworkPolicy.shared.resume(task)
-    }
-  }
-
-  func send(_ message: URLSessionWebSocketTask.Message) async throws {
-    do { try await task.send(message) } catch { throw sanitizedError() }
-  }
-
-  func receive() async throws -> URLSessionWebSocketTask.Message {
-    do { return try await task.receive() } catch { throw sanitizedError() }
-  }
-
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-    AppNetworkPolicy.shared.forget(task)
-    task.cancel(with: closeCode, reason: reason)
-    session.invalidateAndCancel()
-    finishOpen(.failure(CancellationError()))
-  }
-
-  private func finishOpen(_ result: Result<Void, Error>) {
-    guard let continuation = openContinuation else { return }
-    openContinuation = nil
-    continuation.resume(with: result)
-  }
-
-  private func sanitizedError() -> CartesiaTransportError {
-    if let status = (task.response as? HTTPURLResponse)?.statusCode, status != 101 {
-      return CartesiaTransportError(status: status)
-    }
-    if let closeCode { return CartesiaTransportError(status: closeCode) }
-    let code = task.closeCode
-    return CartesiaTransportError(status: code == .invalid ? nil : code.rawValue)
-  }
-
-  nonisolated func urlSession(
-    _ session: URLSession, webSocketTask: URLSessionWebSocketTask,
-    didOpenWithProtocol protocol: String?
-  ) {
-    Task { @MainActor [weak self] in self?.finishOpen(.success(())) }
-  }
-
-  nonisolated func urlSession(
-    _ session: URLSession, webSocketTask: URLSessionWebSocketTask,
-    didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?
-  ) {
-    let code = closeCode.rawValue
-    Task { @MainActor [weak self] in self?.closeCode = code }
-  }
-
-  nonisolated func urlSession(
-    _ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?
-  ) {
-    Task { @MainActor [weak self] in
-      guard let self else { return }
-      AppNetworkPolicy.shared.forget(self.task)
-      // A refused handshake ends here, with the HTTP status on the task's response.
-      self.finishOpen(.failure(self.sanitizedError()))
-      self.session.finishTasksAndInvalidate()
-    }
-  }
-}
-
 /// Streams one dictation to Cartesia's manual-finalize endpoint. Both Ink models use it.
 @MainActor
 final class CartesiaRealtimeClient: RealtimeTranscribing {
@@ -229,11 +127,11 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
   /// A longer backlog drains at 1.35× realtime, as in the Meta and Grok clients.
   nonisolated static let catchUpPercent: Int64 = 135
 
-  private let makeTransport: (URLRequest) -> CartesiaWebSocketTransport
+  private let makeTransport: (URLRequest) -> RealtimeWebSocketTransport
   private let connectionTimeout: Duration
   private let finalizationTimeout: Duration
-  private let clock: CartesiaPacingClock
-  private var transport: CartesiaWebSocketTransport?
+  private let clock: RealtimeClock
+  private var transport: RealtimeWebSocketTransport?
   private var receiveTask: Task<Void, Never>?
   private var connectionTimeoutTask: Task<Void, Never>?
   private var finalizationTimeoutTask: Task<Void, Never>?
@@ -252,9 +150,11 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
   init(
     connectionTimeout: Duration = .seconds(3),
     finalizationTimeout: Duration = .seconds(3),
-    clock: CartesiaPacingClock = .continuous,
-    makeTransport: @escaping (URLRequest) -> CartesiaWebSocketTransport = {
-      URLSessionCartesiaTransport(request: $0)
+    clock: RealtimeClock = .continuous,
+    makeTransport: @escaping (URLRequest) -> RealtimeWebSocketTransport = {
+      URLSessionRealtimeTransport(request: $0) {
+        CartesiaTransportError(status: $0.httpStatus ?? $0.closeCode)
+      }
     }
   ) {
     self.connectionTimeout = connectionTimeout
@@ -409,7 +309,7 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
   }
 
   private func receiveLoop(
-    transport: CartesiaWebSocketTransport, generation connectionGeneration: UUID
+    transport: RealtimeWebSocketTransport, generation connectionGeneration: UUID
   ) async {
     do {
       while !Task.isCancelled, generation == connectionGeneration, self.transport === transport {

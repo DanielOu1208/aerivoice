@@ -415,7 +415,7 @@ final class MetaRealtimeClientTests: XCTestCase {
     let transport = MetaTransportSpy(mode: .open)
     let pacingClock = MetaPacingClockSpy()
     let client = MetaRealtimeClient(
-      pacingClock: pacingClock, makeTransport: { _ in transport })
+      pacingClock: pacingClock.clock, makeTransport: { _ in transport })
     try await client.connect(
       configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
       vocabulary: [], sessionID: DictationSessionID())
@@ -449,7 +449,7 @@ final class MetaRealtimeClientTests: XCTestCase {
     let pacingClock = MetaPacingClockSpy()
     transport.onDataSend = { pacingClock.advance(by: .milliseconds(20)) }
     let client = MetaRealtimeClient(
-      pacingClock: pacingClock, makeTransport: { _ in transport })
+      pacingClock: pacingClock.clock, makeTransport: { _ in transport })
     try await client.connect(
       configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
       vocabulary: [], sessionID: DictationSessionID())
@@ -469,7 +469,7 @@ final class MetaRealtimeClientTests: XCTestCase {
     let transport = MetaTransportSpy(mode: .open)
     let pacingClock = MetaPacingClockSpy()
     let client = MetaRealtimeClient(
-      pacingClock: pacingClock, makeTransport: { _ in transport })
+      pacingClock: pacingClock.clock, makeTransport: { _ in transport })
     try await client.connect(
       configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
       vocabulary: [], sessionID: DictationSessionID())
@@ -503,7 +503,7 @@ final class MetaRealtimeClientTests: XCTestCase {
         transport.onDataSend = { pacingClock.advance(by: sendDurations.removeFirst()) }
       }
       let client = MetaRealtimeClient(
-        pacingClock: pacingClock, makeTransport: { _ in transport })
+        pacingClock: pacingClock.clock, makeTransport: { _ in transport })
       try await client.connect(
         configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
         vocabulary: [], sessionID: DictationSessionID())
@@ -524,7 +524,7 @@ final class MetaRealtimeClientTests: XCTestCase {
     var sendDurations: [Duration] = [.milliseconds(250), .zero, .zero]
     transport.onDataSend = { pacingClock.advance(by: sendDurations.removeFirst()) }
     let client = MetaRealtimeClient(
-      pacingClock: pacingClock, makeTransport: { _ in transport })
+      pacingClock: pacingClock.clock, makeTransport: { _ in transport })
     try await client.connect(
       configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
       vocabulary: [], sessionID: DictationSessionID())
@@ -543,7 +543,7 @@ final class MetaRealtimeClientTests: XCTestCase {
     let pacingClock = MetaPacingClockSpy()
     pacingClock.sleepOvershoots = [.milliseconds(99), .zero]
     let client = MetaRealtimeClient(
-      pacingClock: pacingClock, makeTransport: { _ in transport })
+      pacingClock: pacingClock.clock, makeTransport: { _ in transport })
     try await client.connect(
       configuration: TranscriptionConfiguration(provider: .meta), apiKey: "test-key",
       vocabulary: [], sessionID: DictationSessionID())
@@ -559,15 +559,19 @@ final class MetaRealtimeClientTests: XCTestCase {
 }
 
 @MainActor
-private final class MetaPacingClockSpy: MetaPacingClock {
+private final class MetaPacingClockSpy {
   private(set) var now = ContinuousClock.now
   private(set) var sleepDurations: [Duration] = []
   var sleepOvershoots: [Duration] = []
 
-  func sleep(until deadline: ContinuousClock.Instant) async throws {
-    sleepDurations.append(now.duration(to: deadline))
-    let overshoot = sleepOvershoots.isEmpty ? .zero : sleepOvershoots.removeFirst()
-    now = deadline.advanced(by: overshoot)
+  var clock: RealtimeClock {
+    RealtimeClock(
+      now: { self.now },
+      sleep: { deadline in
+        self.sleepDurations.append(self.now.duration(to: deadline))
+        let overshoot = self.sleepOvershoots.isEmpty ? .zero : self.sleepOvershoots.removeFirst()
+        self.now = deadline.advanced(by: overshoot)
+      })
   }
 
   func advance(by duration: Duration) {
@@ -576,7 +580,7 @@ private final class MetaPacingClockSpy: MetaPacingClock {
 }
 
 @MainActor
-private final class MetaTransportSpy: MetaWebSocketTransport {
+private final class MetaTransportSpy: RealtimeWebSocketTransport {
   enum Mode {
     case open
     case neverAcknowledges

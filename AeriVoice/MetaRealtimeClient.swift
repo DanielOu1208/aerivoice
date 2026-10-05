@@ -57,118 +57,9 @@ struct MetaRealtimeResponse: Decodable, Equatable {
   }
 }
 
-@MainActor
-protocol MetaWebSocketTransport: AnyObject {
-  func resume()
-  func send(_ message: URLSessionWebSocketTask.Message) async throws
-  func receive() async throws -> URLSessionWebSocketTask.Message
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
-}
-
 struct MetaWebSocketTransportError: Error {
   let underlying: Error
   let closeCode: Int?
-}
-
-private struct MetaWebSocketTermination {
-  let closeCode: Int?
-  let error: Error?
-}
-
-@MainActor
-protocol MetaPacingClock {
-  var now: ContinuousClock.Instant { get }
-  func sleep(until deadline: ContinuousClock.Instant) async throws
-}
-
-@MainActor
-private struct ContinuousMetaPacingClock: MetaPacingClock {
-  private let clock = ContinuousClock()
-
-  var now: ContinuousClock.Instant { clock.now }
-
-  func sleep(until deadline: ContinuousClock.Instant) async throws {
-    try await clock.sleep(until: deadline)
-  }
-}
-
-@MainActor
-private final class URLSessionMetaWebSocketTransport: NSObject, MetaWebSocketTransport,
-  URLSessionWebSocketDelegate
-{
-  private var session: URLSession!
-  private var task: URLSessionWebSocketTask!
-  private var termination: MetaWebSocketTermination?
-  private var terminationWaiters: [CheckedContinuation<MetaWebSocketTermination, Never>] = []
-
-  init(url: URL) {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.timeoutIntervalForRequest = 3
-    super.init()
-    session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-    task = session.webSocketTask(with: url)
-  }
-
-  func resume() { AppNetworkPolicy.shared.resume(task) }
-  func send(_ message: URLSessionWebSocketTask.Message) async throws {
-    do {
-      try await task.send(message)
-    } catch {
-      let termination = await waitForTermination()
-      throw MetaWebSocketTransportError(
-        underlying: termination.error ?? error, closeCode: termination.closeCode)
-    }
-  }
-  func receive() async throws -> URLSessionWebSocketTask.Message {
-    do {
-      return try await task.receive()
-    } catch {
-      let termination = await waitForTermination()
-      throw MetaWebSocketTransportError(
-        underlying: termination.error ?? error, closeCode: termination.closeCode)
-    }
-  }
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-    AppNetworkPolicy.shared.forget(task)
-    task.cancel(with: closeCode, reason: reason)
-    session.invalidateAndCancel()
-  }
-
-  private func waitForTermination() async -> MetaWebSocketTermination {
-    if let termination { return termination }
-    return await withCheckedContinuation { terminationWaiters.append($0) }
-  }
-
-  private func recordTermination(closeCode: Int?, error: Error?) {
-    guard termination == nil else { return }
-    AppNetworkPolicy.shared.forget(task)
-    let termination = MetaWebSocketTermination(closeCode: closeCode, error: error)
-    self.termination = termination
-    let waiters = terminationWaiters
-    terminationWaiters.removeAll()
-    waiters.forEach { $0.resume(returning: termination) }
-    session.finishTasksAndInvalidate()
-  }
-
-  nonisolated func urlSession(
-    _ session: URLSession, webSocketTask: URLSessionWebSocketTask,
-    didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?
-  ) {
-    Task { @MainActor [weak self] in
-      self?.recordTermination(closeCode: closeCode.rawValue, error: nil)
-    }
-  }
-
-  nonisolated func urlSession(
-    _ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?
-  ) {
-    Task { @MainActor [weak self] in
-      guard let self, self.termination == nil else { return }
-      let code = self.task.closeCode
-      self.recordTermination(
-        closeCode: code == .invalid ? nil : code.rawValue, error: error)
-    }
-  }
 }
 
 @MainActor
@@ -176,11 +67,11 @@ final class MetaRealtimeClient: NSObject, RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
 
-  private let makeTransport: (URL) -> MetaWebSocketTransport
+  private let makeTransport: (URL) -> RealtimeWebSocketTransport
   private let acknowledgementTimeout: Duration
   private let finalizationTimeout: Duration
-  private let pacingClock: any MetaPacingClock
-  private var transport: MetaWebSocketTransport?
+  private let pacingClock: RealtimeClock
+  private var transport: RealtimeWebSocketTransport?
   private var receiveTask: Task<Void, Never>?
   private var acknowledgementTimeoutTask: Task<Void, Never>?
   private var finalizationTimeoutTask: Task<Void, Never>?
@@ -198,9 +89,12 @@ final class MetaRealtimeClient: NSObject, RealtimeTranscribing {
   init(
     acknowledgementTimeout: Duration = .seconds(3),
     finalizationTimeout: Duration = .seconds(3),
-    pacingClock: any MetaPacingClock = ContinuousMetaPacingClock(),
-    makeTransport: @escaping (URL) -> MetaWebSocketTransport = {
-      URLSessionMetaWebSocketTransport(url: $0)
+    pacingClock: RealtimeClock = .continuous,
+    makeTransport: @escaping (URL) -> RealtimeWebSocketTransport = {
+      URLSessionRealtimeTransport(url: $0) {
+        MetaWebSocketTransportError(
+          underlying: $0.completion ?? $0.thrown, closeCode: $0.closeCode)
+      }
     }
   ) {
     self.acknowledgementTimeout = acknowledgementTimeout
@@ -268,13 +162,10 @@ final class MetaRealtimeClient: NSObject, RealtimeTranscribing {
     let speedMultiplier = frame.queuedBytesAfterFrame > 0 ? 1.35 : 1.0
     let frameDuration = Self.pacingOffset(
       forByteCount: frame.audio.count, speedMultiplier: speedMultiplier)
-    let frameStart: ContinuousClock.Instant
-    if let nextAudioDeadline, pacingClock.now < nextAudioDeadline {
-      try await pacingClock.sleep(until: nextAudioDeadline)
-      frameStart = pacingClock.now
-    } else {
-      frameStart = pacingClock.now
+    if let nextAudioDeadline, pacingClock.now() < nextAudioDeadline {
+      try await pacingClock.sleep(nextAudioDeadline)
     }
+    let frameStart = pacingClock.now()
     guard generation == sendGeneration, self.transport === transport else {
       throw CancellationError()
     }
@@ -352,7 +243,7 @@ final class MetaRealtimeClient: NSObject, RealtimeTranscribing {
   }
 
   private func waitForAcknowledgement(
-    handshakeJSON: String, transport: MetaWebSocketTransport,
+    handshakeJSON: String, transport: RealtimeWebSocketTransport,
     generation connectionGeneration: UUID
   ) async throws -> MetaRealtimeResponse {
     try await withTaskCancellationHandler {
@@ -407,7 +298,7 @@ final class MetaRealtimeClient: NSObject, RealtimeTranscribing {
   }
 
   private func receiveLoop(
-    transport: MetaWebSocketTransport, generation connectionGeneration: UUID
+    transport: RealtimeWebSocketTransport, generation connectionGeneration: UUID
   ) async {
     do {
       while !Task.isCancelled, generation == connectionGeneration, self.transport === transport {

@@ -1,86 +1,102 @@
 import Foundation
 
+/// What one provider's server says at each point of a scripted session.
+@MainActor
+struct EvalProviderDialect {
+  /// Where the provider accepts or refuses a connection.
+  enum Connection { case onOpen, onFirstTextMessage, onFirstReceive }
+
+  let connection: Connection
+  /// What the server says once it accepts the connection.
+  var greeting: [String: Any]? = nil
+  let partial: (String) -> [String: Any]
+  /// Whether a text message from the client ends audio input.
+  let endsAudio: (String) -> Bool
+  let final: (String) -> [[String: Any]]
+  /// What the server answers to other text messages after audio has ended.
+  var replies: [String: [String: Any]] = [:]
+  /// What a receive throws once the final transcript is read, when the server closes then.
+  var closure: Error? = nil
+
+  static let soniox = Self(
+    connection: .onFirstTextMessage,
+    partial: { ["tokens": [["text": $0, "is_final": false]]] },
+    endsAudio: \.isEmpty,
+    final: { [["tokens": [["text": $0, "is_final": true]], "finished": true]] })
+
+  static let meta = Self(
+    connection: .onFirstTextMessage, greeting: ["type": "ack", "sessionId": "evaluation"],
+    partial: { ["type": "transcript", "transcript": $0, "final": false] },
+    endsAudio: { messageType($0) == "endStream" },
+    final: { [["type": "transcript", "transcript": $0, "final": true]] },
+    closure: MetaWebSocketTransportError(
+      underlying: URLError(.networkConnectionLost),
+      closeCode: URLSessionWebSocketTask.CloseCode.normalClosure.rawValue))
+
+  static let grok = Self(
+    connection: .onFirstReceive, greeting: ["type": "transcript.created"],
+    partial: {
+      ["type": "transcript.partial", "text": $0, "start": 0, "duration": 0.25,
+       "is_final": false, "speech_final": false]
+    },
+    endsAudio: { messageType($0) == "audio.done" },
+    final: { [["type": "transcript.done", "text": $0]] })
+
+  /// Cartesia's commands are bare words: `finalize` returns the transcript, `close` ends the session.
+  static let cartesia = Self(
+    connection: .onOpen,
+    partial: { ["type": "transcript", "is_final": false, "text": $0] },
+    endsAudio: { $0 == "finalize" },
+    final: { [["type": "transcript", "is_final": true, "text": $0], ["type": "flush_done"]] },
+    replies: ["close": ["type": "done"]])
+
+  private static func messageType(_ text: String) -> String? {
+    let object = try? JSONSerialization.jsonObject(with: Data(text.utf8))
+    return (object as? [String: Any])?["type"] as? String
+  }
+}
+
 /// Responds below the real clients: handshakes, JSON encoding and parsing still run in production code.
 @MainActor
-final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport, GrokWebSocketTransport,
-  CartesiaWebSocketTransport
-{
-  private let provider: TranscriptionProvider
+final class EvalScriptedSocket: RealtimeWebSocketTransport {
+  private let dialect: EvalProviderDialect
   private let script: ControlledResponses
   private let text: String
   private var messages: [URLSessionWebSocketTask.Message] = []
   private var waiter: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
   private var cancelled = false
-  private var created = false
+  private var receiving = false
   private var sentPartial = false
-  private var normalClosePending = false
+  private var closePending = false
 
-  init(provider: TranscriptionProvider, script: ControlledResponses, text: String) {
-    self.provider = provider; self.script = script; self.text = text
+  init(dialect: EvalProviderDialect, script: ControlledResponses, text: String) {
+    self.dialect = dialect; self.script = script; self.text = text
   }
-  func resume() {}
   func invalidate() { cancel(with: .goingAway, reason: nil) }
   func ping() async throws { if cancelled { throw CancellationError() } }
 
-  /// Cartesia has no handshake message: the socket is ready once it opens.
   func open() async throws {
-    try await Task.sleep(for: .milliseconds(script.connectDelayMs ?? 0))
-    guard !cancelled else { throw CancellationError() }
-    if script.fault == "connection" { throw URLError(.cannotConnectToHost) }
+    if dialect.connection == .onOpen { try await connect() }
   }
 
   func send(_ message: URLSessionWebSocketTask.Message) async throws {
     guard !cancelled else { throw CancellationError() }
     switch message {
     case .data:
-      if !sentPartial {
-        sentPartial = true
-        if script.fault == "malformed_stt" { enqueue(.string("invalid-json")); return }
-        if provider == .soniox {
-          try enqueue(["tokens": [["text": text, "is_final": false]]])
-        } else if provider == .grok {
-          try enqueue(["type": "transcript.partial", "text": text, "start": 0, "duration": 0.25,
-                       "is_final": false, "speech_final": false])
-        } else if provider == .cartesia {
-          try enqueue(["type": "transcript", "is_final": false, "text": text])
-        } else { try enqueue(["type": "transcript", "transcript": text, "final": false]) }
-      }
-    case .string(let value) where provider == .cartesia:
-      // Cartesia's commands are bare words: `finalize` returns the transcript, `close` ends the session.
+      guard !sentPartial else { return }
+      sentPartial = true
+      if script.fault == "malformed_stt" { enqueue(.string("invalid-json")); return }
+      try enqueue(dialect.partial(text))
+    case .string(let value) where dialect.endsAudio(value):
       guard script.fault != "finalize_timeout" else { return }
-      if value == "finalize" {
-        try await Task.sleep(for: .milliseconds(script.finalizeDelayMs ?? 0))
-        guard !cancelled else { throw CancellationError() }
-        try enqueue(["type": "transcript", "is_final": true, "text": text])
-        try enqueue(["type": "flush_done"])
-      } else if value == "close" {
-        try enqueue(["type": "done"])
-      }
+      try await pause(script.finalizeDelayMs)
+      for message in dialect.final(text) { try enqueue(message) }
+      closePending = dialect.closure != nil
     case .string(let value):
-      let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any]
-      let finishing: Bool
-      switch provider {
-      case .soniox: finishing = value.isEmpty
-      case .grok: finishing = object?["type"] as? String == "audio.done"
-      default: finishing = object?["type"] as? String == "endStream"
-      }
-      if finishing {
-        if script.fault == "finalize_timeout" { return }
-        try await Task.sleep(for: .milliseconds(script.finalizeDelayMs ?? 0))
-        guard !cancelled else { throw CancellationError() }
-        if provider == .soniox {
-          try enqueue(["tokens": [["text": text, "is_final": true]], "finished": true])
-        } else if provider == .grok {
-          try enqueue(["type": "transcript.done", "text": text])
-        } else {
-          try enqueue(["type": "transcript", "transcript": text, "final": true])
-          normalClosePending = true
-        }
-      } else {
-        try await Task.sleep(for: .milliseconds(script.connectDelayMs ?? 0))
-        guard !cancelled else { throw CancellationError() }
-        if script.fault == "connection" { throw URLError(.cannotConnectToHost) }
-        if provider == .meta { try enqueue(["type": "ack", "sessionId": "evaluation"]) }
+      if let reply = dialect.replies[value] {
+        if script.fault != "finalize_timeout" { try enqueue(reply) }
+      } else if dialect.connection == .onFirstTextMessage {
+        try await connect()
       }
     @unknown default: throw EvalError.internalFailure
     }
@@ -88,18 +104,12 @@ final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport
 
   func receive() async throws -> URLSessionWebSocketTask.Message {
     if cancelled { throw CancellationError() }
-    if provider == .grok, !created {
-      created = true
-      try await Task.sleep(for: .milliseconds(script.connectDelayMs ?? 0))
-      guard !cancelled else { throw CancellationError() }
-      if script.fault == "connection" { throw URLError(.cannotConnectToHost) }
-      try enqueue(["type": "transcript.created"])
+    if dialect.connection == .onFirstReceive, !receiving {
+      receiving = true
+      try await connect()
     }
     if !messages.isEmpty { return messages.removeFirst() }
-    if normalClosePending {
-      throw MetaWebSocketTransportError(underlying: URLError(.networkConnectionLost),
-                                        closeCode: URLSessionWebSocketTask.CloseCode.normalClosure.rawValue)
-    }
+    if closePending, let closure = dialect.closure { throw closure }
     return try await withCheckedThrowingContinuation { waiter = $0 }
   }
 
@@ -108,6 +118,17 @@ final class EvalScriptedSocket: SonioxWebSocketTransport, MetaWebSocketTransport
     waiter?.resume(throwing: CancellationError())
     waiter = nil
     messages.removeAll()
+  }
+
+  private func connect() async throws {
+    try await pause(script.connectDelayMs)
+    if script.fault == "connection" { throw URLError(.cannotConnectToHost) }
+    if let greeting = dialect.greeting { try enqueue(greeting) }
+  }
+
+  private func pause(_ milliseconds: Double?) async throws {
+    try await Task.sleep(for: .milliseconds(milliseconds ?? 0))
+    guard !cancelled else { throw CancellationError() }
   }
 
   private func enqueue(_ object: [String: Any]) throws {

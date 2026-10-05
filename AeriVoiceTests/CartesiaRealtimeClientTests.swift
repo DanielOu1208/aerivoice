@@ -630,8 +630,8 @@ private final class ManualPacingClock {
   private(set) var now = ContinuousClock.now
   private(set) var sleeps: [Duration] = []
 
-  var clock: CartesiaPacingClock {
-    CartesiaPacingClock(
+  var clock: RealtimeClock {
+    RealtimeClock(
       now: { self.now },
       sleep: { deadline in
         self.sleeps.append(self.now.duration(to: deadline))
@@ -643,7 +643,7 @@ private final class ManualPacingClock {
 }
 
 @MainActor
-private final class CartesiaTransportSpy: CartesiaWebSocketTransport {
+private final class CartesiaTransportSpy: RealtimeWebSocketTransport {
   enum OpenBehavior {
     case succeeds
     case fails(Error)

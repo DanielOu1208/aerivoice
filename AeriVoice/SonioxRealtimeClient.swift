@@ -1,60 +1,21 @@
 import Foundation
 
 @MainActor
-protocol SonioxWebSocketTransport: AnyObject, Sendable {
-  func resume()
-  func send(_ message: URLSessionWebSocketTask.Message) async throws
-  func receive() async throws -> URLSessionWebSocketTask.Message
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
-  func invalidate()
-}
-
-@MainActor
-private final class URLSessionSonioxTransport: SonioxWebSocketTransport {
-  private let session: URLSession
-  private var task: URLSessionWebSocketTask?
-
-  init(url: URL) {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.timeoutIntervalForRequest = 3
-    session = URLSession(configuration: configuration)
-    task = session.webSocketTask(with: url)
-  }
-
-  func resume() { if let task { AppNetworkPolicy.shared.resume(task) } }
-  func send(_ message: URLSessionWebSocketTask.Message) async throws {
-    guard let task else { throw CancellationError() }
-    try await task.send(message)
-  }
-  func receive() async throws -> URLSessionWebSocketTask.Message {
-    guard let task else { throw CancellationError() }
-    return try await task.receive()
-  }
-  func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-    if let task { AppNetworkPolicy.shared.forget(task) }
-    task?.cancel(with: closeCode, reason: reason)
-    // Retaining the session must not add a new strong reference to its closed socket.
-    task = nil
-  }
-  func invalidate() { session.invalidateAndCancel() }
-}
-
-@MainActor
 final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
 
-  private let makeTransport: (URL) -> SonioxWebSocketTransport
-  private var session: SonioxWebSocketTransport?
-  private var task: SonioxWebSocketTransport?
+  private let makeTransport: (URL) -> RealtimeWebSocketTransport
+  private var session: RealtimeWebSocketTransport?
+  private var task: RealtimeWebSocketTransport?
   private var receiveTask: Task<Void, Never>?
   private var assembler = TranscriptAssembler()
   private var snapshot = TranscriptSnapshot()
   private var finishContinuation: CheckedContinuation<String, Error>?
   private var generation = UUID()
 
-  init(makeTransport: @escaping (URL) -> SonioxWebSocketTransport = {
-    URLSessionSonioxTransport(url: $0)
+  init(makeTransport: @escaping (URL) -> RealtimeWebSocketTransport = {
+    URLSessionRealtimeTransport(url: $0, keepsSession: true) { $0.thrown }
   }) {
     self.makeTransport = makeTransport
     super.init()

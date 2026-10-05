@@ -257,6 +257,10 @@ func evalFailure(_ error: Error) -> String {
     if error.httpStatus != nil { return "provider_http" }
     return error.isProviderRejection ? "provider" : "network"
   }
+  if let error = error as? CartesiaTransportError {
+    if error.httpStatus != nil { return "provider_http" }
+    return error.isProviderRejection ? "provider" : "network"
+  }
   if error is CleanupNetworkError || error is URLError { return "network" }
   if error is DecodingError { return "malformed_response" }
   if let error = error as? AppError {

@@ -669,7 +669,7 @@ final class GrokRealtimeClientTests: XCTestCase {
 }
 
 @MainActor
-private final class GrokTestSocket: GrokWebSocketTransport {
+private final class GrokTestSocket: RealtimeWebSocketTransport {
   var finalText: String? = "Final text."
   var sent: [String] = []
   var binaryFrames: [Data] = []
@@ -744,8 +744,8 @@ private final class GrokTestClock {
 
   init() { current = origin }
 
-  var clock: GrokRealtimeClock {
-    GrokRealtimeClock(now: { self.current }, sleep: { deadline in
+  var clock: RealtimeClock {
+    RealtimeClock(now: { self.current }, sleep: { deadline in
       try Task.checkCancellation()
       if !self.pausePacing && self.current.duration(to: deadline) < .seconds(1) {
         self.deadlines.append(deadline)
