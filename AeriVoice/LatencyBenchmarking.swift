@@ -112,9 +112,7 @@ extension BenchmarkFailureCategory {
     if error is URLError { return (.network, nil) }
     if let error = error as? AppError {
       switch error {
-      case .missingSonioxKey, .missingMetaModelAPIKey, .missingXAIKey, .missingCartesiaKey,
-        .missingOpenRouterKey, .missingGroqKey, .missingCerebrasKey:
-        return (.missingCredential, nil)
+      case .missingCredential: return (.missingCredential, nil)
       case .microphoneUnavailable: return (.microphonePermission, nil)
       case .connectionTimeout: return (.connectionTimeout, nil)
       case .finalizeTimeout: return (.finalizeTimeout, nil)

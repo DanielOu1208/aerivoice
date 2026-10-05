@@ -449,14 +449,8 @@ final class AppModel: ObservableObject {
   private func credentialValidationConfiguration(
     for kind: CredentialKind
   ) -> CleanupConfiguration? {
-    switch kind {
-    case .soniox: nil
-    case .metaModelAPI: nil
-    case .xai: nil
-    case .cartesia: nil
-    case .openRouter: preferences.cleanupConfiguration(for: .openRouter)
-    case .groq: preferences.cleanupConfiguration(for: .groq)
-    case .cerebras: preferences.cleanupConfiguration(for: .cerebras)
-    }
+    // Only a cleanup key is checked against a model; a transcription key needs none.
+    CleanupProvider.allCases.first { $0.credentialKind == kind }
+      .map { preferences.cleanupConfiguration(for: $0) }
   }
 }

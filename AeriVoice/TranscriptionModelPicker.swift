@@ -29,7 +29,9 @@ enum TranscriptionChoice: String, CaseIterable, Identifiable {
   }
   var title: String {
     if let cartesiaModel { return "\(provider.displayName) \(cartesiaModel.displayName)" }
-    return localModel?.title ?? provider.displayName
+    if let localModel { return localModel.title }
+    // The default cloud provider is marked the way the default local model is.
+    return self == .soniox ? "\(provider.displayName) — Recommended" : provider.displayName
   }
 
   init(
@@ -68,10 +70,10 @@ struct TranscriptionModelPicker: View {
       }, set: { model.selectTranscriptionChoice($0) }
     )) {
       Section("Cloud") {
-        choices([.soniox, .meta, .grok, .cartesiaInk2, .cartesiaInkPreview])
+        choices(TranscriptionChoice.allCases.filter { $0.localModel == nil })
       }
       Section("On this Mac") {
-        choices([.nemotron, .apple])
+        choices(TranscriptionChoice.allCases.filter { $0.localModel != nil })
       }
     }
     .disabled(busy)

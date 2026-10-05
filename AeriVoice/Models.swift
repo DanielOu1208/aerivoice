@@ -45,62 +45,58 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
 
   var id: Self { self }
 
-  var displayName: String {
+  /// What the app knows about a provider, kept together so adding one is one entry here.
+  struct Descriptor: Sendable {
+    let displayName: String
+    let modelDisplayName: String
+    let modelID: String
+    /// Nil for Local, which needs a downloaded model instead of an account.
+    let credentialKind: CredentialKind?
+    /// How much captured audio may wait for a connected provider before the dictation fails.
+    let connectedBufferLimitBytes: Int
+    /// Contacted ahead of a dictation so its connection opens faster. Nil contacts nothing.
+    let prewarmHost: String?
+  }
+
+  var descriptor: Descriptor {
     switch self {
-    case .soniox: "Soniox"
-    case .meta: "Meta"
-    case .grok: "Grok"
-    case .cartesia: "Cartesia"
-    case .local: "Local"
+    case .soniox:
+      Descriptor(
+        displayName: "Soniox", modelDisplayName: "Soniox Realtime", modelID: "stt-rt-v5",
+        credentialKind: .soniox, connectedBufferLimitBytes: 512_000,
+        prewarmHost: "stt-rt.soniox.com")
+    case .meta:
+      Descriptor(
+        displayName: "Meta", modelDisplayName: "Muse Voice Transcribe 1.0",
+        modelID: "muse-voice-transcribe-1.0", credentialKind: .metaModelAPI,
+        connectedBufferLimitBytes: 160_000, prewarmHost: "api.meta.ai")
+    case .grok:
+      Descriptor(
+        displayName: "Grok", modelDisplayName: "Grok Voice Transcribe 2.0",
+        modelID: "grok-voice-transcribe-2.0", credentialKind: .xai,
+        connectedBufferLimitBytes: 160_000, prewarmHost: "api.x.ai")
+    case .cartesia:
+      Descriptor(
+        displayName: "Cartesia", modelDisplayName: CartesiaTranscriptionModel.ink2.displayName,
+        modelID: CartesiaTranscriptionModel.ink2.rawValue, credentialKind: .cartesia,
+        connectedBufferLimitBytes: 160_000, prewarmHost: "api.cartesia.ai")
+    case .local:
+      Descriptor(
+        displayName: "Local", modelDisplayName: "Nemotron 3.5 — English",
+        modelID: "nemotron-3.5-asr-0.6b-560ms", credentialKind: nil,
+        connectedBufferLimitBytes: 160_000, prewarmHost: nil)
     }
   }
 
-  var modelDisplayName: String {
-    switch self {
-    case .soniox: "Soniox Realtime"
-    case .meta: "Muse Voice Transcribe 1.0"
-    case .grok: "Grok Voice Transcribe 2.0"
-    case .cartesia: CartesiaTranscriptionModel.ink2.displayName
-    case .local: "Nemotron 3.5 — English"
-    }
-  }
-
-  var modelID: String {
-    switch self {
-    case .soniox: "stt-rt-v5"
-    case .meta: "muse-voice-transcribe-1.0"
-    case .grok: "grok-voice-transcribe-2.0"
-    case .cartesia: CartesiaTranscriptionModel.ink2.rawValue
-    case .local: "nemotron-3.5-asr-0.6b-560ms"
-    }
-  }
-
-  var credentialKind: CredentialKind? {
-    switch self {
-    case .soniox: .soniox
-    case .meta: .metaModelAPI
-    case .grok: .xai
-    case .cartesia: .cartesia
-    case .local: nil
-    }
-  }
+  var displayName: String { descriptor.displayName }
+  var modelDisplayName: String { descriptor.modelDisplayName }
+  var modelID: String { descriptor.modelID }
+  var credentialKind: CredentialKind? { descriptor.credentialKind }
+  var connectedBufferLimitBytes: Int { descriptor.connectedBufferLimitBytes }
 
   var missingCredentialError: AppError {
-    switch self {
-    case .soniox: .missingSonioxKey
-    case .meta: .missingMetaModelAPIKey
-    case .grok: .missingXAIKey
-    case .cartesia: .missingCartesiaKey
-    case .local: .provider("Download the Local model in Dictation settings.")
-    }
-  }
-
-  var connectedBufferLimitBytes: Int {
-    switch self {
-    case .soniox: 512_000
-    case .meta, .grok, .cartesia: 160_000
-    case .local: 160_000
-    }
+    credentialKind.map(AppError.missingCredential)
+      ?? .provider("Download the Local model in Dictation settings.")
   }
 }
 
@@ -312,13 +308,7 @@ enum CleanupProvider: String, CaseIterable, Codable, Sendable {
     }
   }
 
-  var missingCredentialError: AppError {
-    switch self {
-    case .openRouter: .missingOpenRouterKey
-    case .groq: .missingGroqKey
-    case .cerebras: .missingCerebrasKey
-    }
-  }
+  var missingCredentialError: AppError { .missingCredential(credentialKind) }
 }
 
 struct CleanupProviderRoute: Equatable, Sendable {
@@ -914,13 +904,7 @@ struct NotchState: Equatable, Sendable {
 }
 
 enum AppError: LocalizedError {
-  case missingSonioxKey
-  case missingMetaModelAPIKey
-  case missingXAIKey
-  case missingCartesiaKey
-  case missingOpenRouterKey
-  case missingGroqKey
-  case missingCerebrasKey
+  case missingCredential(CredentialKind)
   case microphoneUnavailable
   case connectionTimeout
   case finalizeTimeout
@@ -929,13 +913,8 @@ enum AppError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
-    case .missingSonioxKey: "Add and verify a Soniox API key in Settings."
-    case .missingMetaModelAPIKey: "Add and verify a Meta Model API key in Settings."
-    case .missingXAIKey: "Add and verify an xAI API key in Settings."
-    case .missingCartesiaKey: "Add and verify a Cartesia API key in Settings."
-    case .missingOpenRouterKey: "Add and verify an OpenRouter API key in Settings."
-    case .missingGroqKey: "Add and verify a Groq API key in Settings."
-    case .missingCerebrasKey: "Add and verify a Cerebras API key in Settings."
+    case .missingCredential(let kind):
+      "Add and verify \(kind.indefiniteArticle) \(kind.apiKeyLabel) in Settings."
     case .microphoneUnavailable: "Microphone access is required."
     case .connectionTimeout: "The transcription provider did not connect in time."
     case .finalizeTimeout: "The transcription provider did not finish in time."

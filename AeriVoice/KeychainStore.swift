@@ -28,6 +28,14 @@ enum CredentialKind: String, CaseIterable, Sendable {
     default: "\(label) API key"
     }
   }
+
+  /// For a sentence that names the key: "an xAI API key", "a Soniox API key".
+  var indefiniteArticle: String {
+    switch self {
+    case .xai, .openRouter: "an"
+    default: "a"
+    }
+  }
 }
 
 enum CredentialNamespace: String, Sendable {

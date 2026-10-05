@@ -164,7 +164,7 @@ final class EvalRunner {
       appleClient = EvalControlledLocalClient(text: scenario.scriptedTranscript, script: scenario.script)
     }
     let transcriber = EvalTranscriber(client: RealtimeTranscriptionRouter(
-      soniox: soniox, meta: meta, grok: grok, cartesia: cartesia, local: localClient,
+      clients: [.soniox: soniox, .meta: meta, .grok: grok, .cartesia: cartesia, .local: localClient],
       apple: appleClient), events: events)
     let cleaner = makeCleaner()
     let benchmark = EvalBenchmark(events: events)

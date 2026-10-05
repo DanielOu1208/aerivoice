@@ -12,62 +12,32 @@ struct LiveCredentialValidator: CredentialValidating {
   func validate(
     _ value: String, kind: CredentialKind, configuration: CleanupConfiguration?
   ) async throws {
-    switch kind {
+    if let provider = TranscriptionProvider.allCases.first(where: { $0.credentialKind == kind }) {
+      return try await validateTranscription(provider, apiKey: value)
+    }
+    guard let configuration, configuration.provider.credentialKind == kind else {
+      throw AppError.provider("\(kind.label) validation configuration is missing.")
+    }
+    switch configuration.provider {
     case .openRouter:
-      guard let configuration, configuration.provider == .openRouter else {
-        throw AppError.provider("OpenRouter validation configuration is missing.")
-      }
-      try await OpenRouterCleanupClient().validate(
-        apiKey: value, configuration: configuration)
+      try await OpenRouterCleanupClient().validate(apiKey: value, configuration: configuration)
     case .groq:
-      guard let configuration, configuration.provider == .groq else {
-        throw AppError.provider("Groq validation configuration is missing.")
-      }
       try await GroqCleanupClient().validate(apiKey: value, model: configuration.model)
     case .cerebras:
-      guard let configuration, configuration.provider == .cerebras else {
-        throw AppError.provider("Cerebras validation configuration is missing.")
-      }
       try await CerebrasCleanupClient().validate(apiKey: value, model: configuration.model)
-    case .soniox:
-      let client = SonioxRealtimeClient()
-      defer { client.cancel() }
-      try await client.connect(
-        configuration: TranscriptionConfiguration(provider: .soniox), apiKey: value,
-        vocabulary: [], sessionID: DictationSessionID())
-      try await client.send(
-        RealtimeAudioFrame(
-          audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
-      do { _ = try await client.finish() } catch AppError.emptyTranscript {}
-    case .xai:
-      let client = GrokRealtimeClient()
-      defer { client.cancel() }
-      try await client.connect(
-        configuration: TranscriptionConfiguration(provider: .grok), apiKey: value,
-        vocabulary: [], sessionID: DictationSessionID())
-      try await client.send(RealtimeAudioFrame(audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
-      do { _ = try await client.finish() } catch AppError.emptyTranscript {}
-    case .cartesia:
-      let client = CartesiaRealtimeClient()
-      defer { client.cancel() }
-      try await client.connect(
-        configuration: TranscriptionConfiguration(provider: .cartesia), apiKey: value,
-        vocabulary: [], sessionID: DictationSessionID())
-      try await client.send(
-        RealtimeAudioFrame(
-          audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
-      do { _ = try await client.finish() } catch AppError.emptyTranscript {}
-    case .metaModelAPI:
-      let client = MetaRealtimeClient()
-      defer { client.cancel() }
-      try await client.connect(
-        configuration: TranscriptionConfiguration(provider: .meta), apiKey: value,
-        vocabulary: [], sessionID: DictationSessionID())
-      try await client.send(
-        RealtimeAudioFrame(
-          audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
-      do { _ = try await client.finish() } catch AppError.emptyTranscript {}
     }
+  }
+
+  /// A key is good when its provider accepts a connection and a moment of silence with it.
+  private func validateTranscription(_ provider: TranscriptionProvider, apiKey: String) async throws {
+    let client = provider.makeClient()
+    defer { client.cancel() }
+    try await client.connect(
+      configuration: TranscriptionConfiguration(provider: provider), apiKey: apiKey,
+      vocabulary: [], sessionID: DictationSessionID())
+    try await client.send(
+      RealtimeAudioFrame(audio: Data(repeating: 0, count: 3_200), queuedBytesAfterFrame: 0))
+    do { _ = try await client.finish() } catch AppError.emptyTranscript {}
   }
 }
 

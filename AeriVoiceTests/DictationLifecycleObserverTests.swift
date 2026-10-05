@@ -33,7 +33,7 @@ final class DictationLifecycleObserverTests: XCTestCase {
       credentials: LifecycleCredentials(value: nil), notifications: notifications)
     coordinator.toggle()
     try await waitUntil { notifications.errors.count == 1 }
-    XCTAssertEqual(notifications.errors.first, AppError.missingSonioxKey.localizedDescription)
+    XCTAssertEqual(notifications.errors.first, AppError.missingCredential(.soniox).localizedDescription)
     XCTAssertEqual(Set(observer.active.values), ["readinessIdleDelay"])
     guard case .error = coordinator.phase else { return XCTFail("Expected readiness error") }
     try await waitUntil { observer.active.isEmpty }

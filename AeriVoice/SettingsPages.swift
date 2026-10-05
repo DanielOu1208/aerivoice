@@ -317,10 +317,9 @@ struct ProviderSettingsPage: View {
     Form {
       Section("Transcription") {
         Group {
-          ProviderAccountRow(model: model, kind: .soniox)
-          ProviderAccountRow(model: model, kind: .metaModelAPI)
-          ProviderAccountRow(model: model, kind: .xai)
-          ProviderAccountRow(model: model, kind: .cartesia)
+          ForEach(TranscriptionProvider.allCases.compactMap(\.credentialKind), id: \.self) {
+            ProviderAccountRow(model: model, kind: $0)
+          }
         }
         .disabled(model.preferences.offlineMode || model.changingOfflineMode)
         LocalProviderAccountRow(model: model)
