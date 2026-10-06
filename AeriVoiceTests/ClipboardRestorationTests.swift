@@ -259,6 +259,45 @@ final class ClipboardRestorationTests: XCTestCase {
     XCTAssertNil(state.replacingSelection(with: String(repeating: "a", count: 1_000_001)))
   }
 
+  func testStatesCompareUTF16UnitsLiterallyAsAccessibilityReturnsThem() {
+    // Accessibility hands values over as bridged CFStrings.
+    func bridged(_ text: String) -> String {
+      let units = Array(text.utf16)
+      return CFStringCreateWithCharacters(nil, units, units.count) as String
+    }
+    let start = NSRange(location: 0, length: 0)
+    for (composed, decomposed) in [("\u{00D6}", "O\u{0308}"), ("é", "e\u{301}")] {
+      XCTAssertNotEqual(
+        TextEditState(text: bridged(composed), selection: start),
+        TextEditState(text: bridged(decomposed), selection: start))
+      XCTAssertNotEqual(
+        TextEditState(text: composed, selection: start),
+        TextEditState(text: bridged(decomposed), selection: start))
+      // Replacing a character with its canonical equivalent still changes the units.
+      let whole = NSRange(location: 0, length: composed.utf16.count)
+      XCTAssertNotNil(
+        TextEditState(text: bridged(composed), selection: whole).replacingSelection(
+          with: decomposed))
+    }
+    let text = "Grüße ⏺ naïve café 👋 " + String(repeating: "word ", count: 5_000)
+    let end = NSRange(location: text.utf16.count, length: 0)
+    XCTAssertEqual(
+      TextEditState(text: text, selection: end), TextEditState(text: bridged(text), selection: end))
+    XCTAssertEqual(
+      TextEditState(text: bridged(text), selection: end),
+      TextEditState(text: bridged(text), selection: end))
+    XCTAssertNotEqual(
+      TextEditState(text: bridged(text), selection: end),
+      TextEditState(text: bridged(text), selection: start))
+    XCTAssertNil(TextEditState(text: bridged(text), selection: end).replacingSelection(with: ""))
+    XCTAssertNil(
+      TextEditState(text: bridged(text), selection: NSRange(location: 0, length: 5))
+        .replacingSelection(with: "Grüße"))
+    XCTAssertEqual(
+      TextEditState(text: bridged(text), selection: end).replacingSelection(with: "Hi"),
+      TextEditState(text: text + "Hi", selection: NSRange(location: end.location + 2, length: 0)))
+  }
+
   func testExactPasteRestoresBackupAfterReturningPasteSent() async throws {
     let fixture = Fixture()
     defer { fixture.remove() }

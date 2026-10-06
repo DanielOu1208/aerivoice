@@ -17,8 +17,11 @@ struct TextEditState: Equatable, Sendable {
       && Self.isScalarBoundary(selection.location + selection.length, in: value)
   }
 
+  /// Compares UTF-16 units literally. NSString does that directly on the bridged strings
+  /// Accessibility returns, and at once when the lengths differ; walking their `utf16` views
+  /// takes milliseconds for a long document.
   static func == (lhs: Self, rhs: Self) -> Bool {
-    lhs.selection == rhs.selection && lhs.text.utf16.elementsEqual(rhs.text.utf16)
+    lhs.selection == rhs.selection && (lhs.text as NSString).isEqual(to: rhs.text)
   }
 
   func replacingSelection(with replacement: String) -> TextEditState? {
@@ -30,7 +33,7 @@ struct TextEditState: Equatable, Sendable {
     let expected = original.replacingCharacters(in: selection, with: replacement)
     // Swift String equality folds canonically equivalent Unicode sequences; this
     // check must compare actual UTF-16 units, as do the accessibility offsets.
-    guard !expected.utf16.elementsEqual(text.utf16) else { return nil }
+    guard !(expected as NSString).isEqual(to: text) else { return nil }
     return Self(text: expected, selection: NSRange(
       location: selection.location + replacementLength, length: 0))
   }
