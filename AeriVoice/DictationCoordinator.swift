@@ -38,6 +38,12 @@ final class DictationCoordinator: ObservableObject {
   private var bufferedAudio: [Data] = []
   private(set) var bufferedBytes = 0
   private var connected = false
+  /// What was buffered when the connection attempt began. Audio recorded before then, while
+  /// the checks ran or queued behind a busy main thread, isn't charged to the time a
+  /// connection may take.
+  private var bytesBeforeConnectionAttempt: Int?
+  /// Audio overflowed before start() opened a session to fail.
+  private var audioOverflowedBeforeSession = false
   private var connectionTask: Task<Void, Never>?
   private var connectionTaskID: UUID?
   private var drainTask: Task<Void, Never>?
@@ -416,6 +422,12 @@ final class DictationCoordinator: ObservableObject {
       bufferedAudio.removeAll(keepingCapacity: true)
       bufferedBytes = 0
       connected = false
+      bytesBeforeConnectionAttempt = nil
+      audioOverflowedBeforeSession = false
+    }
+    guard !audioOverflowedBeforeSession else {
+      failAudioOverflow(id: id)
+      return
     }
 
     beginTranscriberConnection(
@@ -491,6 +503,7 @@ final class DictationCoordinator: ObservableObject {
     connectionTask = Task { @MainActor [weak self] in
       defer { work?.finish() }
       guard let self, !Task.isCancelled, self.sessionID == id else { return }
+      self.bytesBeforeConnectionAttempt = self.bufferedBytes
       _ = await self.connectTranscriber(configuration: configuration, apiKey: apiKey, id: id)
       guard self.connectionTaskID == taskID else { return }
       self.connectionTask = nil
@@ -646,18 +659,24 @@ final class DictationCoordinator: ObservableObject {
 
   private func enqueue(_ data: Data) {
     guard phase == .starting || phase == .recording else { return }
+    let streamLimit =
+      activeTranscriptionConfiguration?.provider.connectedBufferLimitBytes ?? 512_000
     let maximumBytes: Int
-    if connected {
-      maximumBytes =
-        activeTranscriptionConfiguration?.provider.connectedBufferLimitBytes ?? 512_000
+    if let attempted = bytesBeforeConnectionAttempt {
+      // About 3 s may wait for the connection, counted from when it was attempted. A backlog
+      // from before then still fits once connected.
+      let waiting = attempted + 96_000
+      maximumBytes = connected ? max(streamLimit, waiting) : waiting
     } else {
-      maximumBytes = 96_000
+      // Recorded before the connection was attempted: it waits like a stream's backlog.
+      maximumBytes = streamLimit
     }
     guard bufferedBytes + data.count <= maximumBytes else {
       if let id = sessionID {
-        fail(
-          AppError.provider("Audio could not keep up."), id: id, stage: .sttStream,
-          category: .bufferOverflow)
+        failAudioOverflow(id: id)
+      } else {
+        // Dropping it would leave a hole in the speech.
+        audioOverflowedBeforeSession = true
       }
       return
     }
@@ -875,6 +894,14 @@ final class DictationCoordinator: ObservableObject {
     connected = false
     bufferedAudio.removeAll()
     bufferedBytes = 0
+    bytesBeforeConnectionAttempt = nil
+    audioOverflowedBeforeSession = false
+  }
+
+  private func failAudioOverflow(id: DictationSessionID) {
+    fail(
+      AppError.provider("Audio could not keep up."), id: id, stage: .sttStream,
+      category: .bufferOverflow)
   }
 
   private func showReadinessError(_ error: Error, category: BenchmarkFailureCategory) {

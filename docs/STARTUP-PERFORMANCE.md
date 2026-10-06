@@ -39,7 +39,9 @@ engine's own start-up. If a check fails, the engine is stopped, the next one is 
 and audio it delivered is discarded unsent before the readiness error appears. If the
 input goes away while the checks run, the dictation fails with the microphone error once
 they pass, instead of recording from a stopped engine. Audio recorded while the checks run
-belongs to the dictation and is kept. Output muting stays
+belongs to the dictation and is kept, even when a slow check holds it back; it does not count
+toward the roughly 3 seconds of audio that may wait once the connection is attempted. Output
+muting stays
 in the activation path, so in the slow case a few milliseconds can be recorded before
 output is muted. A Bluetooth or unreadable input is declined at the press (opening a
 headset's microphone switches it to its call profile even if the dictation is then

@@ -259,6 +259,41 @@ extension DictationCoordinatorTests {
     XCTAssertEqual(fixture.benchmark.audioBytesSent, 6_400)
   }
 
+  func testAudioQueuedBehindASlowCheckIsKeptForTheDictation() async throws {
+    // A slow Keychain read keeps the main thread busy while the microphone started at the
+    // press records 4 s. That backlog reaches the dictation only after start() has set up the
+    // session, before the connection is attempted, and all of it must be sent.
+    let fixture = makeFixture(audioFrameCount: 40)
+    var blocked = false
+    fixture.credentials.onRead = { [audio = fixture.audio] _ in
+      guard !blocked else { return }
+      blocked = true
+      let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+      while !audio.startReturned, ContinuousClock.now < deadline { usleep(1_000) }
+    }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertTrue(blocked)
+    XCTAssertNil(fixture.benchmark.failureCategory)
+    XCTAssertEqual(fixture.benchmark.audioBytes, 128_000)
+    XCTAssertEqual(fixture.benchmark.audioBytesSent, 128_000)
+  }
+
+  func testAudioWaitingForTheConnectionIsStillCapped() async throws {
+    // Once the connection is being attempted, about 3 s of audio may wait for it.
+    let fixture = makeFixture(connectWaitsForResolution: true)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording && fixture.transcriber.didConnect }
+    for _ in 0..<29 { fixture.audio.onAudio?(Data(repeating: 0, count: 3_200)) }
+    try await Task.sleep(for: .milliseconds(20))
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    for _ in 0..<2 { fixture.audio.onAudio?(Data(repeating: 0, count: 3_200)) }
+    try await waitUntil { fixture.benchmark.terminalResult == .failed }
+    XCTAssertEqual(fixture.benchmark.failureCategory, .bufferOverflow)
+  }
+
   func testFailedCheckAfterAnEarlyStartStopsTheMicrophoneAndSendsNothing() async throws {
     let cases: [(fixture: CoordinatorFixture, category: BenchmarkFailureCategory)] = [
       (makeFixture(hasSonioxKey: false, audioFrameCount: 3), .missingCredential),
