@@ -42,6 +42,27 @@ final class LocalSpeechRuntimeTests: XCTestCase {
     XCTAssertEqual(final, "final")
   }
 
+  func testUnchangedDictionaryIsGivenToTheEngineOnce() async throws {
+    let engine = BlockingLocalEngine()
+    let runtime = LocalSpeechRuntime(makeEngine: { engine })
+    try await runtime.load(from: URL(fileURLWithPath: "/unused"))
+    for words in [["AeriVoice"], ["AeriVoice"], ["AeriVoice", "Nemotron"]] {
+      let session = UUID()
+      try await runtime.begin(session, vocabulary: words)
+      _ = try await runtime.finish(session)
+    }
+    var events = await engine.events
+    XCTAssertEqual(events.filter { $0.hasPrefix("vocab:") }, ["vocab:AeriVoice", "vocab:AeriVoice,Nemotron"])
+    XCTAssertEqual(events.filter { $0 == "reset" }.count, 3)
+
+    // A reloaded engine starts without the list.
+    await runtime.unload()
+    try await runtime.load(from: URL(fileURLWithPath: "/unused"))
+    try await runtime.begin(UUID(), vocabulary: ["AeriVoice", "Nemotron"])
+    events = await engine.events
+    XCTAssertEqual(events.filter { $0.hasPrefix("vocab:") }.count, 3)
+  }
+
   func testUnloadingDefersUntilActiveRecordingFinishes() async throws {
     let engine = BlockingLocalEngine()
     let runtime = LocalSpeechRuntime(makeEngine: { engine })

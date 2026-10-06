@@ -4,7 +4,12 @@ import Foundation
 /// Cancelling a recording invalidates its results immediately, then drains before reset.
 @MainActor
 final class LocalSpeechRuntime {
-  private var manager: (any LocalSpeechEngine)?
+  private var manager: (any LocalSpeechEngine)? {
+    didSet { appliedVocabulary = nil }
+  }
+  /// The engine keeps its vocabulary across reset() and rebuilds its whole bias table
+  /// whenever it is given one, so an unchanged list is not given again.
+  private var appliedVocabulary: [String]?
   private let makeEngine: () -> any LocalSpeechEngine
 
   init(makeEngine: @escaping () -> any LocalSpeechEngine = { FluidLocalSpeechEngine() }) {
@@ -44,7 +49,9 @@ final class LocalSpeechRuntime {
     try await serialized { [self] in
       guard session == id, let manager, isReady else { throw CancellationError() }
       await manager.reset()
+      guard vocabulary != appliedVocabulary else { return }
       await manager.setVocabulary(vocabulary)
+      appliedVocabulary = vocabulary
     }
   }
 
