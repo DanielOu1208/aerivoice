@@ -165,6 +165,39 @@ final class DiagnosticsStoreTests: XCTestCase {
     XCTAssertFalse(exists(directory, LatencyBenchmarkStore.runtimeFilename))
   }
 
+  func testCapAsksForEachSegmentsSizeAndDateOnlyOnceAndRemovesTheOldestFirst() async throws {
+    // The cap is checked after every write, over months of daily archives.
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let record = storedRecord()
+    let seed = LatencyBenchmarkStore(directoryURL: directory)
+    try await seed.checkpoint(record)
+    let activeSize = try XCTUnwrap(FileManager.default.attributesOfItem(
+      atPath: directory.appending(path: LatencyBenchmarkStore.activeFilename).path)[.size] as? Int)
+    let archiveData = runtime(now) + Data([0x0A])
+    var names: [String] = []
+    for index in 0..<60 {
+      let name = "runtime-v1-\(1_900_000_000_000 + index)-\(UUID().uuidString).jsonl"
+      let url = directory.appending(path: "Archives/\(name)")
+      try archiveData.write(to: url)
+      // Listed in a different order from their dates.
+      let age = Double((index * 37) % 60)
+      try FileManager.default.setAttributes(
+        [.modificationDate: now.addingTimeInterval(-age * 3_600)], ofItemAtPath: url.path)
+      names.append(name)
+    }
+    let newest = names.enumerated().sorted { ($0.offset * 37) % 60 < ($1.offset * 37) % 60 }
+      .prefix(10).map(\.element)
+
+    let attributeReads = Counter()
+    let store = LatencyBenchmarkStore(
+      directoryURL: directory, fileManager: AttributeCountingFileManager(reads: attributeReads),
+      maxTotalBytes: activeSize + 10 * archiveData.count)
+    try await store.checkpoint(record)
+    XCTAssertLessThanOrEqual(attributeReads.value, 1, "One read for the checkpoint's own size")
+    XCTAssertEqual(Set(try archives(directory).map(\.lastPathComponent)), Set(newest))
+  }
+
   func testMalformedPartialTailIsSeparatedAndEventuallyExpires() async throws {
     let directory = temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -230,6 +263,28 @@ final class DiagnosticsStoreTests: XCTestCase {
       XCTFail("Symlink writes must fail")
     } catch {}
     XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "keep")
+  }
+
+  private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func increment() { lock.withLock { count += 1 } }
+  }
+
+  /// Counts how often the store asks for a file's attributes.
+  private final class AttributeCountingFileManager: FileManager {
+    let reads: Counter
+
+    init(reads: Counter) {
+      self.reads = reads
+      super.init()
+    }
+
+    override func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+      reads.increment()
+      return try super.attributesOfItem(atPath: path)
+    }
   }
 
   private func temporaryDirectory() -> URL {
