@@ -88,7 +88,7 @@ final class CredentialManager: ObservableObject {
       CredentialKind.allCases.filter { legacyStore?.containsCredential($0) == true })
     storedCredentialKinds = refreshedKinds
     legacyCredentialKinds = refreshedLegacyKinds
-    statuses = Dictionary(
+    let refreshedStatuses = Dictionary(
       uniqueKeysWithValues: CredentialKind.allCases.map { kind in
         let currentStatus = statuses[kind] ?? .missing
         switch currentStatus {
@@ -98,6 +98,9 @@ final class CredentialManager: ObservableObject {
           return (kind, refreshedKinds.contains(kind) ? .saved : .missing)
         }
       })
+    // This runs each time the app becomes active; every publish rebuilds the status menu and
+    // redraws Settings, so an unchanged result publishes nothing.
+    if refreshedStatuses != statuses { statuses = refreshedStatuses }
   }
 
   func hasCredential(_ kind: CredentialKind) -> Bool {
