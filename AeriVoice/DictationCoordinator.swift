@@ -6,6 +6,8 @@ final class DictationCoordinator: ObservableObject {
   private struct ActiveCleanupSettings {
     let instructions: CleanupInstructions
     let configuration: CleanupConfiguration
+    /// Read once, at the start, and used for the warm-up and the cleanup request.
+    var apiKey = ""
   }
 
   @Published private(set) var phase: DictationPhase = .idle {
@@ -358,10 +360,26 @@ final class DictationCoordinator: ObservableObject {
       return
     }
     let transcriptionProvider = transcriptionConfiguration.provider
+    guard let cleanupSettings = activeCleanupSettings else {
+      showReadinessError(
+        AppError.provider("Cleanup settings were unavailable."), category: .unknown)
+      return
+    }
+    let cleanupProvider = cleanupSettings.configuration.provider
     benchmark.mark(.credentialReadStarted)
+    // A Keychain read is a round trip to securityd that can stall for seconds. Off the main
+    // actor it never holds up the shortcut tap or the audio recorded since the press.
+    let credentials = self.credentials
+    let transcriptionKind = transcriptionProvider.credentialKind
+    let cleanupKind = skipsCleanup ? nil : cleanupProvider.credentialKind
+    let (storedTranscriptionKey, storedCleanupKey) = await Task.detached(priority: .userInitiated) {
+      (transcriptionKind.flatMap { credentials.value(for: $0) },
+       cleanupKind.flatMap { credentials.value(for: $0) })
+    }.value
+    guard lifecycleGeneration == generation, !Task.isCancelled else { return }
     let transcriptionKey: String
-    if let kind = transcriptionProvider.credentialKind {
-      guard let key = credentials.value(for: kind), !key.isEmpty else {
+    if transcriptionKind != nil {
+      guard let key = storedTranscriptionKey, !key.isEmpty else {
         showReadinessError(transcriptionProvider.missingCredentialError, category: .missingCredential)
         return
       }
@@ -373,17 +391,12 @@ final class DictationCoordinator: ObservableObject {
       }
       transcriptionKey = ""
     }
-    guard let cleanupSettings = activeCleanupSettings else {
-      showReadinessError(
-        AppError.provider("Cleanup settings were unavailable."), category: .unknown)
-      return
-    }
-    let cleanupProvider = cleanupSettings.configuration.provider
-    let cleanupKey = skipsCleanup ? "" : (credentials.value(for: cleanupProvider.credentialKind) ?? "")
+    let cleanupKey = storedCleanupKey ?? ""
     guard skipsCleanup || !cleanupKey.isEmpty else {
       showReadinessError(cleanupProvider.missingCredentialError, category: .missingCredential)
       return
     }
+    activeCleanupSettings?.apiKey = cleanupKey
     benchmark.mark(.credentialsReady)
     benchmark.mark(.readinessCheckStarted)
     let microphoneReady = await readiness.requestMicrophone()
@@ -571,11 +584,9 @@ final class DictationCoordinator: ObservableObject {
         guard let cleanupSettings = activeCleanupSettings else {
           throw AppError.provider("Cleanup settings were unavailable.")
         }
-        let cleanupProvider = cleanupSettings.configuration.provider
-        guard let cleanupKey = credentials.value(for: cleanupProvider.credentialKind),
-          !cleanupKey.isEmpty
-        else {
-          throw cleanupProvider.missingCredentialError
+        let cleanupKey = cleanupSettings.apiKey
+        guard !cleanupKey.isEmpty else {
+          throw cleanupSettings.configuration.provider.missingCredentialError
         }
         benchmark.recordCleanupMode(cleanupSettings.instructions.mode)
         benchmark.mark(.cleanupStarted)

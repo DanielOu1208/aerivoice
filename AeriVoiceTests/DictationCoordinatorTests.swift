@@ -222,6 +222,20 @@ final class DictationCoordinatorTests: XCTestCase {
     fixture.coordinator.cancel()
   }
 
+  func testEachKeyIsReadOnceOffTheMainThreadForADictation() async throws {
+    let fixture = makeFixture()
+    var mainThreadReads = 0
+    fixture.credentials.onRead = { _ in if Thread.isMainThread { mainThreadReads += 1 } }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+    // The cleanup key read at the start is the one cleanup uses.
+    XCTAssertEqual(fixture.credentials.readKinds, [.soniox, .openRouter])
+    XCTAssertEqual(fixture.cleaner.lastAPIKey, "openrouter-key")
+    XCTAssertEqual(mainThreadReads, 0)
+  }
+
   func testCancelDuringAudioStartupCannotReviveDictationOrMarkAnotherSession() async throws {
     let fixture = makeFixture(audioStartWaitsForResolution: true)
     fixture.coordinator.toggle()

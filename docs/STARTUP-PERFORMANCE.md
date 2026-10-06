@@ -5,7 +5,8 @@ complete and microphone permission has already been granted. Preparation creates
 an audio engine and calls `prepare()` without installing a capture tap or starting
 the engine. It also reads the selected providers' credentials in the background
 with the existing non-prompting Keychain policy. Those values are discarded;
-activation reads the current credentials again.
+activation reads the current credentials again, off the main thread, once per
+dictation: cleanup uses the key read at activation.
 
 The first activation can consume the prepared engine. The app checks the input
 device, sample rate, and channel count before reuse. Engine configuration changes,
