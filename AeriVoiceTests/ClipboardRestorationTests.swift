@@ -399,6 +399,30 @@ final class ClipboardRestorationTests: XCTestCase {
     }
   }
 
+  func testTargetCheckLeavesTheMainActorFreeAndANewCopyWins() async throws {
+    let fixture = Fixture()
+    defer { fixture.remove() }
+    let gate = TargetCheckGate()
+    var target = try await fixture.capture()
+    let source = try XCTUnwrap(target.verification)
+    target.verification = TextVerificationSource(
+      prepare: source.prepare, read: source.read, isCurrent: { await gate.check() })
+    _ = await fixture.service.insert(fixture.dictation, into: target)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while !(await gate.started), ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    let started = await gate.started
+    XCTAssertTrue(started)
+    // The check of the target is still running and the user copies something meanwhile.
+    fixture.board.clearContents()
+    fixture.board.setString("user copy", forType: .string)
+    await gate.release()
+    try await waitUntil { !fixture.outcomes.isEmpty }
+    XCTAssertNotEqual(fixture.outcomes, [.restored])
+    XCTAssertEqual(fixture.board.string(forType: .string), "user copy")
+  }
+
   func testFocusChangeOrMissingReadbackKeepsDictation() async throws {
     for loseFocus in [true, false] {
       let fixture = Fixture()
@@ -563,6 +587,16 @@ private actor RestorationReadGate {
     return await withCheckedContinuation { pending = $0 }
   }
   func release() { pending?.resume(returning: nil); pending = nil }
+}
+
+private actor TargetCheckGate {
+  private(set) var started = false
+  private var pending: CheckedContinuation<Bool, Never>?
+  func check() async -> Bool {
+    started = true
+    return await withCheckedContinuation { pending = $0 }
+  }
+  func release() { pending?.resume(returning: true); pending = nil }
 }
 
 @MainActor
