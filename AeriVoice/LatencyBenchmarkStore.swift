@@ -232,17 +232,23 @@ actor LatencyBenchmarkStore {
     var offset: UInt64 = 0
     var start: UInt64 = 0
     while let chunk = try handle.read(upToCount: 65_536), !chunk.isEmpty {
-      for byte in chunk {
-        offset += 1
-        if byte == 0x0A {
-          if try !visit(oversized ? nil : pending, start, offset - start) { return }
-          pending.removeAll(keepingCapacity: true)
-          oversized = false
-          start = offset
-        } else if !oversized {
-          if pending.count < 1_048_576 { pending.append(byte) }
+      // Whole runs between newlines are copied at once; the daily scan reads all history.
+      var index = chunk.startIndex
+      while index < chunk.endIndex {
+        let newline = chunk[index...].firstIndex(of: 0x0A)
+        let end = newline ?? chunk.endIndex
+        if !oversized {
+          if pending.count + (end - index) <= 1_048_576 { pending.append(chunk[index..<end]) }
           else { pending.removeAll(keepingCapacity: true); oversized = true }
         }
+        offset += UInt64(end - index)
+        guard let newline else { break }
+        offset += 1
+        if try !visit(oversized ? nil : pending, start, offset - start) { return }
+        pending.removeAll(keepingCapacity: true)
+        oversized = false
+        start = offset
+        index = newline + 1
       }
     }
     if offset > start { _ = try visit(oversized ? nil : pending, start, offset - start) }

@@ -198,6 +198,37 @@ final class DiagnosticsStoreTests: XCTestCase {
     XCTAssertEqual(Set(try archives(directory).map(\.lastPathComponent)), Set(newest))
   }
 
+  func testAgeScanKeepsLongAndOversizedLinesExactly() async throws {
+    // Lines cross the 64 KiB reads, and one is over the 1 MiB bound for decoding, so it is
+    // dated by its file.
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = LatencyBenchmarkStore(directoryURL: directory, retentionDays: 2)
+    try await store.recoverAndPrune(now: now.addingTimeInterval(-2 * 86_400))
+    let url = directory.appending(path: LatencyBenchmarkStore.runtimeFilename)
+    let stamp = ISO8601DateFormatter().string(from: now)
+    let long = Data(
+      "{\"schemaVersion\":1,\"timestamp\":\"\(stamp)\",\"pad\":\"\(String(repeating: "x", count: 70_000))\"}"
+        .utf8)
+    let exactlyAtBound = Data(repeating: 0x62, count: 1_048_576)
+    let oversized = Data(repeating: 0x61, count: 1_048_577)
+    let expired = runtime(now.addingTimeInterval(-3 * 86_400))
+    var contents = Data()
+    for line in [expired, long, exactlyAtBound, expired, oversized, Data(), runtime(now)] {
+      contents.append(line)
+      contents.append(0x0A)
+    }
+    try contents.write(to: url)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: url.path)
+    try await store.appendRuntime(runtime(now), now: now)
+    var expected = Data()
+    for line in [long, exactlyAtBound, oversized, Data(), runtime(now), runtime(now)] {
+      expected.append(line)
+      expected.append(0x0A)
+    }
+    XCTAssertEqual(try Data(contentsOf: url), expected)
+  }
+
   func testMalformedPartialTailIsSeparatedAndEventuallyExpires() async throws {
     let directory = temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
