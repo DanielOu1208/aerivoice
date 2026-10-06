@@ -127,11 +127,12 @@ final class AppPreferences: ObservableObject {
       defaults.set(catalogRequiresZeroDataRetention, forKey: Key.catalogRequiresZeroDataRetention)
     }
   }
-  var onVocabularyChange: (() -> Void)?
+  /// Given the list before the change.
+  var onVocabularyChange: ((String) -> Void)?
   @Published var vocabulary: String {
     didSet {
       defaults.set(vocabulary, forKey: Key.vocabulary)
-      if oldValue != vocabulary { onVocabularyChange?() }
+      if oldValue != vocabulary { onVocabularyChange?(oldValue) }
     }
   }
   @Published var muteOutput: Bool { didSet { defaults.set(muteOutput, forKey: Key.muteOutput) } }

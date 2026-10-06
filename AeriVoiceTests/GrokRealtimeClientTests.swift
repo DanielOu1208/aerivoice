@@ -423,6 +423,21 @@ final class GrokRealtimeClientTests: XCTestCase {
     XCTAssertTrue(GrokVocabulary([String(repeating: "e\u{301}", count: 26)]).terms.isEmpty)
   }
 
+  func testOnlyDictionaryEditsGrokIsGivenReplaceItsPreparedConnection() {
+    let terms = (0..<120).map { "term\($0)" }
+    let raw = terms.joined(separator: "\n")
+    // Grok is given the first 100 terms; a term added or edited after them changes nothing.
+    XCTAssertFalse(GrokVocabulary.termsDiffer(raw, raw + "\nLater"))
+    XCTAssertFalse(GrokVocabulary.termsDiffer(raw, raw.replacingOccurrences(of: "term110", with: "Other")))
+    XCTAssertTrue(GrokVocabulary.termsDiffer(raw, "Added\n" + raw))
+    XCTAssertTrue(GrokVocabulary.termsDiffer(raw, terms.dropFirst().joined(separator: "\n")))
+    XCTAssertTrue(GrokVocabulary.termsDiffer(
+      raw, ([terms[1], terms[0]] + terms.dropFirst(2)).joined(separator: "\n")))
+    // Nor is a term over 50 characters.
+    XCTAssertFalse(GrokVocabulary.termsDiffer("AeriVoice", "AeriVoice\n" + String(repeating: "x", count: 51)))
+    XCTAssertTrue(GrokVocabulary.termsDiffer("AeriVoice", "AeriVoice\nNemotron"))
+  }
+
   func testAssemblerRevisesChunksAndReplacesStitchedUtteranceWithoutDuplication() throws {
     var assembler = GrokTranscriptAssembler()
     func event(_ text: String, _ start: Double, _ duration: Double, _ final: Bool, _ speech: Bool = false) -> GrokRealtimeResponse {

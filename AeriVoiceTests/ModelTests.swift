@@ -27,6 +27,20 @@ final class ModelTests: XCTestCase {
     XCTAssertFalse(AppPreferences(defaults: defaults).restoreClipboard)
   }
 
+  @MainActor
+  func testVocabularyChangeReportsTheEarlierList() {
+    let suite = "AeriVoiceTests.Vocabulary.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let preferences = AppPreferences(defaults: defaults)
+    preferences.vocabulary = "AeriVoice"
+    var earlier: [String] = []
+    preferences.onVocabularyChange = { earlier.append($0) }
+    preferences.vocabulary = "AeriVoice\nSoniox"
+    preferences.vocabulary = "AeriVoice\nSoniox"
+    XCTAssertEqual(earlier, ["AeriVoice"])
+  }
+
   func testTranscriptionProviderCatalogAndCapabilities() {
     XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta, .grok, .cartesia, .local])
     XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v5")

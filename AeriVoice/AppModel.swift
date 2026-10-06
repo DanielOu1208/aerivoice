@@ -125,7 +125,12 @@ final class AppModel: ObservableObject {
       self?.grokPreparation.invalidate()
       self?.prewarmTranscription()
     }
-    preferences.onVocabularyChange = { [weak self] in self?.grokConfigurationChanged() }
+    preferences.onVocabularyChange = { [weak self, weak preferences] earlier in
+      // An edit past the terms Grok is given keeps the prepared connection.
+      guard let preferences, GrokVocabulary.termsDiffer(earlier, preferences.vocabulary)
+      else { return }
+      self?.grokConfigurationChanged()
+    }
     credentialManager.onCredentialChange = { [weak self] kind in
       if kind == .xai { self?.grokConfigurationChanged() }
     }
