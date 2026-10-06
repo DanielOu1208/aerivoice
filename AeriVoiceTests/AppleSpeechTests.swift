@@ -165,6 +165,74 @@ final class AppleSpeechTests: XCTestCase {
     XCTAssertEqual(assets.downloadCount, 0)
   }
 
+  func testSelectingTheSameReadyLanguageAgainStaysReadyWhileItIsChecked() async {
+    // Launch, wake, settings changes and each dictation select it again; a shortcut press
+    // during the check must not be refused.
+    let assets = FakeAppleSpeechAssets()
+    assets.hasAssets = true
+    let controller = AppleSpeechController(assets: assets, preferredLanguages: ["en-US"])
+    controller.select(true, localeIdentifier: "")
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+    var published = 0
+    let observation = controller.objectWillChange.sink { published += 1 }
+    assets.suspendInstallation = true
+    controller.select(true, localeIdentifier: "")
+    while assets.installationCount < 2 { await Task.yield() }
+    XCTAssertTrue(controller.isReady)
+    XCTAssertEqual(controller.localeIdentifier, "en-US")
+    assets.resumeInstallation(returning: true)
+    await controller.waitForPreparation()
+    observation.cancel()
+    XCTAssertTrue(controller.isReady)
+    XCTAssertEqual(published, 0)
+
+    // A check that finds the language unusable still ends ready.
+    assets.installationError = NSError(domain: "test", code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "Reservation unavailable"])
+    controller.select(true, localeIdentifier: "")
+    await controller.waitForPreparation()
+    XCTAssertEqual(controller.state, .failed("Reservation unavailable"))
+    XCTAssertFalse(controller.assetsInstalled)
+    XCTAssertFalse(controller.isReady)
+    assets.installationError = nil
+    controller.select(true, localeIdentifier: "")
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+    assets.hasAssets = false
+    controller.select(true, localeIdentifier: "")
+    await controller.waitForPreparation()
+    XCTAssertEqual(controller.state, .missing)
+    XCTAssertFalse(controller.assetsInstalled)
+  }
+
+  func testAnotherLanguageIsPreparedBeforeItIsReady() async {
+    let assets = FakeAppleSpeechAssets()
+    assets.hasAssets = true
+    let controller = AppleSpeechController(assets: assets, preferredLanguages: ["en-US"])
+    controller.select(true, localeIdentifier: "")
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+    assets.suspendInstallation = true
+    controller.select(true, localeIdentifier: "en-US")
+    while assets.installationCount < 2 { await Task.yield() }
+    XCTAssertFalse(controller.isReady)
+    XCTAssertEqual(controller.state, .preparing)
+    assets.resumeInstallation(returning: true)
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+    // Turned off and on again, it is prepared again too.
+    controller.select(false, localeIdentifier: "en-US")
+    await controller.waitForPreparation()
+    assets.suspendInstallation = true
+    controller.select(true, localeIdentifier: "en-US")
+    while assets.installationCount < 4 { await Task.yield() }
+    XCTAssertFalse(controller.isReady)
+    assets.resumeInstallation(returning: true)
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+  }
+
   func testRevisionsReplaceAudioRangesAndRetainEarlierFinalText() {
     var text = AppleTranscriptAccumulator()
     text.update(start: 0, end: 1, text: "Hello ", isFinal: true)
