@@ -74,6 +74,9 @@ final class LocalModelController: ObservableObject {
         return
       }
       guard self.downloadTask == nil else { return }
+      // Launch, wake and settings changes select the model again. One already loaded stays
+      // ready instead of having every file hashed again, during which dictation is refused.
+      if self.state == .ready, self.runtime.isReady { return }
       let state = await self.downloadedState()
       guard !Task.isCancelled else { return }
       guard self.downloadTask == nil else { return }
