@@ -30,6 +30,20 @@ final class TranscriptionLanguageTests: XCTestCase {
     }
   }
 
+  func testEquivalentCodesCarryALanguageAcrossProviders() {
+    XCTAssertEqual(TranscriptionLanguage.resolve("no", for: .grok), "nb")
+    XCTAssertEqual(TranscriptionLanguage.resolve("nb", for: .soniox), "no")
+    XCTAssertNil(TranscriptionLanguage.resolve("nb", for: .meta))
+    XCTAssertEqual(TranscriptionLanguage.resolve("tl", for: .grok), "fil")
+    XCTAssertEqual(TranscriptionLanguage.resolve("fil", for: .soniox), "tl")
+    XCTAssertEqual(TranscriptionLanguage.resolve("fil", for: .meta), "tl")
+    XCTAssertEqual(TranscriptionLanguage.resolve("en", for: .grok), "en")
+    XCTAssertNil(TranscriptionLanguage.resolve("cy", for: .grok))
+    for (code, equivalent) in TranscriptionLanguage.equivalents {
+      XCTAssertEqual(TranscriptionLanguage.equivalents[equivalent], code)
+    }
+  }
+
   func testChoicesAreSortedByLanguageName() {
     let english = Locale(identifier: "en_US")
     let names = TranscriptionLanguage.choices(for: .grok, locale: english).map {

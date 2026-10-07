@@ -42,9 +42,16 @@ enum TranscriptionLanguage {
     }
   }
 
-  /// The saved code if the provider accepts it; nil lets the provider detect the language.
+  /// Providers name a few languages with different codes: Soniox and Meta use `no` and `tl`
+  /// where Grok uses `nb` (Bokmål, the written Norwegian) and `fil` (Filipino, based on Tagalog).
+  static let equivalents: [String: String] = ["no": "nb", "nb": "no", "tl": "fil", "fil": "tl"]
+
+  /// The saved code, or its equivalent, if the provider accepts it; nil lets the provider
+  /// detect the language.
   static func resolve(_ code: String, for provider: TranscriptionProvider) -> String? {
-    codes(for: provider).contains(code) ? code : nil
+    let accepted = codes(for: provider)
+    if accepted.contains(code) { return code }
+    return equivalents[code].flatMap { accepted.contains($0) ? $0 : nil }
   }
 
   static func displayName(for code: String, locale: Locale = .current) -> String {
@@ -52,11 +59,11 @@ enum TranscriptionLanguage {
   }
 
   /// A provider's languages, sorted by name.
+  /// Settings asks on every redraw, so each name is looked up once rather than per comparison.
   static func choices(for provider: TranscriptionProvider, locale: Locale = .current) -> [String] {
-    codes(for: provider).sorted {
-      displayName(for: $0, locale: locale)
-        .localizedStandardCompare(displayName(for: $1, locale: locale)) == .orderedAscending
-    }
+    codes(for: provider).map { (code: $0, name: displayName(for: $0, locale: locale)) }
+      .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+      .map(\.code)
   }
 
   /// One line for Settings: why no language can be chosen, or why the saved one isn't used.
