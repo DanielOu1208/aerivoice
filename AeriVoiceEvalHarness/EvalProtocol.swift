@@ -16,6 +16,7 @@ struct EvalScenario: Decodable {
   let grokConnectionMode: String?
   let grokReadyAgeMs: Double?
   let cartesiaModel: String?
+  let transcriptionLanguage: String?
   let offlineMode: Bool?
   let localModel: String?
   let appleLocale: String?
@@ -95,6 +96,12 @@ struct EvalScenario: Decodable {
     if let cartesiaModel {
       guard provider == .cartesia, offlineMode != true,
         CartesiaTranscriptionModel(rawValue: cartesiaModel) != nil
+      else { throw EvalError.invalidScenario }
+    }
+    if let transcriptionLanguage {
+      // A code the provider doesn't take would silently fall back to detection.
+      guard offlineMode != true,
+        TranscriptionLanguage.resolve(transcriptionLanguage, for: provider) != nil
       else { throw EvalError.invalidScenario }
     }
     guard LocalTranscriptionModel(rawValue: localModel ?? "nemotron") != nil else { throw EvalError.invalidScenario }

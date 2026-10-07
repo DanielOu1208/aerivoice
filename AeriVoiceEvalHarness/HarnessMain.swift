@@ -45,6 +45,10 @@ struct HarnessMain {
             "grok_ready_age_ms": ["type": "number", "min": 0, "max": 60_000, "requires": "ready", "test_only": true],
             "cartesia_model": ["type": "string",
               "values": CartesiaTranscriptionModel.allCases.map(\.rawValue), "requires": "cartesia"],
+            "transcription_language": ["type": "string",
+              "values_by_provider": Dictionary(uniqueKeysWithValues: TranscriptionProvider.allCases.map {
+                ($0.rawValue, TranscriptionLanguage.codes(for: $0).sorted())
+              })],
             "cleanup_custom_instructions": ["type": "string",
               "max_characters": CleanupInstructions.maxCustomInstructionCharacters],
             "cleanup_prompt_override": ["type": "string", "kinds": ["cleanup"],

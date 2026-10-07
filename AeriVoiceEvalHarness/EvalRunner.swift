@@ -44,6 +44,7 @@ final class EvalRunner {
       "grok_packet_mode": scenario.grokPacketMode ?? "captureFrames",
       "grok_connection_mode": scenario.grokConnectionMode ?? "cold",
       "grok_ready_age_ms": scenario.grokReadyAgeMs ?? 0,
+      "transcription_language": scenario.transcriptionLanguage ?? NSNull(),
     ]
     if ["cleanup", "pipeline", "stability"].contains(scenario.kind), scenario.offlineMode != true {
       let plainText = scenario.model.provider == .openRouter && scenario.model.isOpenRouterCatalogModel
@@ -178,6 +179,7 @@ final class EvalRunner {
     preferences.transcriptionProvider = scenario.provider
     preferences.localTranscriptionModel = scenario.localEngine
     preferences.cartesiaTranscriptionModel = scenario.cartesiaEngine
+    preferences.transcriptionLanguage = scenario.transcriptionLanguage ?? ""
     preferences.appleSpeechLocale = scenario.appleLocale ?? ""
     preferences.setOfflineMode(scenario.offlineMode == true)
     preferences.cleanupProvider = scenario.model.provider
@@ -202,7 +204,10 @@ final class EvalRunner {
       },
       notifications: EvalNotifications(events: events))
     let observation = coordinator.$phase.removeDuplicates().sink { [events] phase in
-      events.emit("phase", ["phase": evalPhase(phase)])
+      var data: [String: Any] = ["phase": evalPhase(phase)]
+      // The message the app would show, so a provider rejection can be read from the run.
+      if case .error(let message) = phase { data["message"] = message }
+      events.emit("phase", data)
     }
     defer { observation.cancel(); audio.stop() }
     if scenario.prepared == true {
