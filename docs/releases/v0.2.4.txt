@@ -1,0 +1,19 @@
+AeriVoice 0.2.4
+
+Spoken language
+Choose the language you speak in Settings > Dictation, or keep Auto-detect, the default. Soniox restricts recognition to the chosen language; Grok and Meta use it as a hint.
+
+A slow Keychain no longer loses the dictation
+If macOS takes several seconds to return your API keys, the audio recorded meanwhile is kept instead of failing the dictation.
+
+No keyboard freeze while keys load
+API keys are read off the main thread, once per dictation.
+
+Local models ready after wake
+Nemotron and Apple Speech stay ready when you wake the Mac or change settings, instead of refusing to dictate while they re-check.
+
+Grok keeps its prepared connection
+A Dictionary edit that doesn't change Grok's terms no longer reconnects.
+
+Smaller improvements
+The clipboard check after a paste runs off the main thread, the last audio after release is sent in one piece, and background housekeeping does less.
