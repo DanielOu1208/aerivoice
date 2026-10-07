@@ -98,6 +98,7 @@ struct DictationSettingsPage: View {
         }
         .id(preferences.effectiveTranscriptionProvider)
         .disabled(model.coordinator.canCancel || model.changingOfflineMode)
+        SpokenLanguagePicker(model: model)
         if preferences.effectiveTranscriptionProvider != .local {
           LabeledContent {
             Text(preferences.transcriptionConfiguration.modelDisplayName)
@@ -121,7 +122,6 @@ struct DictationSettingsPage: View {
             }
           }
         }
-        SpokenLanguagePicker(model: model)
       }
       if preferences.offlineMode {
         Text("Offline mode uses local transcription. AI cleanup is off.")
