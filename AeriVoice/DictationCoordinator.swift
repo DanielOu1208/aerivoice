@@ -372,10 +372,14 @@ final class DictationCoordinator: ObservableObject {
     let credentials = self.credentials
     let transcriptionKind = transcriptionProvider.credentialKind
     let cleanupKind = skipsCleanup ? nil : cleanupProvider.credentialKind
-    let (storedTranscriptionKey, storedCleanupKey) = await Task.detached(priority: .userInitiated) {
-      (transcriptionKind.flatMap { credentials.value(for: $0) },
-       cleanupKind.flatMap { credentials.value(for: $0) })
-    }.value
+    var (storedTranscriptionKey, storedCleanupKey): (String?, String?) = (nil, nil)
+    // Local transcription without cleanup has no key to read, so it doesn't leave the actor.
+    if transcriptionKind != nil || cleanupKind != nil {
+      (storedTranscriptionKey, storedCleanupKey) = await Task.detached(priority: .userInitiated) {
+        (transcriptionKind.flatMap { credentials.value(for: $0) },
+         cleanupKind.flatMap { credentials.value(for: $0) })
+      }.value
+    }
     guard lifecycleGeneration == generation, !Task.isCancelled else { return }
     let transcriptionKey: String
     if transcriptionKind != nil {
