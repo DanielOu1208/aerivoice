@@ -44,6 +44,7 @@ final class AppPreferences: ObservableObject {
     static let appleSpeechLocale = "appleSpeechLocale"
     static let transcriptionProvider = "transcriptionProvider"
     static let cartesiaTranscriptionModel = "cartesiaTranscriptionModel"
+    static let transcriptionLanguage = "transcriptionLanguage"
     static let cleanupMode = "cleanupMode"
     static let cleanupCustomInstructions = "cleanupCustomInstructions"
     static let cleanupProvider = "cleanupProvider"
@@ -86,12 +87,22 @@ final class AppPreferences: ObservableObject {
       onTranscriptionProviderChange?()
     }
   }
+  /// One language code for every cloud provider; empty lets each detect the language.
+  @Published var transcriptionLanguage: String {
+    didSet {
+      defaults.set(transcriptionLanguage, forKey: Key.transcriptionLanguage)
+      // A change the selected provider isn't given keeps its prepared connection.
+      if TranscriptionLanguage.resolve(oldValue, for: effectiveTranscriptionProvider)
+        != transcriptionConfiguration.language { onTranscriptionProviderChange?() }
+    }
+  }
 
   var effectiveTranscriptionProvider: TranscriptionProvider { offlineMode ? .local : transcriptionProvider }
   var transcriptionConfiguration: TranscriptionConfiguration {
     TranscriptionConfiguration(provider: effectiveTranscriptionProvider,
       localModel: localTranscriptionModel, appleLocaleIdentifier: appleSpeechLocale,
-      cartesiaModel: cartesiaTranscriptionModel)
+      cartesiaModel: cartesiaTranscriptionModel,
+      language: TranscriptionLanguage.resolve(transcriptionLanguage, for: effectiveTranscriptionProvider))
   }
 
   func setOfflineMode(_ enabled: Bool) {
@@ -294,6 +305,7 @@ final class AppPreferences: ObservableObject {
     appleSpeechLocale = defaults.string(forKey: Key.appleSpeechLocale) ?? ""
     cartesiaTranscriptionModel = CartesiaTranscriptionModel(
       rawValue: defaults.string(forKey: Key.cartesiaTranscriptionModel) ?? "") ?? .ink2
+    transcriptionLanguage = defaults.string(forKey: Key.transcriptionLanguage) ?? ""
     transcriptionProvider =
       TranscriptionProvider(
         rawValue: defaults.string(forKey: Key.transcriptionProvider) ?? "") ?? .soniox

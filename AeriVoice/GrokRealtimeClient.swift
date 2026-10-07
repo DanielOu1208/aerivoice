@@ -23,12 +23,20 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     let key: String
     let model: String
     let vocabulary: [String]
+    let language: String?
     var readyAt: ContinuousClock.Instant?
-    init(session: GrokRealtimeSession, key: String, model: String, vocabulary: [String]) {
+    init(session: GrokRealtimeSession, key: String, model: String, vocabulary: [String],
+         language: String?) {
       self.session = session
       self.key = key
       self.model = model
       self.vocabulary = vocabulary
+      self.language = language
+    }
+    /// Everything the socket was opened with: a dictation adopts it only if all of it matches.
+    func matches(key: String, configuration: TranscriptionConfiguration, terms: [String]) -> Bool {
+      self.key == key && model == configuration.modelID && vocabulary == terms
+        && language == configuration.language
     }
   }
 
@@ -77,8 +85,8 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     }
     if let slot = prepared, let readyAt = slot.readyAt,
        clock.now() < readyAt.advanced(by: preparedLifetime),
-       slot.key == apiKey, slot.model == configuration.modelID,
-       slot.vocabulary == GrokVocabulary(vocabulary).terms,
+       slot.matches(key: apiKey, configuration: configuration,
+                    terms: GrokVocabulary(vocabulary).terms),
        await isAlive(slot, readyAt: readyAt) {
       try Task.checkCancellation()
       prepared = nil
@@ -95,7 +103,8 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     active = session
     installCallbacks(on: session)
     do {
-      try await session.connect(apiKey: apiKey, vocabulary: vocabulary)
+      try await session.connect(apiKey: apiKey, vocabulary: vocabulary,
+        language: configuration.language)
     } catch {
       if active === session { active = nil }
       throw error
@@ -146,15 +155,14 @@ final class GrokRealtimeClient: RealtimeTranscribing {
                          vocabulary: [String]) async -> Bool {
     guard active == nil, configuration.provider == .grok else { return false }
     let terms = GrokVocabulary(vocabulary).terms
-    if let slot = prepared, slot.key == apiKey, slot.model == configuration.modelID,
-       slot.vocabulary == terms {
+    if let slot = prepared, slot.matches(key: apiKey, configuration: configuration, terms: terms) {
       guard let readyAt = slot.readyAt else { return false }
       if clock.now() < readyAt.advanced(by: preparedLifetime * 0.7) { return true }
     }
     invalidatePreparedConnection()
     let session = makeSession()
     let slot = Prepared(session: session, key: apiKey, model: configuration.modelID,
-      vocabulary: terms)
+      vocabulary: terms, language: configuration.language)
     prepared = slot
     session.onError = { [weak self, weak slot] _ in
       guard let self, let slot, self.prepared === slot else { return }
@@ -166,7 +174,7 @@ final class GrokRealtimeClient: RealtimeTranscribing {
     }
     onConnectionEvent?("preparationStarted")
     do {
-      try await session.connect(apiKey: apiKey, vocabulary: terms)
+      try await session.connect(apiKey: apiKey, vocabulary: terms, language: configuration.language)
       guard prepared === slot else { return false }
       let readyAt = clock.now()
       slot.readyAt = readyAt

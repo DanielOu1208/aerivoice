@@ -395,7 +395,8 @@ final class GrokRealtimeClientTests: XCTestCase {
   }
 
   func testRequestPinsModelAndEncodesDictionaryWithoutKeyInURL() throws {
-    let request = GrokRealtimeRequest.make(apiKey: "secret-test", vocabulary: ["A&B + C", "你好", "A&B + C"])
+    let request = GrokRealtimeRequest.make(
+      apiKey: "secret-test", vocabulary: ["A&B + C", "你好", "A&B + C"], language: nil)
     let url = try XCTUnwrap(request.url)
     let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
     XCTAssertEqual(url.host, "api.x.ai")
@@ -408,6 +409,66 @@ final class GrokRealtimeClientTests: XCTestCase {
     XCTAssertEqual(items.first { $0.name == "model" }?.value, "grok-voice-transcribe-2.0")
     XCTAssertEqual(items.first { $0.name == "filler_words" }?.value, "true")
     XCTAssertNil(items.first { $0.name == "language" })
+  }
+
+  func testRequestBiasesTowardAChosenLanguage() throws {
+    let request = GrokRealtimeRequest.make(apiKey: "secret-test", vocabulary: ["AeriVoice"], language: "en")
+    let url = try XCTUnwrap(request.url)
+    let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+    XCTAssertEqual(items.filter { $0.name == "language" }.compactMap(\.value), ["en"])
+    XCTAssertEqual(items.filter { $0.name == "keyterm" }.compactMap(\.value), ["AeriVoice"])
+    XCTAssertNil(items.first { $0.name == "format" })
+  }
+
+  func testPreparedConnectionInAnotherLanguageIsNotAdopted() async throws {
+    let old = GrokTestSocket()
+    let next = GrokTestSocket()
+    var sockets = [old, next]
+    var languages: [String?] = []
+    let client = GrokRealtimeClient(makeTransport: { request in
+      languages.append(grokLanguage(request))
+      return sockets.removeFirst()
+    })
+    var events: [String] = []
+    client.onConnectionEvent = { events.append($0) }
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key",
+      vocabulary: ["AeriVoice"])
+    try await client.connect(configuration: .init(provider: .grok, language: "en"),
+      apiKey: "test-key", vocabulary: ["AeriVoice"], sessionID: DictationSessionID())
+    XCTAssertTrue(old.cancelled)
+    XCTAssertEqual(sockets.count, 0)
+    XCTAssertEqual(languages, [nil, "en"])
+    XCTAssertFalse(events.contains("preparationHit"))
+    XCTAssertEqual(Array(events.suffix(2)), ["preparationInvalidated", "preparationMiss"])
+    _ = try await client.finish()
+  }
+
+  func testChangingTheLanguageReplacesThePreparedConnection() async throws {
+    let first = GrokTestSocket()
+    let second = GrokTestSocket()
+    var sockets = [first, second]
+    var languages: [String?] = []
+    let client = GrokRealtimeClient(makeTransport: { request in
+      languages.append(grokLanguage(request))
+      return sockets.removeFirst()
+    })
+    var events: [String] = []
+    client.onConnectionEvent = { events.append($0) }
+    _ = await client.prepareConnection(configuration: .init(provider: .grok), apiKey: "test-key",
+      vocabulary: ["AeriVoice"])
+    let replaced = await client.prepareConnection(configuration: .init(provider: .grok, language: "fr"),
+      apiKey: "test-key", vocabulary: ["AeriVoice"])
+    XCTAssertTrue(replaced)
+    XCTAssertTrue(first.cancelled)
+    XCTAssertFalse(second.cancelled)
+    XCTAssertTrue(client.hasPreparedConnection)
+    XCTAssertEqual(languages, [nil, "fr"])
+    // A dictation in the new language adopts the replacement.
+    try await client.connect(configuration: .init(provider: .grok, language: "fr"),
+      apiKey: "test-key", vocabulary: ["AeriVoice"], sessionID: DictationSessionID())
+    XCTAssertEqual(events.last, "preparationHit")
+    XCTAssertEqual(languages.count, 2)
+    _ = try await client.finish()
   }
 
   func testDictionaryLimitsPreserveWholeTermsAndSavedInput() {
@@ -787,6 +848,11 @@ private final class GrokTestClock {
       waiter.1.resume()
     }
   }
+}
+
+private func grokLanguage(_ request: URLRequest) -> String? {
+  request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?
+    .queryItems?.first { $0.name == "language" }?.value
 }
 
 @MainActor

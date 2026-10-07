@@ -4,6 +4,8 @@ struct DiagnosticSettings: Codable, Equatable, Sendable {
   let transcriptionProvider: String
   let localModel: String?
   let appleLanguage: String?
+  /// The language code a cloud provider is given; nil when it detects the language.
+  let transcriptionLanguage: String?
   let offlineMode: Bool?
   let cleanupProvider: String
   let cleanupModel: String
@@ -19,6 +21,7 @@ struct DiagnosticSettings: Codable, Equatable, Sendable {
     offlineMode = preferences.offlineMode
     localModel = preferences.effectiveTranscriptionProvider == .local ? preferences.localTranscriptionModel.rawValue : nil
     appleLanguage = preferences.effectiveTranscriptionProvider == .local && preferences.localTranscriptionModel == .apple ? preferences.appleSpeechLocale : nil
+    transcriptionLanguage = preferences.transcriptionConfiguration.language
     cleanupProvider = preferences.cleanupProvider.rawValue
     cleanupModel = preferences.cleanupModel.rawValue
     cleanupMode = preferences.cleanupMode.rawValue

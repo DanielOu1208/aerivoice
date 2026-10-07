@@ -121,6 +121,7 @@ struct DictationSettingsPage: View {
             }
           }
         }
+        SpokenLanguagePicker(model: model)
       }
       if preferences.offlineMode {
         Text("Offline mode uses local transcription. AI cleanup is off.")

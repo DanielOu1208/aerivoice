@@ -1,15 +1,19 @@
 import Foundation
 
 struct GrokRealtimeRequest {
-  static func make(apiKey: String, vocabulary: [String]) -> URLRequest {
+  static func make(apiKey: String, vocabulary: [String], language: String?) -> URLRequest {
     var components = URLComponents(string: "wss://api.x.ai/v1/stt")!
-    components.queryItems = [
+    var items = [
       URLQueryItem(name: "model", value: "grok-voice-transcribe-2.0"),
       URLQueryItem(name: "sample_rate", value: "16000"),
       URLQueryItem(name: "encoding", value: "pcm"),
       URLQueryItem(name: "interim_results", value: "true"),
       URLQueryItem(name: "filler_words", value: "true"),
-    ] + GrokVocabulary(vocabulary).terms.map { URLQueryItem(name: "keyterm", value: $0) }
+    ]
+    // Biases recognition toward the chosen language.
+    if let language { items.append(URLQueryItem(name: "language", value: language)) }
+    components.queryItems =
+      items + GrokVocabulary(vocabulary).terms.map { URLQueryItem(name: "keyterm", value: $0) }
     // The endpoint uses form-style query decoding, where a literal + means a space.
     components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
     var request = URLRequest(url: components.url!)

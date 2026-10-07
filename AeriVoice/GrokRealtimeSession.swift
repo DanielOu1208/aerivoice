@@ -39,11 +39,12 @@ final class GrokRealtimeSession {
     self.makeTransport = makeTransport
   }
 
-  func connect(apiKey: String, vocabulary: [String]) async throws {
+  func connect(apiKey: String, vocabulary: [String], language: String?) async throws {
     try Task.checkCancellation()
     try AppNetworkPolicy.shared.checkAllowed()
     let id = generation
-    let socket = makeTransport(GrokRealtimeRequest.make(apiKey: apiKey, vocabulary: vocabulary))
+    let socket = makeTransport(
+      GrokRealtimeRequest.make(apiKey: apiKey, vocabulary: vocabulary, language: language))
     transport = socket
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in

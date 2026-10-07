@@ -26,6 +26,19 @@ final class MetaRealtimeClientTests: XCTestCase {
     XCTAssertNil(object["languageBias"])
   }
 
+  func testHandshakeBiasesTowardTheChosenLanguageByName() throws {
+    for (code, name) in [("en", "English"), ("zh", "Mandarin Chinese"), ("tl", "Tagalog")] {
+      let handshake = MetaRealtimeHandshake(
+        apiKey: "test-key",
+        configuration: TranscriptionConfiguration(provider: .meta, language: code), vocabulary: [])
+
+      let object = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: JSONEncoder().encode(handshake)) as? [String: Any])
+
+      XCTAssertEqual(object["languageBias"] as? [String], [name])
+    }
+  }
+
   func testHandshakeOmitsEmptyKeywords() throws {
     let handshake = MetaRealtimeHandshake(
       apiKey: "test-key",

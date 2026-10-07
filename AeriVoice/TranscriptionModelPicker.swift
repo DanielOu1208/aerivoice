@@ -99,3 +99,35 @@ struct TranscriptionModelPicker: View {
   }
 
 }
+
+/// One language for every cloud provider; the menu lists what the selected one accepts.
+struct SpokenLanguagePicker: View {
+  @ObservedObject var model: AppModel
+  @ObservedObject private var preferences: AppPreferences
+
+  init(model: AppModel) {
+    self.model = model
+    preferences = model.preferences
+  }
+
+  var body: some View {
+    let configuration = preferences.transcriptionConfiguration
+    let choices = TranscriptionLanguage.choices(for: configuration.provider)
+    Picker("Spoken language", selection: Binding(
+      get: { configuration.language ?? "" },
+      set: { preferences.transcriptionLanguage = $0 }
+    )) {
+      Text("Auto-detect").tag("")
+      ForEach(choices, id: \.self) { code in
+        Text(TranscriptionLanguage.displayName(for: code)).tag(code)
+      }
+    }
+    .id(configuration.provider)
+    .disabled(choices.isEmpty || model.coordinator.canCancel || model.changingOfflineMode)
+    if let note = TranscriptionLanguage.note(
+      for: configuration, saved: preferences.transcriptionLanguage)
+    {
+      Text(note).font(.caption).foregroundStyle(.secondary)
+    }
+  }
+}
