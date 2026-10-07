@@ -122,7 +122,6 @@ struct SpokenLanguagePicker: View {
         Text(TranscriptionLanguage.displayName(for: code)).tag(code)
       }
     }
-    .id(configuration.provider)
     .disabled(choices.isEmpty || model.coordinator.canCancel || model.changingOfflineMode)
     if let note = TranscriptionLanguage.note(
       for: configuration, saved: preferences.transcriptionLanguage)
