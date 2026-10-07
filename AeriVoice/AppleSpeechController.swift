@@ -119,6 +119,8 @@ final class AppleSpeechController: ObservableObject {
   private let assets: any AppleSpeechAssetManaging
   private let preferredLanguages: [String]
   private var selected = false
+  /// The language last asked for, before it was matched to a supported one.
+  private var requestedLocaleIdentifier: String?
   private var generation = UUID()
   private var preparation: Task<Void, Never>?
   private var downloadTask: Task<Void, Never>?
@@ -130,9 +132,14 @@ final class AppleSpeechController: ObservableObject {
   }
 
   func select(_ selected: Bool, localeIdentifier: String) {
+    // Launch, wake, settings changes and each dictation select it again. Ready for the same
+    // language, it is checked again without leaving ready, so a dictation started meanwhile
+    // isn't refused; only a check that finds it unusable changes its state.
+    let keepsReady = selected && isReady && localeIdentifier == requestedLocaleIdentifier
     self.selected = selected
-    self.localeIdentifier = localeIdentifier
-    refresh()
+    requestedLocaleIdentifier = localeIdentifier
+    if !keepsReady { self.localeIdentifier = localeIdentifier }
+    refresh(keepingReady: keepsReady)
   }
 
   func prepareIfNeeded() {
@@ -144,57 +151,66 @@ final class AppleSpeechController: ObservableObject {
     while let task = preparation { await task.value }
   }
 
-  private func refresh(afterDownloading downloadedLocale: Locale? = nil) {
+  private func refresh(afterDownloading downloadedLocale: Locale? = nil, keepingReady: Bool = false) {
     generation = UUID()
     let id = generation
     let previous = preparation
     previous?.cancel()
-    assetsInstalled = false
-    if !isDownloading { state = .preparing }
+    if !keepingReady {
+      assetsInstalled = false
+      if !isDownloading { state = .preparing }
+    }
     preparation = Task { @MainActor [self] in
       defer { if generation == id { preparation = nil } }
       await previous?.value
       guard generation == id, !Task.isCancelled else { return }
       guard assets.isAvailable else {
-        if !isDownloading { state = .unavailable("Apple Speech is unavailable on this Mac.") }
+        settle(installed: false, .unavailable("Apple Speech is unavailable on this Mac."))
         return
       }
       let locales = await assets.supportedLocales()
       guard generation == id else { return }
-      supportedLocales = locales.sorted { $0.identifier < $1.identifier }
+      let sorted = locales.sorted { $0.identifier < $1.identifier }
+      if supportedLocales != sorted { supportedLocales = sorted }
       // Only the user's primary Mac language determines the suggestion.
       let suggestion: Locale?
       if let first = preferredLanguages.first {
         suggestion = await assets.equivalentLocale(Locale(identifier: first))
       } else { suggestion = nil }
       guard generation == id else { return }
-      suggestedLocaleIdentifier = suggestion?.identifier
+      if suggestedLocaleIdentifier != suggestion?.identifier {
+        suggestedLocaleIdentifier = suggestion?.identifier
+      }
       let requested = localeIdentifier.isEmpty ? suggestion : Locale(identifier: localeIdentifier)
       guard let requested, let locale = await assets.equivalentLocale(requested) else {
         guard generation == id else { return }
-        if !isDownloading { state = .unavailable("Choose a supported Apple Speech language.") }
+        settle(installed: false, .unavailable("Choose a supported Apple Speech language."))
         return
       }
       guard generation == id else { return }
-      localeIdentifier = locale.identifier
+      if localeIdentifier != locale.identifier { localeIdentifier = locale.identifier }
       do {
         let installed = try await assets.installed(locale)
         guard generation == id else { return }
-        assetsInstalled = installed
-        if !isDownloading {
-          if installed {
-            state = .ready
-          } else if downloadedLocale?.identifier(.bcp47) == locale.identifier(.bcp47) {
-            state = .failed("Apple finished the download attempt, but this language is not ready yet. Check installed language support or retry the download.")
-          } else {
-            state = .missing
-          }
+        if installed {
+          settle(installed: true, .ready)
+        } else if downloadedLocale?.identifier(.bcp47) == locale.identifier(.bcp47) {
+          settle(installed: false, .failed("Apple finished the download attempt, but this language is not ready yet. Check installed language support or retry the download."))
+        } else {
+          settle(installed: false, .missing)
         }
       } catch {
         guard generation == id else { return }
-        if !isDownloading { state = .failed(error.localizedDescription) }
+        settle(installed: false, .failed(error.localizedDescription))
       }
     }
+  }
+
+  /// Publishes only what a check changed, so one that kept the controller ready and found it
+  /// still ready publishes nothing.
+  private func settle(installed: Bool, _ state: State) {
+    if assetsInstalled != installed { assetsInstalled = installed }
+    if !isDownloading, self.state != state { self.state = state }
   }
 
   func download() {

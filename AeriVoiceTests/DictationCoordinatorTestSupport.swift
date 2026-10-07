@@ -145,6 +145,19 @@ extension DictationCoordinatorTests {
     }
   }
 
+  /// Runs `duringAccessibilityCheck` inside the Accessibility check, on the main thread: a
+  /// place to keep the main thread busy during start()'s checks after the key read.
+  @MainActor
+  final class BlockingReadiness: DictationReadinessChecking {
+    var duringAccessibilityCheck: (() -> Void)?
+    var microphoneAuthorized: Bool { true }
+    func requestMicrophone() async -> Bool { true }
+    func accessibilityReady(prompt: Bool) -> Bool {
+      duringAccessibilityCheck?()
+      return true
+    }
+  }
+
   final class FakeAudioCapture: AudioCapturing, @unchecked Sendable {
     private let lock = NSLock()
     private var callback: ((Data) -> Void)?

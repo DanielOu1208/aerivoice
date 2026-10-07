@@ -433,9 +433,14 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
         }
       },
       isCurrent: {
-        AXIsProcessTrusted() && !IsSecureEventInputEnabled()
-          && AccessibilityPasteWorker(seconds: 0.1).verificationTargetIsCurrent(target)
-          && !IsSecureEventInputEnabled()
+        guard AXIsProcessTrusted(), !IsSecureEventInputEnabled() else { return false }
+        // The walk runs off the main thread, like `read`, so it never holds up the shortcut
+        // tap or the notch right after Paste.
+        let current = await withTaskGroup(of: Bool.self) { group in
+          group.addTask { AccessibilityPasteWorker(seconds: 0.1).verificationTargetIsCurrent(target) }
+          return await group.next() ?? false
+        }
+        return current && !IsSecureEventInputEnabled()
       })
   }
 

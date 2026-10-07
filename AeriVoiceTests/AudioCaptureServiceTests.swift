@@ -412,6 +412,25 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(samples(delivered), 2_400, accuracy: 48)
   }
 
+  func testReleaseBlockAndTheConverterRemainderArriveAsOneDelivery() async throws {
+    // Each delivery is a frame the transcriber sends, paced for some providers, before the
+    // end of the stream can go out.
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    let start = mach_absolute_time()
+    let stopping = try await beginReleaseStop(service, at: host(start, plus: 150))
+    fixture.engines[0].emit(try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: start)
+    try await waitUntil { delivered.chunks == 1 }
+    fixture.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block), hostTime: host(start, plus: 100))
+    await stopping.value
+    XCTAssertEqual(delivered.chunks, 2)
+    XCTAssertEqual(samples(delivered), 2_400, accuracy: 48)
+  }
+
   func testBlockThatStartsAfterTheReleaseIsDropped() async throws {
     let fixture = AudioPreparationFixture()
     let service = fixture.service()
@@ -746,6 +765,14 @@ private final class LockedFlag: @unchecked Sendable {
 private final class LockedBytes: @unchecked Sendable {
   private let lock = NSLock()
   private var data = Data()
+  private var appended = 0
   var count: Int { lock.withLock { data.count } }
-  func append(_ chunk: Data) { lock.withLock { data.append(chunk) } }
+  /// How many deliveries arrived.
+  var chunks: Int { lock.withLock { appended } }
+  func append(_ chunk: Data) {
+    lock.withLock {
+      data.append(chunk)
+      appended += 1
+    }
+  }
 }

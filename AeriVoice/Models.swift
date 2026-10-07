@@ -141,6 +141,8 @@ struct TranscriptionConfiguration: Equatable, Sendable {
   var localModel: LocalTranscriptionModel = .nemotron
   var appleLocaleIdentifier: String = ""
   var cartesiaModel: CartesiaTranscriptionModel = .ink2
+  /// A code the provider accepts (see `TranscriptionLanguage`); nil lets it detect the language.
+  var language: String? = nil
 
   var modelID: String {
     switch provider {

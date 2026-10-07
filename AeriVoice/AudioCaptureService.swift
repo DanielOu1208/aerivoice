@@ -361,8 +361,17 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
       release: release, blockStart: hostTime, frames: input.frameLength,
       sampleRate: input.format.sampleRate)
     let kept = cut.keep == input.frameLength ? input : input.prefix(cut.keep)
-    if cut.keep > 0, let kept, let data = converter.convert(kept) { deliver(data) }
-    if cut.reachesRelease { stopOnQueue(flushingConverter: true) }
+    let data = cut.keep > 0 ? kept.flatMap { converter.convert($0) } : nil
+    guard cut.reachesRelease else {
+      if let data { deliver(data) }
+      return
+    }
+    // The last audio and what the resampler still holds go out as one delivery: each is a
+    // frame the transcriber sends, paced for some providers, before the stream can end.
+    var tail = data ?? Data()
+    if let remainder = converter.flush() { tail.append(remainder) }
+    if !tail.isEmpty { deliver(tail) }
+    stopOnQueue()
   }
 
   private func deliver(_ data: Data) {

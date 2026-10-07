@@ -51,6 +51,11 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
       "client_reference_id": sessionID.rawValue.uuidString,
     ]
     if let context { payload["context"] = context }
+    if let language = configuration.language {
+      // Restricts recognition to the chosen language.
+      payload["language_hints"] = [language]
+      payload["language_hints_strict"] = true
+    }
     let data = try JSONSerialization.data(withJSONObject: payload)
     let json = String(decoding: data, as: UTF8.self)
     try await withThrowingTaskGroup(of: Void.self) { group in

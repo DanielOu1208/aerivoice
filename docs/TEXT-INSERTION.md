@@ -104,8 +104,9 @@ access, immediately before dispatch. These are cooperative messaging bounds,
 not real-time OS guarantees. No detached timeout task can paste later.
 Optional pre-Paste verification has a 100 ms cooperative budget within that path;
 it is skipped when less than 200 ms of the conservative insertion budget remains.
-Post-Paste reads run off MainActor with fresh 100 ms budgets; final restoration
-identity checks and all clipboard writes run on MainActor.
+Post-Paste reads and the final restoration identity walk run off MainActor with
+fresh 100 ms budgets; the secure-input checks around that walk, the clipboard
+ownership checks after it, and all clipboard writes run on MainActor.
 
 Electron's documented AXManualAccessibility flag is enabled only when settable.
 A generic application-role read also activates Chromium's native accessibility.

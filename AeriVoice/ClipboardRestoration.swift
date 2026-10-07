@@ -17,8 +17,11 @@ struct TextEditState: Equatable, Sendable {
       && Self.isScalarBoundary(selection.location + selection.length, in: value)
   }
 
+  /// Compares UTF-16 units literally. NSString does that directly on the bridged strings
+  /// Accessibility returns, and at once when the lengths differ; walking their `utf16` views
+  /// takes milliseconds for a long document.
   static func == (lhs: Self, rhs: Self) -> Bool {
-    lhs.selection == rhs.selection && lhs.text.utf16.elementsEqual(rhs.text.utf16)
+    lhs.selection == rhs.selection && (lhs.text as NSString).isEqual(to: rhs.text)
   }
 
   func replacingSelection(with replacement: String) -> TextEditState? {
@@ -30,7 +33,7 @@ struct TextEditState: Equatable, Sendable {
     let expected = original.replacingCharacters(in: selection, with: replacement)
     // Swift String equality folds canonically equivalent Unicode sequences; this
     // check must compare actual UTF-16 units, as do the accessibility offsets.
-    guard !expected.utf16.elementsEqual(text.utf16) else { return nil }
+    guard !(expected as NSString).isEqual(to: text) else { return nil }
     return Self(text: expected, selection: NSRange(
       location: selection.location + replacementLength, length: 0))
   }
@@ -46,7 +49,9 @@ struct TextEditState: Equatable, Sendable {
 struct TextVerificationSource: Sendable {
   let prepare: @MainActor @Sendable () -> TextEditState?
   let read: @Sendable () async -> TextEditState?
-  let isCurrent: @MainActor @Sendable () -> Bool
+  /// May suspend while the target is checked off the main thread; callers re-check
+  /// clipboard ownership after it returns.
+  let isCurrent: @MainActor @Sendable () async -> Bool
 }
 
 enum ClipboardRestorationOutcome: String, Codable, Sendable {
@@ -303,7 +308,7 @@ final class ClipboardRestoration {
         if let read, read.duration(to: .now) >= self.timing.readGrace {
           // If a target identity is available it remains an additional guard;
           // unlike exact text readback, it does not need AXValue support.
-          guard source?.isCurrent() != false, !Task.isCancelled,
+          guard await source?.isCurrent() != false, !Task.isCancelled,
             ContinuousClock.now < graceExpires,
             self.isCurrent(id), self.owns(pending) else { outcome = .unverified; break }
           switch pending.snapshot.restore(
@@ -370,9 +375,9 @@ final class ClipboardRestoration {
         if state == expected {
           do { try await Task.sleep(for: self.timing.grace) } catch { break }
           guard ContinuousClock.now < expires,
-            await source.read() == expected,
+            await source.read() == expected, await source.isCurrent(),
             !Task.isCancelled, ContinuousClock.now < expires,
-            self.ownsClipboard(id, markerType, marker, ownedChangeCount), source.isCurrent()
+            self.ownsClipboard(id, markerType, marker, ownedChangeCount)
           else { break }
           switch snapshot.restore(
             to: self.board, markerType: markerType, marker: marker,

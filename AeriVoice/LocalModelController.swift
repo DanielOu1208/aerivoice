@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 
 protocol LocalModelAssetManaging: Actor {
   func isInstalled() async -> Bool
@@ -74,6 +75,9 @@ final class LocalModelController: ObservableObject {
         return
       }
       guard self.downloadTask == nil else { return }
+      // Launch, wake and settings changes select the model again. One already loaded stays
+      // ready instead of having every file hashed again, during which dictation is refused.
+      if self.state == .ready, self.runtime.isReady { return }
       let state = await self.downloadedState()
       guard !Task.isCancelled else { return }
       guard self.downloadTask == nil else { return }
@@ -93,8 +97,18 @@ final class LocalModelController: ObservableObject {
     state = .downloading(0)
     downloadTask = Task { @MainActor [weak self] in
       guard let self else { return }
+      // URLSession reports every chunk it writes, thousands per download; each state change
+      // rebuilds the status menu and redraws Settings, so it changes once per percent.
+      let shownPercent = OSAllocatedUnfairLock(initialState: -1)
       do {
         _ = try await self.assets.download { [weak self] progress in
+          let percent = Int(progress * 100)
+          let advanced = shownPercent.withLock { shown in
+            guard percent > shown else { return false }
+            shown = percent
+            return true
+          }
+          guard advanced else { return }
           Task { @MainActor in
             guard self?.downloadTask != nil else { return }
             self?.state = .downloading(progress)

@@ -18,6 +18,17 @@ Choose transcription and cleanup separately in Settings. Cloud providers use you
 
 For on-device transcription and Offline mode, see [Local dictation](LOCAL-DICTATION.md).
 
+## Spoken language
+
+**Dictation → Transcription → Spoken language** defaults to Auto-detect, which sends no language to any provider. A chosen language is saved once for every cloud provider; the menu lists the languages the selected provider supports.
+
+- **Soniox** (60 languages) is restricted to the chosen language, so choose one only if you dictate in it alone.
+- **Grok** (38 languages) and **Meta** (25 languages) are biased toward the chosen language but can still recognize others.
+- **Cartesia** has no language setting: Ink 2 and Ink Preview detect English, French, Hindi, Japanese, and Spanish themselves.
+- **Local:** NVIDIA Nemotron is English only. Apple Speech keeps its own language, chosen under **Manage…**.
+
+If the selected provider doesn't support the saved language, it detects the language instead and Settings says so; the saved choice still applies to providers that support it. Changing the language replaces Grok's prepared connection.
+
 ## OpenRouter catalog
 
 Under **AI Cleanup → Provider → Model**, OpenRouter shows recommended presets first. **All compatible models** opens a searchable catalog that excludes media-generation models, automatic routers, and known safety classifiers. You can also enter a text model ID manually.

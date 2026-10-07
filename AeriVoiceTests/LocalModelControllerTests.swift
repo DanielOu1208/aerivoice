@@ -59,6 +59,100 @@ final class LocalModelControllerTests: XCTestCase {
     XCTAssertTrue(controller.isReady)
     controller.select(false)
   }
+
+  func testDownloadProgressChangesTheStateOncePerPercent() async {
+    // URLSession reports every chunk; each state change rebuilds the status menu.
+    let controller = LocalModelController(
+      assets: ChunkedDownloadAssets(), observeMemoryPressure: false)
+    var progress: [Double] = []
+    let observation = controller.$state.sink { state in
+      if case .downloading(let value) = state { progress.append(value) }
+    }
+    controller.download()
+    while controller.isDownloading { await Task.yield() }
+    for _ in 0..<100 { await Task.yield() }
+    observation.cancel()
+    XCTAssertEqual(controller.state, .available)
+    XCTAssertLessThanOrEqual(progress.count, 102)
+    XCTAssertGreaterThanOrEqual(progress.count, 50)
+    XCTAssertEqual(progress, progress.sorted())
+    XCTAssertGreaterThanOrEqual(progress.last ?? 0, 0.99)
+  }
+
+  func testSelectingALoadedModelAgainNeitherVerifiesItNorLeavesReady() async {
+    // Launch, wake and every settings change select the model again.
+    let assets = CountingAssets()
+    let runtime = LocalSpeechRuntime(makeEngine: { ImmediateLocalEngine() })
+    let controller = LocalModelController(assets: assets, runtime: runtime, observeMemoryPressure: false)
+    controller.select(true)
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+    var states: [LocalModelController.State] = []
+    let observation = controller.$state.dropFirst().sink { states.append($0) }
+    for _ in 0..<3 {
+      controller.select(true)
+      XCTAssertTrue(controller.isReady)
+      await controller.waitForPreparation()
+    }
+    observation.cancel()
+    XCTAssertTrue(controller.isReady)
+    XCTAssertEqual(states, [])
+    var verifications = await assets.verifications
+    XCTAssertEqual(verifications, 1)
+
+    // Released under memory pressure, it is verified again before it is loaded again.
+    controller.releaseForPressure()
+    await controller.waitForPreparation()
+    XCTAssertFalse(controller.isReady)
+    controller.select(true)
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+    verifications = await assets.verifications
+    XCTAssertEqual(verifications, 2)
+
+    // Turned off, it is unloaded, and turning it back on verifies it again.
+    controller.select(false)
+    await controller.waitForPreparation()
+    XCTAssertFalse(controller.isReady)
+    controller.select(true)
+    await controller.waitForPreparation()
+    XCTAssertTrue(controller.isReady)
+    verifications = await assets.verifications
+    XCTAssertEqual(verifications, 3)
+    controller.select(false)
+  }
+}
+
+private actor ChunkedDownloadAssets: LocalModelAssetManaging {
+  private var installed = false
+  func isInstalled() async -> Bool { installed }
+  func hasPartialDownload() async -> Bool { false }
+  func verifiedDirectory() async throws -> URL { URL(fileURLWithPath: "/unused") }
+  func download(progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+    progress(0)
+    for chunk in 1...10_000 {
+      progress(min(0.999, Double(chunk) / 10_000))
+      if chunk % 500 == 0 { await Task.yield() }
+    }
+    installed = true
+    progress(1)
+    return URL(fileURLWithPath: "/unused")
+  }
+  func remove() async throws {}
+}
+
+private actor CountingAssets: LocalModelAssetManaging {
+  private(set) var verifications = 0
+  func isInstalled() async -> Bool { true }
+  func hasPartialDownload() async -> Bool { false }
+  func verifiedDirectory() async throws -> URL {
+    verifications += 1
+    return URL(fileURLWithPath: "/unused")
+  }
+  func download(progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+    URL(fileURLWithPath: "/unused")
+  }
+  func remove() async throws {}
 }
 
 private actor SuspendedRemovalAssets: LocalModelAssetManaging {

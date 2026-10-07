@@ -32,7 +32,7 @@ Turning logging off cancels the idle timer, stops signposts and new collection, 
 | `context.sinceLaunchMS` | Activation time relative to the first statement in `main.swift` |
 | `context.sincePreviousInteractionMS` | Time since the preceding attempt finished; includes settling/teardown, so it is not proof of continuous idle |
 | `context.sinceWakeMS` | Time since the latest observed wake, absent before one is observed |
-| `context.settings` | Selected provider/model/mode/reasoning, sound/mute/activation settings, and onboarding completion |
+| `context.settings` | Selected provider/model/mode/reasoning, the language code a cloud provider is given (absent for Auto-detect), sound/mute/activation settings, and onboarding completion |
 | `environment` | App version/build, running executable UUID, Debug/Release, distribution flag, optional embedded source revision, macOS/architecture, machine model, RAM bytes, logical CPU count |
 
 `milestonesMS` contains monotonic offsets from activation. `durationsMS` retains the existing local/provider stage boundaries. `stepsMS` holds durations measured where the work runs, often off the main thread, and only for the steps an attempt reached:

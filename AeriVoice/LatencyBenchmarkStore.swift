@@ -145,8 +145,8 @@ actor LatencyBenchmarkStore {
     let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86_400)
     // Legacy files can contain records much older than their rotation timestamp.
     // Check record dates in both streams once daily, including archived segments.
-    for url in try completedFiles() where try fileSize(url) > 0 {
-      try pruneSegment(url, cutoff: cutoff, now: now)
+    for segment in try completedSegments() where segment.info.st_size > 0 {
+      try pruneSegment(segment.url, cutoff: cutoff, now: now)
     }
     lastAgeScan = now
   }
@@ -207,9 +207,11 @@ actor LatencyBenchmarkStore {
   }
 
   private func enforceCap() throws {
-    var files: [(url: URL, size: Int, date: Date)] = []
-    for url in try completedFiles() {
-      files.append((url, try fileSize(url), try modifiedDate(url, fallback: .distantPast)))
+    // This runs after every write, over every segment kept: size and date come from the one
+    // lstat that lists each of them.
+    var files = try completedSegments().map {
+      (url: $0.url, size: Int($0.info.st_size),
+       date: ($0.info.st_mtimespec.tv_sec, $0.info.st_mtimespec.tv_nsec))
     }
     files.sort { $0.date == $1.date ? $0.url.path < $1.url.path : $0.date < $1.date }
     var total = try fileSize(directoryURL.appending(path: Self.activeFilename))
@@ -230,34 +232,47 @@ actor LatencyBenchmarkStore {
     var offset: UInt64 = 0
     var start: UInt64 = 0
     while let chunk = try handle.read(upToCount: 65_536), !chunk.isEmpty {
-      for byte in chunk {
-        offset += 1
-        if byte == 0x0A {
-          if try !visit(oversized ? nil : pending, start, offset - start) { return }
-          pending.removeAll(keepingCapacity: true)
-          oversized = false
-          start = offset
-        } else if !oversized {
-          if pending.count < 1_048_576 { pending.append(byte) }
+      // Whole runs between newlines are copied at once; the daily scan reads all history.
+      var index = chunk.startIndex
+      while index < chunk.endIndex {
+        let newline = chunk[index...].firstIndex(of: 0x0A)
+        let end = newline ?? chunk.endIndex
+        if !oversized {
+          if pending.count + (end - index) <= 1_048_576 { pending.append(chunk[index..<end]) }
           else { pending.removeAll(keepingCapacity: true); oversized = true }
         }
+        offset += UInt64(end - index)
+        guard let newline else { break }
+        offset += 1
+        if try !visit(oversized ? nil : pending, start, offset - start) { return }
+        pending.removeAll(keepingCapacity: true)
+        oversized = false
+        start = offset
+        index = newline + 1
       }
     }
     if offset > start { _ = try visit(oversized ? nil : pending, start, offset - start) }
   }
 
   private func completedFiles() throws -> [URL] {
-    try [Self.logFilename, Self.runtimeFilename].map { directoryURL.appending(path: $0) }
-      .filter { try regularFile($0) } + archiveFiles()
+    try completedSegments().map(\.url)
   }
 
-  private func archiveFiles() throws -> [URL] {
-    try fileManager.contentsOfDirectory(at: archivesURL, includingPropertiesForKeys: nil)
-      .filter { url in
-        let pattern = #"^(interactions|runtime)-v1-[0-9]+-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\.jsonl$"#
-        guard url.lastPathComponent.range(of: pattern, options: .regularExpression) != nil else { return false }
-        return try regularFile(url)
-      }
+  /// Both streams' live and archived segments, each with the lstat that showed it is a
+  /// regular file.
+  private func completedSegments() throws -> [(url: URL, info: stat)] {
+    var segments: [(url: URL, info: stat)] = []
+    for url in [Self.logFilename, Self.runtimeFilename].map({ directoryURL.appending(path: $0) }) {
+      if let info = try regularFileInfo(url) { segments.append((url, info)) }
+    }
+    for url in try fileManager.contentsOfDirectory(at: archivesURL, includingPropertiesForKeys: nil) {
+      let pattern = #"^(interactions|runtime)-v1-[0-9]+-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\.jsonl$"#
+      guard url.lastPathComponent.range(of: pattern, options: .regularExpression) != nil,
+        let info = try regularFileInfo(url)
+      else { continue }
+      segments.append((url, info))
+    }
+    return segments
   }
 
   private func prepareDirectory() throws {
@@ -278,13 +293,18 @@ actor LatencyBenchmarkStore {
   }
 
   private func regularFile(_ url: URL) throws -> Bool {
+    try regularFileInfo(url) != nil
+  }
+
+  /// nil when nothing is there; anything but a regular file is refused.
+  private func regularFileInfo(_ url: URL) throws -> stat? {
     var info = stat()
     guard lstat(url.path, &info) == 0 else {
-      if errno == ENOENT { return false }
+      if errno == ENOENT { return nil }
       throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
     guard (info.st_mode & S_IFMT) == S_IFREG else { throw CocoaError(.fileWriteNoPermission) }
-    return true
+    return info
   }
 
   private func fileSize(_ url: URL) throws -> Int {

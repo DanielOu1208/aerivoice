@@ -31,6 +31,41 @@ final class CredentialManagerTests: XCTestCase {
     XCTAssertEqual(store.presenceReadCount(for: .cerebras), 2)
   }
 
+  func testUnchangedRefreshPublishesNothing() throws {
+    let store = FakeCredentialStore(values: [.soniox: "existing"])
+    let manager = CredentialManager(store: store)
+    var published = 0
+    let observation = manager.objectWillChange.sink { published += 1 }
+    manager.refreshStoredCredentials()
+    manager.refreshStoredCredentials()
+    XCTAssertEqual(published, 0)
+    try store.save("new-key", for: .openRouter)
+    manager.refreshStoredCredentials()
+    observation.cancel()
+    XCTAssertEqual(published, 1)
+    XCTAssertEqual(manager.status(for: .openRouter), .saved)
+  }
+
+  func testRefreshPublishesWhenOnlyTheStoredKeysChange() throws {
+    let store = FakeCredentialStore()
+    let legacyStore = FakeCredentialStore()
+    let manager = CredentialManager(store: store, legacyStore: legacyStore)
+    manager.beginValidation(" ", kind: .soniox, configuration: nil)
+    XCTAssertEqual(manager.status(for: .soniox), .error("Enter a key first."))
+    var published = 0
+    let observation = manager.objectWillChange.sink { published += 1 }
+    try store.save("added-elsewhere", for: .soniox)
+    manager.refreshStoredCredentials()
+    XCTAssertEqual(published, 1)
+    XCTAssertTrue(manager.hasCredential(.soniox))
+    XCTAssertEqual(manager.status(for: .soniox), .error("Enter a key first."))
+    try legacyStore.save("legacy-key", for: .openRouter)
+    manager.refreshStoredCredentials()
+    observation.cancel()
+    XCTAssertEqual(published, 2)
+    XCTAssertTrue(manager.canImportLegacyCredential(.openRouter))
+  }
+
   func testLegacyCredentialDetectionDoesNotReadSecret() {
     let store = FakeCredentialStore()
     let legacyStore = FakeCredentialStore(values: [.soniox: "legacy-key"])

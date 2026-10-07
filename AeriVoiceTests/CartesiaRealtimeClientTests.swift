@@ -127,6 +127,27 @@ final class CartesiaRealtimeClientTests: XCTestCase {
     client.cancel()
   }
 
+  func testCartesiaIsNeverGivenALanguage() async throws {
+    let transport = CartesiaTransportSpy()
+    var captured: URLRequest?
+    let client = CartesiaRealtimeClient(makeTransport: { request in
+      captured = request
+      return transport
+    })
+
+    // Settings never resolve one for Cartesia; even a configuration carrying one sends nothing.
+    XCTAssertNil(TranscriptionLanguage.resolve("en", for: .cartesia))
+    try await client.connect(
+      configuration: TranscriptionConfiguration(provider: .cartesia, language: "en"),
+      apiKey: "sk_car_test", vocabulary: [], sessionID: DictationSessionID())
+
+    let url = try XCTUnwrap(captured?.url)
+    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    XCTAssertFalse(items.contains { $0.name.lowercased().contains("language") })
+    XCTAssertTrue(transport.sentMessages.isEmpty)
+    client.cancel()
+  }
+
   func testOtherProvidersAreRejectedBeforeAnySocketOpens() async {
     var made = 0
     let client = CartesiaRealtimeClient(makeTransport: { _ in

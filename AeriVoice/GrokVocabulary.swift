@@ -19,4 +19,11 @@ struct GrokVocabulary: Equatable {
     terms = accepted
     self.excluded = excluded
   }
+
+  /// Whether a Dictionary edit changes the terms Grok is given, so that a connection prepared
+  /// with the earlier ones can't be used.
+  static func termsDiffer(_ old: String, _ new: String) -> Bool {
+    GrokVocabulary(VocabularyNormalizer.normalize(old)).terms
+      != GrokVocabulary(VocabularyNormalizer.normalize(new)).terms
+  }
 }

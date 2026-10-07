@@ -14,6 +14,8 @@ struct MetaRealtimeHandshake: Encodable, Equatable {
   let partialMode: String
   let emitAudioProgress: Bool
   let keywords: [String]?
+  /// Omitted, Meta detects the language.
+  let languageBias: [String]?
   let zdrOverride: Bool
 
   init(
@@ -26,6 +28,7 @@ struct MetaRealtimeHandshake: Encodable, Equatable {
     partialMode = "CUMULATIVE"
     emitAudioProgress = false
     keywords = vocabulary.isEmpty ? nil : vocabulary
+    languageBias = configuration.language.flatMap { TranscriptionLanguage.metaNames[$0] }.map { [$0] }
     zdrOverride = true
   }
 }

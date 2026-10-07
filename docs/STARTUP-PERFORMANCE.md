@@ -5,7 +5,8 @@ complete and microphone permission has already been granted. Preparation creates
 an audio engine and calls `prepare()` without installing a capture tap or starting
 the engine. It also reads the selected providers' credentials in the background
 with the existing non-prompting Keychain policy. Those values are discarded;
-activation reads the current credentials again.
+activation reads the current credentials again, off the main thread, once per
+dictation: cleanup uses the key read at activation.
 
 The first activation can consume the prepared engine. The app checks the input
 device, sample rate, and channel count before reuse. Engine configuration changes,
@@ -39,7 +40,9 @@ engine's own start-up. If a check fails, the engine is stopped, the next one is 
 and audio it delivered is discarded unsent before the readiness error appears. If the
 input goes away while the checks run, the dictation fails with the microphone error once
 they pass, instead of recording from a stopped engine. Audio recorded while the checks run
-belongs to the dictation and is kept. Output muting stays
+belongs to the dictation and is kept, even when a slow check holds it back; it does not count
+toward the roughly 3 seconds of audio that may wait once the connection is attempted. Output
+muting stays
 in the activation path, so in the slow case a few milliseconds can be recorded before
 output is muted. A Bluetooth or unreadable input is declined at the press (opening a
 headset's microphone switches it to its call profile even if the dictation is then
