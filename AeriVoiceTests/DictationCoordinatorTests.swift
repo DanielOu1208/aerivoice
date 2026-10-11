@@ -216,6 +216,52 @@ final class DictationCoordinatorTests: XCTestCase {
     }
   }
 
+  func testAShortcutChordAbortEndsTheDictationItsPressStartedWithoutATrace() async throws {
+    for soundCues in [false, true] {
+      let fixture = makeFixture(soundCues: soundCues)
+      fixture.preferences.muteOutput = true
+      let generation = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+      try await waitUntil { fixture.coordinator.phase == .recording }
+      let presented = fixture.notch.presentedStates.count
+      let cues = fixture.cuePlayer.playedCues
+      fixture.coordinator.abortShortcutActivation(lifecycleGeneration: generation)
+      XCTAssertEqual(fixture.coordinator.phase, .idle)
+      XCTAssertTrue(fixture.audio.didStop)
+      XCTAssertTrue(fixture.transcriber.didCancel)
+      XCTAssertEqual(fixture.muter.restoreCount, 1)
+      // No Cancelled notch and no cue: the notch just goes.
+      XCTAssertEqual(fixture.notch.presentedStates.count, presented)
+      XCTAssertEqual(fixture.notch.hideDelays.last, .zero)
+      XCTAssertEqual(fixture.cuePlayer.playedCues, cues)
+      XCTAssertEqual(fixture.benchmark.terminalResult, .cancelled)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertNil(fixture.inserter.insertedText)
+      XCTAssertNil(fixture.inserter.copiedText)
+      // The next press starts a dictation.
+      XCTAssertNotNil(fixture.coordinator.shortcutPressed())
+      fixture.coordinator.cancel()
+    }
+  }
+
+  func testAShortcutChordAbortLeavesADictationThePressDidNotStart() async throws {
+    let fixture = makeFixture()
+    // Started from the menu; a hold press takes it over.
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    let adopted = try XCTUnwrap(fixture.coordinator.holdShortcutPressed())
+    fixture.coordinator.abortShortcutActivation(lifecycleGeneration: adopted)
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    // A stale generation aborts nothing either.
+    fixture.coordinator.cancel()
+    try await waitUntil { fixture.coordinator.phase == .idle }
+    let started = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.abortShortcutActivation(lifecycleGeneration: UUID())
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    XCTAssertNotEqual(started, adopted)
+    fixture.coordinator.cancel()
+  }
+
   func testStreamFailureSaysSoWhenTheShownTranscriptCannotBeCopied() async throws {
     let fixture = makeFixture(provisionalText: "Send the report by Friday")
     fixture.inserter.copySucceeds = false

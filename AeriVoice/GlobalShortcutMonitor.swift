@@ -26,6 +26,16 @@ struct ModifierShortcutLatch {
     return .press
   }
 
+  /// Every required modifier is still down since the press.
+  var isHeld: Bool { isActive && !deliveredRelease }
+
+  /// The press was cancelled while held: changes are consumed, and nothing presses again,
+  /// until every required modifier is up.
+  mutating func cancelPress() {
+    guard isActive else { return }
+    deliveredRelease = true
+  }
+
   mutating func reset() {
     isActive = false
     deliveredRelease = false
@@ -98,6 +108,8 @@ final class GlobalShortcutMonitor {
   var onPress: ((Duration?) -> UUID?)?
   var onHoldPress: ((Duration?) -> UUID?)?
   var onHoldRelease: ((UUID) -> Void)?
+  /// The press that started this dictation began an ordinary key combination instead.
+  var onAbort: ((UUID) -> Void)?
   var onCancel: (() -> Void)?
   var shouldCancel: (() -> Bool)?
   var onAvailabilityChange: ((Bool) -> Void)?
@@ -109,6 +121,9 @@ final class GlobalShortcutMonitor {
   private var modifierLatch = ModifierShortcutLatch()
   private var pressTracker = ShortcutPressTracker()
   private var heldLifecycleGeneration: UUID?
+  /// A dictation a modifier-only press just started, until the first key-down or the hold
+  /// threshold shows whether the modifier begins an ordinary combination such as fn-Delete.
+  private var chordWindow: (lifecycleGeneration: UUID, ends: CGEventTimestamp)?
 
   func start(definition: ShortcutDefinition, activationMode: ShortcutActivationMode) {
     if self.definition == definition, self.activationMode == activationMode, let tap,
@@ -118,8 +133,7 @@ final class GlobalShortcutMonitor {
       return
     }
     stop()
-    self.definition = definition
-    self.activationMode = activationMode
+    configure(definition: definition, activationMode: activationMode)
     let mask =
       (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
       | (1 << CGEventType.flagsChanged.rawValue)
@@ -151,6 +165,12 @@ final class GlobalShortcutMonitor {
     onAvailabilityChange?(CGEvent.tapIsEnabled(tap: tap))
   }
 
+  /// Sets the shortcut that events are matched against, without installing the event tap.
+  func configure(definition: ShortcutDefinition, activationMode: ShortcutActivationMode) {
+    self.definition = definition
+    self.activationMode = activationMode
+  }
+
   func stop() {
     let wasMonitoring = tap != nil
     if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
@@ -172,6 +192,7 @@ final class GlobalShortcutMonitor {
     pressTracker.reset()
     modifierLatch.reset()
     heldLifecycleGeneration = nil
+    chordWindow = nil
   }
 
   /// Time from the key event to now: how long the main thread took to reach the shortcut.
@@ -189,6 +210,9 @@ final class GlobalShortcutMonitor {
   private func press(at timestamp: CGEventTimestamp, age: Duration?) {
     let lifecycleGeneration = activationMode == .hold ? onHoldPress?(age) : onPress?(age)
     heldLifecycleGeneration = activationMode == .toggle ? nil : lifecycleGeneration
+    chordWindow =
+      definition?.isModifierOnly == true
+      ? lifecycleGeneration.map { ($0, timestamp + ShortcutPressTracker.holdThreshold) } : nil
     pressTracker.press(
       at: timestamp, finishesOnRelease: heldLifecycleGeneration != nil,
       activationMode: activationMode)
@@ -201,7 +225,8 @@ final class GlobalShortcutMonitor {
     if shouldFinish, let lifecycleGeneration { onHoldRelease?(lifecycleGeneration) }
   }
 
-  private func handle(type: CGEventType, event: CGEvent) -> Bool {
+  /// Returns whether the event is consumed.
+  func handle(type: CGEventType, event: CGEvent) -> Bool {
     guard let definition else { return false }
     let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
     let modifierBits = definition.modifierBits(in: event.flags)
@@ -223,9 +248,23 @@ final class GlobalShortcutMonitor {
     }
     if type == .keyDown, keyCode == 53 {
       guard shouldCancel?() == true else { return false }
-      resetPressedState()
+      pressTracker.reset()
+      heldLifecycleGeneration = nil
+      chordWindow = nil
+      // A modifier-only shortcut still held presses again only after a full release.
+      modifierLatch.cancelPress()
       onCancel?()
       return true
+    }
+    if type == .keyDown, let window = chordWindow {
+      chordWindow = nil
+      // The modifier began an ordinary combination: the key goes through, and the dictation
+      // the press started ends unseen. A later key never ends a dictation.
+      if modifierLatch.isHeld, event.timestamp < window.ends {
+        pressTracker.reset()
+        heldLifecycleGeneration = nil
+        onAbort?(window.lifecycleGeneration)
+      }
     }
     guard !definition.isModifierOnly else { return false }
     if type == .keyDown, keyCode == definition.keyCode,

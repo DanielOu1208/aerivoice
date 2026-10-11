@@ -504,12 +504,13 @@ extension DictationCoordinatorTests {
 
   final class FakeMuter: OutputMuting, @unchecked Sendable {
     private(set) var didMute = false
+    private(set) var restoreCount = 0
 
     func mute() -> Bool {
       didMute = true
       return true
     }
-    func restore() {}
+    func restore() { restoreCount += 1 }
   }
 
   @MainActor
