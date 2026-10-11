@@ -381,6 +381,45 @@ final class CartesiaRealtimeClientTests: XCTestCase {
     XCTAssertEqual(transport.cancelCodes, [.goingAway])
   }
 
+  func testNormalCloseDuringAPendingFinalizeWriteWaitsForTheWrite() async throws {
+    for writeFails in [true, false] {
+      let transport = CartesiaTransportSpy()
+      transport.gatedCommand = "finalize"
+      addTeardownBlock { @MainActor in transport.failPendingSend(CancellationError()) }
+      let client = CartesiaRealtimeClient(makeTransport: { _ in transport })
+      try await connect(client)
+      transport.serverSends(#"{"type":"transcript","is_final":false,"text":"partial words"}"#)
+      var finished = false
+      let finishing = Task {
+        defer { finished = true }
+        return try await client.finish()
+      }
+      try await waitUntil { transport.hasPendingSend }
+
+      // The server closes before `finalize` has been written.
+      transport.serverCloses(1000)
+      try await waitUntil { transport.deliveredFailures == 1 }
+      try await Task.sleep(for: .milliseconds(100))
+      XCTAssertFalse(finished, "Finished before the finalize write; write fails: \(writeFails)")
+
+      if writeFails {
+        // The write's own failure decides.
+        transport.failPendingSend(CartesiaTransportError(status: 1006))
+        do {
+          let text = try await finishing.value
+          XCTFail("Returned \(text) although finalize was never written")
+        } catch {
+          XCTAssertEqual(error as? CartesiaTransportError, CartesiaTransportError(status: 1006))
+        }
+      } else {
+        // Written after all: the close then ends the transcript as usual.
+        transport.completePendingSend()
+        let text = try await finishing.value
+        XCTAssertEqual(text, "partial words")
+      }
+    }
+  }
+
   func testFailedFinalizeSendFailsTheDictation() async throws {
     let transport = CartesiaTransportSpy()
     transport.sendFailure = CartesiaTransportError(status: 1006)
@@ -685,6 +724,13 @@ private final class CartesiaTransportSpy: RealtimeWebSocketTransport {
   private var queued: [Result<Message, Error>] = []
   private var pendingReceive: CheckedContinuation<Message, Error>?
   private var pendingOpen: CheckedContinuation<Void, Error>?
+  /// A text command whose write stays pending until completePendingSend() or
+  /// failPendingSend(_:), as on a backed-up uplink.
+  var gatedCommand: String?
+  private var pendingSend: CheckedContinuation<Void, Error>?
+  var hasPendingSend: Bool { pendingSend != nil }
+  /// Failures handed to a receive() caller, at once or from the queue.
+  private(set) var deliveredFailures = 0
 
   var sentText: [String] {
     sentMessages.compactMap {
@@ -711,6 +757,10 @@ private final class CartesiaTransportSpy: RealtimeWebSocketTransport {
 
   func send(_ message: Message) async throws {
     if let sendFailure { throw sendFailure }
+    if case .string(let text) = message, text == gatedCommand {
+      gatedCommand = nil
+      try await withCheckedThrowingContinuation { pendingSend = $0 }
+    }
     sentMessages.append(message)
     if case .string(let text) = message {
       for reply in replies[text] ?? [] { enqueue(reply) }
@@ -718,7 +768,11 @@ private final class CartesiaTransportSpy: RealtimeWebSocketTransport {
   }
 
   func receive() async throws -> Message {
-    if !queued.isEmpty { return try queued.removeFirst().get() }
+    if !queued.isEmpty {
+      let next = queued.removeFirst()
+      if case .failure = next { deliveredFailures += 1 }
+      return try next.get()
+    }
     return try await withCheckedThrowingContinuation { pendingReceive = $0 }
   }
 
@@ -734,6 +788,18 @@ private final class CartesiaTransportSpy: RealtimeWebSocketTransport {
 
   func serverSends(_ json: String) { enqueue(.success(.string(json))) }
 
+  func serverCloses(_ status: Int) { enqueue(.failure(CartesiaTransportError(status: status))) }
+
+  func completePendingSend() {
+    pendingSend?.resume()
+    pendingSend = nil
+  }
+
+  func failPendingSend(_ error: Error) {
+    pendingSend?.resume(throwing: error)
+    pendingSend = nil
+  }
+
   func completeOpen() {
     pendingOpen?.resume()
     pendingOpen = nil
@@ -742,6 +808,7 @@ private final class CartesiaTransportSpy: RealtimeWebSocketTransport {
   private func enqueue(_ result: Result<Message, Error>) {
     if let pendingReceive {
       self.pendingReceive = nil
+      if case .failure = result { deliveredFailures += 1 }
       pendingReceive.resume(with: result)
     } else {
       queued.append(result)
