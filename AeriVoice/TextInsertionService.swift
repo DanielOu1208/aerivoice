@@ -132,6 +132,8 @@ final class TextInsertionService: TextInserting {
   private let restoreEnabled: @MainActor () -> Bool
   private var insertionSteps: InsertionSteps?
   private var recordingStarted = false
+  /// The clipboard's change count when the dictation stopped; nil while it records.
+  private var stoppedChangeCount: Int?
   private let restoreDelay: @MainActor () -> TimeInterval
   private let readAwareClipboard: Bool
   private let makeRestorationReport: @MainActor () -> ClipboardRestoration.Report
@@ -170,6 +172,16 @@ final class TextInsertionService: TextInserting {
     // Let a dispatched paste finish during the next recording. At its Stop,
     // captureTarget transfers the original backup if restoration is still pending.
     recordingStarted = true
+    stoppedChangeCount = nil
+  }
+
+  func copy(_ text: String) -> Bool {
+    // A copy made since the dictation stopped is newer than this text and is kept.
+    guard !Self.activeBoards.contains(pasteboard.name),
+      pasteboard.changeCount == stoppedChangeCount ?? pasteboard.changeCount
+    else { return false }
+    pasteboard.clearContents()
+    return pasteboard.setString(text, forType: .string)
   }
   func finishPendingRestoration() async { await restoration.finishPendingRestoration() }
 
@@ -183,6 +195,7 @@ final class TextInsertionService: TextInserting {
     insertionSteps = nil
     let backup = restoration.takePendingBackup()
     let changeCount = pasteboard.changeCount
+    stoppedChangeCount = changeCount
     let restorationID = restoration.beginCapture(
       changeCount: changeCount, enabled: restoreEnabled(), backup: backup)
     let acquisition = capture()

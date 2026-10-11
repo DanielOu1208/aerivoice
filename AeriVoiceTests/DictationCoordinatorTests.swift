@@ -153,8 +153,9 @@ final class DictationCoordinatorTests: XCTestCase {
   }
 
   func testNoSpeechAndFinalizationFailureDiscardClipboardBackup() async throws {
+    // Nothing was shown before either failure, so nothing is recovered.
     for error in [AppError.emptyTranscript, AppError.connectionTimeout] {
-      let fixture = makeFixture()
+      let fixture = makeFixture(provisionalText: "")
       fixture.transcriber.finishError = error
       fixture.coordinator.toggle()
       try await waitUntil { fixture.coordinator.phase == .recording }
@@ -167,8 +168,71 @@ final class DictationCoordinatorTests: XCTestCase {
       XCTAssertEqual(fixture.inserter.invalidations, initial + 1)
       XCTAssertEqual(fixture.inserter.captureCount, 1)
       XCTAssertNil(fixture.inserter.insertedText)
+      XCTAssertNil(fixture.inserter.copiedText)
       fixture.coordinator.cancel()
     }
+  }
+
+  func testStreamFailureKeepsTheTranscriptAlreadyShown() async throws {
+    enum Failure: CaseIterable { case streamError, confirmedThenStreamError, finalizeTimeout }
+    let recovered = "Transcription was cut off—copied what was heard"
+    for failure in Failure.allCases {
+      let fixture = makeFixture(provisionalText: "Send the report by Friday")
+      fixture.coordinator.toggle()
+      try await waitUntil {
+        fixture.coordinator.phase == .recording && !fixture.transcriber.sentFrames.isEmpty
+      }
+      // FakeTranscriber.send shows the provisional text with the first frame.
+      var shown = "Send the report by Friday"
+      switch failure {
+      case .streamError:
+        fixture.transcriber.emitError(AppError.provider("socket closed"))
+      case .confirmedThenStreamError:
+        shown = "Kept"
+        fixture.transcriber.onTranscript?(
+          RealtimeTranscriptUpdate(
+            snapshot: TranscriptSnapshot(confirmed: "Kept"), hasFinalText: true,
+            finalAudioProcessedMS: 100, totalAudioProcessedMS: 100))
+        fixture.transcriber.emitError(AppError.provider("socket closed"))
+      case .finalizeTimeout:
+        fixture.transcriber.finishError = .finalizeTimeout
+        fixture.coordinator.toggle()
+      }
+      XCTAssertTrue(
+        fixture.notch.presentedStates.contains { $0.transcript.displayText == shown }, "\(failure)")
+      try await waitUntil { fixture.inserter.copiedText != nil }
+      // Copied, not pasted: the text may stop mid-sentence.
+      XCTAssertEqual(fixture.inserter.copiedText, shown, "\(failure)")
+      XCTAssertNil(fixture.inserter.insertedText, "\(failure)")
+      try await waitUntil {
+        if case .error = fixture.coordinator.phase { return true }
+        return false
+      }
+      XCTAssertEqual(fixture.coordinator.phase, .error(recovered), "\(failure)")
+      XCTAssertEqual(fixture.notch.presentedStates.last?.phase, .error(recovered), "\(failure)")
+      XCTAssertEqual(fixture.notch.presentedStates.last?.warning, recovered, "\(failure)")
+      XCTAssertEqual(fixture.benchmark.terminalResult, .failed, "\(failure)")
+      fixture.coordinator.cancel()
+    }
+  }
+
+  func testStreamFailureSaysSoWhenTheShownTranscriptCannotBeCopied() async throws {
+    let fixture = makeFixture(provisionalText: "Send the report by Friday")
+    fixture.inserter.copySucceeds = false
+    fixture.coordinator.toggle()
+    try await waitUntil {
+      fixture.coordinator.phase == .recording && !fixture.transcriber.sentFrames.isEmpty
+    }
+    fixture.transcriber.emitError(AppError.provider("socket closed"))
+    try await waitUntil {
+      if case .error = fixture.coordinator.phase { return true }
+      return false
+    }
+    // A copy that didn't happen is never claimed: the failure itself is shown.
+    XCTAssertEqual(fixture.coordinator.phase, .error("socket closed"))
+    XCTAssertNil(fixture.inserter.copiedText)
+    XCTAssertNil(fixture.inserter.insertedText)
+    fixture.coordinator.cancel()
   }
 
   func testTerminalFailureDiscardsClipboardBackupButPasteSentPreservesVerifier() async throws {

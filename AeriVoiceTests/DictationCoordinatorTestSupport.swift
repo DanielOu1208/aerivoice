@@ -570,6 +570,14 @@ extension DictationCoordinatorTests {
       insertedText = text
       return result
     }
+    /// Text put on the clipboard without a paste.
+    var copiedText: String?
+    var copySucceeds = true
+    func copy(_ text: String) -> Bool {
+      guard copySucceeds else { return false }
+      copiedText = text
+      return true
+    }
   }
 
   @MainActor

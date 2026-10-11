@@ -46,6 +46,12 @@ makes during cleanup or insertion preparation are preserved. If the clipboard
 has changed, AeriVoice reports that it could not paste or copy, rather than
 overwriting the new copy or falsely claiming that the transcript is available.
 
+If transcription fails after the notch has shown text (a dropped connection, audio
+that can't keep up with the connection, or a provider that doesn't finish in time),
+the text shown so far is copied, never pasted, since it may stop mid-sentence, and
+the notch says so. Like any copy, it never replaces a copy made since the dictation
+stopped; when it can't be copied, the notch shows the failure alone.
+
 One transaction per pasteboard is allowed across service instances. Clipboard
 write, ownership verification, and final dispatch run synchronously on MainActor.
 A private owner marker and change count guard the write. Cancellation before

@@ -847,6 +847,9 @@ protocol TextInserting: Sendable {
   /// Begins acquisition immediately at stop; callers cancel this task with the session.
   func captureTarget() -> Task<TextInsertionTarget?, Never>
   func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult
+  /// Puts text on the clipboard without pasting it, unless the clipboard changed since the
+  /// dictation stopped or another paste is finishing. Returns whether it was copied.
+  func copy(_ text: String) -> Bool
   func invalidatePendingRestoration()
   func prepareForNextDictation()
   func finishPendingRestoration() async

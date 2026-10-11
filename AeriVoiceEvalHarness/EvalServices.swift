@@ -123,6 +123,9 @@ final class EvalReceiver: TextInserting {
     events.emit("output", ["text": text, "destination": "controlled_receiver"])
     return .pasteSent
   }
+  /// The controlled receiver has no clipboard: text recovered from a failed transcription is
+  /// not copied, so a fault scenario records its failure and no output.
+  func copy(_ text: String) -> Bool { false }
 }
 
 /// STT-only runs preserve coordinator stop/drain/finalization ordering but bypass cleanup requests.

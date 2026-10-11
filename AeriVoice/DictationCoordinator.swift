@@ -876,7 +876,29 @@ final class DictationCoordinator: ObservableObject {
     transcriber.cancel()
     stopAudioIfNeeded(playCue: false)
     play(.error)
-    showTerminal(error.localizedDescription, id: id, delay: .seconds(2))
+    if copyTranscriptShown(after: stage) {
+      state.warning = Self.transcriptCutOffMessage
+      showTerminal(Self.transcriptCutOffMessage, id: id, delay: .seconds(2))
+    } else {
+      showTerminal(error.localizedDescription, id: id, delay: .seconds(2))
+    }
+  }
+
+  private static let transcriptCutOffMessage = "Transcription was cut off—copied what was heard"
+
+  /// A transcription that fails keeps the text the notch already showed. It's copied, not
+  /// pasted, because it may stop mid-sentence. A microphone failure shows its own message.
+  private func copyTranscriptShown(after stage: BenchmarkFailureStage) -> Bool {
+    switch stage {
+    case .sttSetup, .sttStream, .sttFinalize: break
+    case .readiness, .audioCapture, .cleanup, .insertion, .lifecycle: return false
+    }
+    switch phase {
+    case .starting, .recording, .processing: break
+    case .idle, .cleaning, .inserting, .success, .error: return false
+    }
+    let text = state.transcript.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !text.isEmpty && inserter.copy(text)
   }
 
   private func showTerminal(_ message: String, id: DictationSessionID, delay: Duration) {
