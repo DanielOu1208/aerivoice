@@ -15,4 +15,4 @@ Using AirPods or another Bluetooth headset as the microphone switches it to a lo
 
 ## Audio processing
 
-Audio is mixed to mono, resampled to 16 kHz, and passed through an 80 Hz high-pass filter that removes rumble such as fans and desk bumps. No noise suppression or automatic gain is applied; speech providers recommend against both.
+Audio is mixed to mono by averaging every input channel, so a microphone on any input of a multi-input interface or aggregate device is heard (one active input among four is 12 dB quieter, as one of two is 6 dB quieter), resampled to 16 kHz, and passed through an 80 Hz high-pass filter that removes rumble such as fans and desk bumps. No noise suppression or automatic gain is applied; speech providers recommend against both.

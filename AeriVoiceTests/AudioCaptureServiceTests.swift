@@ -729,6 +729,72 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertGreaterThan(rms(data), 1_000)
   }
 
+  func testConverterMixesEveryChannelOfADiscreteOrUnknownLayout() throws {
+    // Multi-input interfaces and aggregate devices label their inputs this way; the converter's
+    // own mix handles only positional layouts.
+    let layouts: [(String, AVAudioChannelLayout, UInt32)] = [
+      ("DiscreteInOrder|2", try tagged(kAudioChannelLayoutTag_DiscreteInOrder | 2), 2),
+      ("DiscreteInOrder|4", try tagged(kAudioChannelLayoutTag_DiscreteInOrder | 4), 4),
+      ("Unknown|4", try tagged(kAudioChannelLayoutTag_Unknown | 4), 4),
+      ("Unknown labels", described(Array(repeating: kAudioChannelLabel_Unknown, count: 4)), 4),
+      ("Discrete labels",
+       described([kAudioChannelLabel_Discrete_0, kAudioChannelLabel_Discrete_1,
+                  kAudioChannelLabel_Discrete_2, kAudioChannelLabel_Discrete_3]), 4),
+    ]
+    for (name, layout, channels) in layouts {
+      let format = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, interleaved: false,
+        channelLayout: layout)
+      XCTAssertEqual(format.channelCount, channels, name)
+      XCTAssertEqual(format.channelLayout?.layoutTag, layout.layoutTag, name)
+      XCTAssertEqual(
+        format.channelLayout?.layout.pointee.mNumberChannelDescriptions,
+        layout.layout.pointee.mNumberChannelDescriptions, name)
+      for active in 0..<Int(channels) {
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800))
+        buffer.frameLength = 4_800
+        let data = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<Int(channels) {
+          for frame in 0..<4_800 {
+            data[channel][frame] =
+              channel == active ? 0.5 * sin(2 * Float.pi * 440 * Float(frame) / 48_000) : 0
+          }
+        }
+        let converter = try XCTUnwrap(PCM16AudioConverter())
+        let converted = converter.convert(buffer)
+        XCTAssertNotNil(converted, "\(name) input \(active + 1)")
+        XCTAssertGreaterThan(
+          (converted?.count ?? 0) / MemoryLayout<Int16>.size, 1_000, "\(name) input \(active + 1)")
+        XCTAssertGreaterThan(rms(converted ?? Data()), 1_000, "\(name) input \(active + 1)")
+      }
+    }
+  }
+
+  private func tagged(_ tag: AudioChannelLayoutTag) throws -> AVAudioChannelLayout {
+    try XCTUnwrap(AVAudioChannelLayout(layoutTag: tag))
+  }
+
+  /// A layout that lists each channel's label. The C struct holds one description inline, so
+  /// storage for all of them is allocated.
+  private func described(_ labels: [AudioChannelLabel]) -> AVAudioChannelLayout {
+    let descriptionsOffset = MemoryLayout<AudioChannelLayout>.offset(
+      of: \AudioChannelLayout.mChannelDescriptions)!
+    let size = descriptionsOffset + labels.count * MemoryLayout<AudioChannelDescription>.stride
+    let raw = UnsafeMutableRawPointer.allocate(
+      byteCount: size, alignment: MemoryLayout<AudioChannelLayout>.alignment)
+    defer { raw.deallocate() }
+    raw.initializeMemory(as: UInt8.self, repeating: 0, count: size)
+    let layout = raw.bindMemory(to: AudioChannelLayout.self, capacity: 1)
+    layout.pointee.mChannelLayoutTag = kAudioChannelLayoutTag_UseChannelDescriptions
+    layout.pointee.mNumberChannelDescriptions = UInt32(labels.count)
+    let descriptions = (raw + descriptionsOffset).assumingMemoryBound(
+      to: AudioChannelDescription.self)
+    for (index, label) in labels.enumerated() {
+      descriptions[index].mChannelLabel = label
+    }
+    return AVAudioChannelLayout(layout: layout)
+  }
+
   func testHighPassRemovesRumbleAndKeepsSpeechBand() throws {
     func level(frequency: Float) throws -> Float {
       let converter = try XCTUnwrap(PCM16AudioConverter())

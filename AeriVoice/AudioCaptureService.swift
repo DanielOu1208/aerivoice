@@ -510,15 +510,17 @@ final class PCM16AudioConverter {
 
   func convert(_ input: AVAudioPCMBuffer) -> Data? {
     guard input.format.sampleRate > 0, input.format.channelCount > 0 else { return nil }
-    if converter?.inputFormat.isEqual(input.format) != true {
-      converter = AVAudioConverter(from: input.format, to: outputFormat)
-      // Without downmix the converter keeps only channel 0 of multichannel inputs.
+    let source = Self.mixedToMono(input) ?? input
+    if converter?.inputFormat.isEqual(source.format) != true {
+      converter = AVAudioConverter(from: source.format, to: outputFormat)
+      // A multichannel format mixedToMono can't average is left to the converter's own mix;
+      // without downmix it keeps only channel 0.
       converter?.downmix = true
     }
     guard let converter else { return nil }
 
-    let ratio = outputFormat.sampleRate / input.format.sampleRate
-    let capacity = AVAudioFrameCount(ceil(Double(input.frameLength) * ratio)) + 16
+    let ratio = outputFormat.sampleRate / source.format.sampleRate
+    let capacity = AVAudioFrameCount(ceil(Double(source.frameLength) * ratio)) + 16
     let inputState = ConversionInputState()
     return run(converter, capacity: capacity) { state in
       if inputState.supplied {
@@ -527,8 +529,35 @@ final class PCM16AudioConverter {
       }
       inputState.supplied = true
       state.pointee = .haveData
-      return input
+      return source
     }
+  }
+
+  /// Averages every channel of a multichannel Float32 buffer into one, so speech on any input
+  /// is kept. The converter's own mix handles only positional layouts: a discrete or unknown
+  /// one, as multi-input interfaces and aggregate devices have, comes out silent. Averaging is
+  /// what the converter does for stereo, so a lone input among n is 20·log10(n) dB quieter.
+  /// Nil for a mono buffer, or one in another sample format.
+  static func mixedToMono(_ input: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+    let channelCount = Int(input.format.channelCount)
+    guard channelCount > 1, input.format.commonFormat == .pcmFormatFloat32,
+      !input.format.isInterleaved, let channels = input.floatChannelData,
+      let format = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: input.format.sampleRate, channels: 1,
+        interleaved: false),
+      let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(input.frameLength, 1)),
+      let mixed = mono.floatChannelData?[0]
+    else { return nil }
+    let frames = vDSP_Length(input.frameLength)
+    mono.frameLength = input.frameLength
+    guard frames > 0 else { return mono }
+    mixed.update(from: channels[0], count: Int(frames))
+    for channel in 1..<channelCount {
+      vDSP_vadd(mixed, 1, channels[channel], 1, mixed, 1, frames)
+    }
+    var scale = 1 / Float(channelCount)
+    vDSP_vsmul(mixed, 1, &scale, mixed, 1, frames)
+    return mono
   }
 
   /// Returns the resampler's remaining samples; the converter cannot be reused afterwards.
