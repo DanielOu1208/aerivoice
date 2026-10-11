@@ -33,9 +33,13 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   private var captureGeneration = UUID()
   private var restartToken: UUID?
   private var restartCount = 0
-  /// Audio recorded before this is dropped, keeping the start cue out of the transcript.
+  /// Audio recorded before this is dropped before conversion, keeping the start cue out of the
+  /// transcript and out of the converter's state.
   private var discardDeadline: ContinuousClock.Instant?
-  private var samplesToDiscard = 0
+  /// The deadline in capture host time, for blocks that carry their capture time.
+  private var discardBeforeHostTime: UInt64?
+  /// For blocks without a capture time: audio still to drop, counted from the engine's start.
+  private var secondsToDiscard = 0.0
   private var pendingRelease: PendingRelease?
   /// Host time just after the last block delivered whole.
   private var lastBlockEnd: UInt64?
@@ -283,7 +287,8 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
       }
       recording = true
       discardDeadline = deadline
-      discardAudioBeforeDeadline()
+      discardBeforeHostTime = deadline.flatMap(Self.hostTime(at:))
+      countDiscardFromEngineStart()
       restartIfStoppedOnQueue()
       return report
     } catch {
@@ -292,11 +297,40 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     }
   }
 
-  /// Capture begins about when an engine's start returns, so samples up to the deadline are
-  /// dropped from then on. A replacement engine counts again from its own start.
-  private func discardAudioBeforeDeadline() {
+  /// A block without a capture time is taken to begin about when its engine's start returned,
+  /// so audio up to the deadline is counted from then. A replacement counts from its own start.
+  private func countDiscardFromEngineStart() {
     let remaining = discardDeadline.map { ContinuousClock.now.duration(to: $0) / .seconds(1) } ?? 0
-    samplesToDiscard = Int(max(0, remaining) * PCM16AudioConverter.sampleRate)
+    secondsToDiscard = max(0, remaining)
+  }
+
+  /// The capture host time of a clock instant still to come; nil once it has passed.
+  private static func hostTime(at instant: ContinuousClock.Instant) -> UInt64? {
+    let seconds = ContinuousClock.now.duration(to: instant) / .seconds(1)
+    guard seconds > 0 else { return nil }
+    return mach_absolute_time() + AVAudioTime.hostTime(forSeconds: seconds)
+  }
+
+  /// How many of a block's first frames were recorded before the deadline: by its capture time
+  /// when it has one, otherwise by the audio still owed since its engine started.
+  private func framesBeforeDeadline(
+    in input: AVAudioPCMBuffer, hostTime: UInt64?
+  ) -> AVAudioFrameCount {
+    let sampleRate = input.format.sampleRate
+    guard sampleRate > 0 else { return 0 }
+    defer {
+      secondsToDiscard = max(0, secondsToDiscard - Double(input.frameLength) / sampleRate)
+    }
+    if let hostTime {
+      guard let deadline = discardBeforeHostTime else { return 0 }
+      let before = CaptureRelease.cut(
+        release: deadline, blockStart: hostTime, frames: input.frameLength, sampleRate: sampleRate
+      ).keep
+      // Every later block was captured after the deadline.
+      if before < input.frameLength { discardBeforeHostTime = nil }
+      return before
+    }
+    return min(input.frameLength, AVAudioFrameCount((secondsToDiscard * sampleRate).rounded()))
   }
 
   /// An engine that stopped while it started, with or without a configuration change, is
@@ -368,7 +402,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
       interruptOnQueue()
       return
     }
-    discardAudioBeforeDeadline()
+    countDiscardFromEngineStart()
     restartIfStoppedOnQueue()
   }
 
@@ -393,7 +427,8 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     converter = nil
     recording = false
     discardDeadline = nil
-    samplesToDiscard = 0
+    discardBeforeHostTime = nil
+    secondsToDiscard = 0
     lastBlockEnd = nil
     if let pendingRelease {
       self.pendingRelease = nil
@@ -403,8 +438,14 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
 
   private func convert(_ input: AVAudioPCMBuffer, hostTime: UInt64?, generation: UUID) {
     guard captureGeneration == generation, recording, let converter else { return }
+    // Audio recorded before the deadline never reaches the converter.
+    let start = framesBeforeDeadline(in: input, hostTime: hostTime)
     guard let release = pendingRelease?.hostTime else {
-      if let data = converter.convert(input) { deliver(data) }
+      if let kept = input.frames(from: start, to: input.frameLength),
+        let data = converter.convert(kept)
+      {
+        deliver(data)
+      }
       lastBlockEnd = hostTime.map {
         $0 + AVAudioTime.hostTime(forSeconds: Double(input.frameLength) / input.format.sampleRate)
       }
@@ -413,8 +454,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     let cut = CaptureRelease.cut(
       release: release, blockStart: hostTime, frames: input.frameLength,
       sampleRate: input.format.sampleRate)
-    let kept = cut.keep == input.frameLength ? input : input.prefix(cut.keep)
-    let data = cut.keep > 0 ? kept.flatMap { converter.convert($0) } : nil
+    let data = input.frames(from: start, to: cut.keep).flatMap { converter.convert($0) }
     guard cut.reachesRelease else {
       if let data { deliver(data) }
       return
@@ -427,17 +467,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     stopOnQueue()
   }
 
-  private func deliver(_ data: Data) {
-    guard samplesToDiscard > 0 else {
-      onAudio?(data)
-      return
-    }
-    let samples = data.count / MemoryLayout<Int16>.size
-    let dropped = min(samples, samplesToDiscard)
-    samplesToDiscard -= dropped
-    guard dropped < samples else { return }
-    onAudio?(Data(data.dropFirst(dropped * MemoryLayout<Int16>.size)))
-  }
+  private func deliver(_ data: Data) { onAudio?(data) }
 }
 
 /// Where the release falls within a tap block. Pure, so the arithmetic is testable.
@@ -464,15 +494,35 @@ extension AVAudioPCMBuffer {
     guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(count, 1)) else {
       return nil
     }
-    let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
-    let source = UnsafeMutableAudioBufferListPointer(mutableAudioBufferList)
-    let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
-    for (from, to) in zip(source, destination) {
-      guard let fromData = from.mData, let toData = to.mData else { return nil }
-      toData.copyMemory(from: fromData, byteCount: Int(count) * bytesPerFrame)
-    }
-    copy.frameLength = count
+    guard copy.copyFrames(from: self, startingAt: 0, count: count) else { return nil }
     return copy
+  }
+
+  /// The frames from `start` up to `end`: the buffer itself when that is all of it, nil when
+  /// it is none of it.
+  func frames(from start: AVAudioFrameCount, to end: AVAudioFrameCount) -> AVAudioPCMBuffer? {
+    let end = min(end, frameLength)
+    guard start < end else { return nil }
+    guard start > 0 || end < frameLength else { return self }
+    guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: end - start),
+      copy.copyFrames(from: self, startingAt: start, count: end - start)
+    else { return nil }
+    return copy
+  }
+
+  private func copyFrames(
+    from source: AVAudioPCMBuffer, startingAt start: AVAudioFrameCount, count: AVAudioFrameCount
+  ) -> Bool {
+    let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+    let from = UnsafeMutableAudioBufferListPointer(source.mutableAudioBufferList)
+    let to = UnsafeMutableAudioBufferListPointer(mutableAudioBufferList)
+    for (input, output) in zip(from, to) {
+      guard let inputData = input.mData, let outputData = output.mData else { return false }
+      outputData.copyMemory(
+        from: inputData + Int(start) * bytesPerFrame, byteCount: Int(count) * bytesPerFrame)
+    }
+    frameLength = count
+    return true
   }
 }
 
