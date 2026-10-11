@@ -209,6 +209,76 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(fixture.engines[1].stopCount, 1)
   }
 
+  func testAnEngineThatStopsWhileItStartsIsReplaced() async throws {
+    for announced in [true, false] {
+      let fixture = AudioPreparationFixture { index in
+        FakeCaptureAudioEngine(stopsWhileStarting: index == 0, announcesStop: announced)
+      }
+      let service = fixture.service()
+      let interrupted = LockedFlag()
+      service.onCaptureInterrupted = { interrupted.set() }
+      let delivered = LockedBytes()
+      service.onAudio = { delivered.append($0) }
+      // Not prepared first, as a Bluetooth input never is.
+      _ = try await service.start()
+      try await waitUntil { fixture.engines.count == 2 && fixture.engines[1].startCount == 1 }
+      XCTAssertEqual(fixture.engines.count, 2, "announced: \(announced)")
+      XCTAssertFalse(interrupted.value, "announced: \(announced)")
+      fixture.engines.last?.emit(try makeBuffer(sampleRate: 48_000, frameCount: block))
+      _ = service.isWaitingForReleaseBlock
+      XCTAssertGreaterThan(samples(delivered), 0, "announced: \(announced)")
+      service.stop()
+    }
+  }
+
+  func testARestartAfterTheCueDeadlineKeepsTheNewEnginesAudio() async throws {
+    // Audio a fresh engine delivers when nothing is discarded.
+    let control = AudioPreparationFixture()
+    let controlService = control.service()
+    let controlDelivered = LockedBytes()
+    controlService.onAudio = { controlDelivered.append($0) }
+    _ = try await controlService.start()
+    control.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: mach_absolute_time())
+    // Read at the same point as below, before stop() flushes what the resampler holds.
+    _ = controlService.isWaitingForReleaseBlock
+    let expected = samples(controlDelivered)
+    controlService.stop()
+    XCTAssertGreaterThan(expected, 0)
+
+    let entered = expectation(description: "Replacement starting")
+    let gate = DispatchSemaphore(value: 0)
+    let fixture = AudioPreparationFixture { index in
+      index == 1 ? FakeCaptureAudioEngine(startEntered: entered, startGate: gate)
+        : FakeCaptureAudioEngine()
+    }
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+    _ = try await service.start(discardingAudioBefore: deadline)
+    guard ContinuousClock.now < deadline.advanced(by: .milliseconds(-500)) else {
+      gate.signal()
+      service.stop()
+      throw XCTSkip("Start took too long to restart before the deadline")
+    }
+    // The input changes before any audio arrives; the replacement starts after the deadline.
+    fixture.route = AudioInputRoute(deviceID: 2, sampleRate: 48_000, channels: 1)
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    await fulfillment(of: [entered], timeout: 2)
+    try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)))
+    gate.signal()
+    try await waitUntil { fixture.engines.count == 2 && fixture.engines[1].startCount == 1 }
+    fixture.engines[1].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: mach_absolute_time())
+    _ = service.isWaitingForReleaseBlock
+    XCTAssertGreaterThanOrEqual(samples(delivered), expected * 9 / 10)
+    service.stop()
+  }
+
   func testRunningEngineOnUnchangedRouteIsNotRestarted() async throws {
     let fixture = AudioPreparationFixture()
     let service = fixture.service()
@@ -790,6 +860,11 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   private let prepareGate: DispatchSemaphore?
   private let startEntered: XCTestExpectation?
   private let startGate: DispatchSemaphore?
+  /// Models an engine whose own start changes the device's format, as opening a Bluetooth
+  /// headset's microphone does: it stops, and AVAudioEngine posts a configuration change
+  /// unless `announcesStop` is false.
+  private let stopsWhileStarting: Bool
+  private let announcesStop: Bool
   private var preparations = 0
   private var starts = 0
   private var stops = 0
@@ -797,7 +872,8 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   init(
     prepareFails: Bool = false, startFails: Bool = false, prepareEntered: XCTestExpectation? = nil,
     prepareGate: DispatchSemaphore? = nil, startEntered: XCTestExpectation? = nil,
-    startGate: DispatchSemaphore? = nil
+    startGate: DispatchSemaphore? = nil, stopsWhileStarting: Bool = false,
+    announcesStop: Bool = true
   ) {
     self.prepareFails = prepareFails
     self.startFails = startFails
@@ -805,6 +881,8 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
     self.prepareGate = prepareGate
     self.startEntered = startEntered
     self.startGate = startGate
+    self.stopsWhileStarting = stopsWhileStarting
+    self.announcesStop = announcesStop
   }
 
   var notificationObject: AnyObject { object }
@@ -830,7 +908,11 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
     if startFails { throw AppError.microphoneUnavailable }
     lock.withLock {
       starts += 1
+      if stopsWhileStarting { stops += 1 }
       bufferHandler = onBuffer
+    }
+    if stopsWhileStarting, announcesStop {
+      NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: object)
     }
     return Self.steps
   }

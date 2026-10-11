@@ -33,6 +33,8 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   private var captureGeneration = UUID()
   private var restartToken: UUID?
   private var restartCount = 0
+  /// Audio recorded before this is dropped, keeping the start cue out of the transcript.
+  private var discardDeadline: ContinuousClock.Instant?
   private var samplesToDiscard = 0
   private var pendingRelease: PendingRelease?
   /// Host time just after the last block delivered whole.
@@ -269,8 +271,10 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     self.converter = converter
     do {
       do {
+        // Observed before it starts: a cold engine's own start can change the device's format,
+        // as opening a Bluetooth headset's microphone does, and stop it again.
+        observeConfigurationChanges(of: engine)
         report.engine = try startCapture(engine, checkCancellation: checkCancellation)
-        if configurationObserver == nil { observeConfigurationChanges(of: engine) }
       } catch let error where !(error is CancellationError) {
         report.engine = try startOnDefaultInput(
           declinesBluetooth: declinesBluetooth, checkCancellation: checkCancellation)
@@ -278,15 +282,27 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
         report.chosenInputFailed = route.pinned
       }
       recording = true
-      let started = ContinuousClock.now
-      // Capture begins about when start returns; drop samples recorded before the deadline.
-      let discarded = deadline.map { started.duration(to: $0) / .seconds(1) } ?? 0
-      samplesToDiscard = Int(max(0, discarded) * PCM16AudioConverter.sampleRate)
+      discardDeadline = deadline
+      discardAudioBeforeDeadline()
+      restartIfStoppedOnQueue()
       return report
     } catch {
       stopOnQueue()
       throw error
     }
+  }
+
+  /// Capture begins about when an engine's start returns, so samples up to the deadline are
+  /// dropped from then on. A replacement engine counts again from its own start.
+  private func discardAudioBeforeDeadline() {
+    let remaining = discardDeadline.map { ContinuousClock.now.duration(to: $0) / .seconds(1) } ?? 0
+    samplesToDiscard = Int(max(0, remaining) * PCM16AudioConverter.sampleRate)
+  }
+
+  /// An engine that stopped while it started, with or without a configuration change, is
+  /// handled like one: it is replaced.
+  private func restartIfStoppedOnQueue() {
+    if recording, engine?.isRunning == false { scheduleRestartOnQueue() }
   }
 
   private static let unreadableRoute = AudioInputRoute(
@@ -350,7 +366,10 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
       try startCapture(replacement, checkCancellation: {})
     } catch {
       interruptOnQueue()
+      return
     }
+    discardAudioBeforeDeadline()
+    restartIfStoppedOnQueue()
   }
 
   private func interruptOnQueue() {
@@ -373,6 +392,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     followsDefaultInput = false
     converter = nil
     recording = false
+    discardDeadline = nil
     samplesToDiscard = 0
     lastBlockEnd = nil
     if let pendingRelease {
