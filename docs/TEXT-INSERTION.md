@@ -16,7 +16,12 @@ Standard text-field, text-area, and combo-box roles are eligible for normal
 Paste without requiring accessibility mutation support. This distinction matters
 for terminals such as Ghostty, which expose text areas but do not allow AX text
 writes. Custom editors need an explicit editable flag and selection metadata on
-the same element. Explicit disabled/read-only flags reject the target, including
+the same element. An editable document, such as Mail's compose body, is a web area
+whose value is settable and whose selection is a text-marker range; it reports no
+editable flag or character selection. A read-only page's web area is not settable
+in WebKit or Chromium (probed on macOS 27.0 in a WebKit test window, Mail, Dia and
+Chrome), so it still copies. Its text can't be read by character range, so its
+Paste isn't verified. Explicit disabled/read-only flags reject the target, including
 a read-only focused child beneath an editable ancestor.
 
 Secure-field metadata is checked through every ancestor to the application root.
@@ -60,7 +65,9 @@ allocated by macOS while materializing a single representation.
 When a completed backup is available, an optional Accessibility read captures the
 original editor value and selected range immediately before Paste. The expected
 replacement uses UTF-16 offsets, rejects ranges splitting surrogate pairs, and
-compares actual UTF-16 units without Unicode normalization. Unavailable metadata,
+compares actual UTF-16 units without Unicode normalization. An empty field that
+answers its value with no value but a character count of 0 (Notes, Messages) reads
+as empty text; any other missing value is unavailable. Unavailable metadata,
 fields exceeding one million UTF-16 units, no-op replacements, or insufficient
 insertion time disable restoration without changing the normal Paste operation.
 A probe attempt, including an unsuccessful one, is followed by target revalidation.

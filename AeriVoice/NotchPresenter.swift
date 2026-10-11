@@ -357,27 +357,33 @@ private struct NotchContentView: View {
     case .processing, .cleaning, .inserting:
       PulsingEllipsisLabel(label: "Refining", isPresented: model.isPresented)
     case .success:
+      // The text landed; a warning (raw text after a failed cleanup) replaces the check mark.
       if let warning = model.state.warning {
-        Text(warning)
-          .font(NotchStyle.textFont)
-          .foregroundStyle(.orange)
-          .lineLimit(1)
+        WarningLine(message: warning)
       } else {
         Image(systemName: "checkmark")
           .font(.system(size: 14, weight: .semibold))
           .foregroundStyle(.green)
       }
     case .error(let message):
-      HStack(spacing: 6) {
-        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        Text(message)
-          .foregroundStyle(NotchStyle.normalText)
-          .lineLimit(1)
-          .truncationMode(.tail)
-      }
-      .font(NotchStyle.textFont)
+      WarningLine(message: message)
     case .idle: EmptyView()
     }
+  }
+}
+
+private struct WarningLine: View {
+  let message: String
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+      Text(message)
+        .foregroundStyle(NotchStyle.normalText)
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
+    .font(NotchStyle.textFont)
   }
 }
 

@@ -1,0 +1,16 @@
+AeriVoice 0.2.5
+
+A chosen microphone starts
+If the microphone picked in Settings > Dictation had a different sample rate or channel count from the Mac's default devices, every dictation ended at once with an error. AeriVoice now opens the microphone in its own format.
+
+Fallback to the default microphone
+If a chosen microphone is connected but still cannot be started, the dictation runs on the system default and the notch shows "Using the default microphone".
+
+Paste into a new Mail message
+Dictating into Mail's compose body copied the text instead of pasting it. It now pastes.
+
+Cleanup failures stay visible
+When cleanup fails and the raw transcript is pasted, the notch shows the warning for two seconds instead of the check mark.
+
+Clipboard restored sooner in an empty Notes or Messages field
+A paste into an empty field is now verified, so your clipboard comes back once the text has landed.

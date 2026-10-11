@@ -137,6 +137,33 @@ final class TextInsertionPolicyTests: XCTestCase {
     XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
   }
 
+  func testEditableWebDocumentNeedsSettableValueAndTextMarkerSelection() {
+    // Mail's compose body: a web area with a settable value and a text-marker selection.
+    var traits = TextTargetTraits(roles: ["AXWebArea"], secureTextStatus: .nonSecure)
+    traits.valueSettable = true
+    traits.supportedAttributes = ["AXSelectedTextMarkerRange"]
+    XCTAssertTrue(TextTargetPolicy.isTextTarget(traits))
+    // A read-only page's value is not settable.
+    traits.valueSettable = false
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.valueSettable = nil
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.valueSettable = true
+    traits.supportedAttributes = []
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    // A settable value alone does not make another role a text target.
+    traits.roles = [kAXGroupRole as String]
+    traits.supportedAttributes = ["AXSelectedTextMarkerRange"]
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    // Explicit read-only or secure flags still win.
+    traits.roles = ["AXWebArea"]
+    traits.editable = false
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.editable = nil
+    traits.secureTextStatus = .unknown
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+  }
+
   func testDefinitePolicyRejectionDoesNotActivateOrRetryAccessibility() async {
     let result: Result<Int, PasteBlockReason>? = await FocusedElementRecovery.resolve(
       targetIsCurrent: { true }, readFocus: { .failure(.secureField) },
@@ -164,6 +191,29 @@ final class TextInsertionPolicyTests: XCTestCase {
     XCTAssertEqual(
       SecureTextStatus.resolve(subrole: nil, result: .cannotComplete), .unknown)
     XCTAssertEqual(SecureTextStatus.resolve(subrole: nil, result: .failure), .unknown)
+  }
+
+  func testEmptyFieldWithoutValueReadsAsEmptyText() {
+    var countReads = 0
+    func resolve(_ value: CFTypeRef?, _ result: AXError, count: Int?) -> String? {
+      FieldText.resolve(value: value, result: result) {
+        countReads += 1
+        return count
+      }
+    }
+    // Notes and Messages: an empty field has no value but a count of 0.
+    XCTAssertEqual(resolve(nil, .noValue, count: 0), "")
+    // No value with text in the field, or with no count, is still unreadable.
+    XCTAssertNil(resolve(nil, .noValue, count: 44))
+    XCTAssertNil(resolve(nil, .noValue, count: nil))
+    XCTAssertEqual(countReads, 3)
+    // A readable value needs no count; a failed read is never empty text.
+    XCTAssertEqual(resolve("Text" as CFString, .success, count: nil), "Text")
+    XCTAssertEqual(resolve("" as CFString, .success, count: nil), "")
+    XCTAssertNil(resolve(42 as NSNumber, .success, count: 0))
+    XCTAssertNil(resolve(nil, .cannotComplete, count: 0))
+    XCTAssertNil(resolve(nil, .attributeUnsupported, count: 0))
+    XCTAssertEqual(countReads, 3)
   }
 
   func testTargetedPasteEventsCarryCommandVAndSyntheticMarker() throws {

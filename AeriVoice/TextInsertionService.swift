@@ -20,6 +20,18 @@ enum SecureTextStatus: Equatable {
   }
 }
 
+enum FieldText {
+  /// Notes and Messages answer an empty field's value with no value instead of an empty string,
+  /// while its character count reads 0. The count is read only then.
+  static func resolve(value: CFTypeRef?, result: AXError, characterCount: () -> Int?) -> String? {
+    switch result {
+    case .success: return value as? String
+    case .noValue: return characterCount() == 0 ? "" : nil
+    default: return nil
+    }
+  }
+}
+
 /// Paste eligibility is separate from whether accessibility can mutate text.
 struct TextTargetTraits: Equatable {
   var roles: Set<String> = []
@@ -27,18 +39,30 @@ struct TextTargetTraits: Equatable {
   var secureTextStatus: SecureTextStatus = .unknown
   var enabled: Bool?
   var editable: Bool?
+  /// Read only for a web area.
+  var valueSettable: Bool?
 }
 
 enum TextTargetPolicy {
   static let textRoles: Set<String> = [
     kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String,
   ]
+  static let webAreaRole = "AXWebArea"
+  static let textMarkerSelection = "AXSelectedTextMarkerRange"
 
   static func isTextTarget(_ traits: TextTargetTraits) -> Bool {
     guard traits.secureTextStatus == .nonSecure,
       traits.enabled != false, traits.editable != false
     else { return false }
     if !traits.roles.isDisjoint(with: textRoles) { return true }
+    // An editable document, such as Mail's compose body, is a web area with a settable value
+    // and a text-marker selection. A read-only page's value is not settable in WebKit or
+    // Chromium.
+    if traits.roles.contains(webAreaRole), traits.valueSettable == true,
+      traits.supportedAttributes.contains(textMarkerSelection)
+    {
+      return true
+    }
     return traits.editable == true
       && traits.supportedAttributes.contains(kAXSelectedTextAttribute as String)
       && traits.supportedAttributes.contains(kAXSelectedTextRangeAttribute as String)
@@ -457,12 +481,19 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
       length.int64Value > TextEditState.maximumUTF16Length
     { return nil }
     guard let selection = selectionRange(editor),
-      let value = stringAttribute(editor, kAXValueAttribute as CFString),
+      let value = textValue(editor),
       value.utf16.count <= TextEditState.maximumUTF16Length,
       let finalSelection = selectionRange(editor), selection == finalSelection, !shouldStop
     else { return nil }
     let state = TextEditState(text: value, selection: selection)
     return state.isValid ? state : nil
+  }
+
+  private func textValue(_ editor: AXUIElement) -> String? {
+    let (result, value) = readAttribute(editor, kAXValueAttribute as CFString)
+    return FieldText.resolve(value: value, result: result) {
+      (self.copyAttribute(editor, kAXNumberOfCharactersAttribute as CFString) as? NSNumber)?.intValue
+    }
   }
 
   private func selectionRange(_ editor: AXUIElement) -> NSRange? {
@@ -585,6 +616,18 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     if !TextTargetPolicy.textRoles.contains(role), editable.value == true {
       guard let names = attributeNames(element) else { return TextTargetTraits() }
       evidence.supportedAttributes = names
+    } else if role == TextTargetPolicy.webAreaRole {
+      // A failed query counts as not settable, so it only copies what was copied before; the
+      // walk reaches a text field in a page before the page's web area.
+      var settable = DarwinBoolean(false)
+      evidence.valueSettable =
+        setTimeout(on: element)
+        && AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+          == .success && settable.boolValue
+      if evidence.valueSettable == true {
+        guard let names = attributeNames(element) else { return TextTargetTraits() }
+        evidence.supportedAttributes = names
+      }
     }
     return evidence
   }

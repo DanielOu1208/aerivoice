@@ -16,6 +16,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   private let queue = DispatchQueue(label: "com.danielou.AeriVoice.audio", qos: .userInteractive)
   private let makeEngine: @Sendable (AudioInputRoute) -> CaptureAudioEngine
   private let currentRoute: @Sendable () -> AudioInputRoute?
+  private let defaultRoute: @Sendable () -> AudioInputRoute?
   private let restartDebounce: DispatchTimeInterval
   private let releaseBlockTimeout: DispatchTimeInterval
   private let lifecycleLock = NSLock()
@@ -23,6 +24,9 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   private var engine: CaptureAudioEngine?
   private var preparedRoute: AudioInputRoute?
   private var activeRoute: AudioInputRoute?
+  /// This recording's first start failed, so it follows the system default input from then
+  /// on instead of going back to the input that failed.
+  private var followsDefaultInput = false
   private var configurationObserver: NSObjectProtocol?
   private var converter: PCM16AudioConverter?
   private var recording = false
@@ -48,11 +52,13 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     currentRoute: @escaping @Sendable () -> AudioInputRoute? = {
       AudioInputRoute.current(preferredDeviceUID: AppPreferences.storedInputDeviceUID())
     },
+    defaultRoute: @escaping @Sendable () -> AudioInputRoute? = { AudioInputRoute.current() },
     restartDebounce: DispatchTimeInterval = AudioCaptureService.restartDebounce,
     releaseBlockTimeout: DispatchTimeInterval = AudioCaptureService.releaseBlockTimeout
   ) {
     self.makeEngine = makeEngine
     self.currentRoute = currentRoute
+    self.defaultRoute = defaultRoute
     self.restartDebounce = restartDebounce
     self.releaseBlockTimeout = releaseBlockTimeout
   }
@@ -248,8 +254,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     var report = AudioStartReport(usedPreparation: engine != nil)
     report.routeCheck = step.duration(to: clock.now)
     // An unreadable route still attempts the system default; the engine validates its input.
-    let route = preparedRoute ?? current
-      ?? AudioInputRoute(deviceID: AudioDeviceID(kAudioObjectUnknown), sampleRate: 0, channels: 0)
+    let route = preparedRoute ?? current ?? Self.unreadableRoute
     step = clock.now
     let engine = self.engine ?? makeEngine(route)
     if !report.usedPreparation { report.engineCreation = step.duration(to: clock.now) }
@@ -263,8 +268,15 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     }
     self.converter = converter
     do {
-      report.engine = try startCapture(engine, checkCancellation: checkCancellation)
-      if configurationObserver == nil { observeConfigurationChanges(of: engine) }
+      do {
+        report.engine = try startCapture(engine, checkCancellation: checkCancellation)
+        if configurationObserver == nil { observeConfigurationChanges(of: engine) }
+      } catch let error where !(error is CancellationError) {
+        report.engine = try startOnDefaultInput(
+          declinesBluetooth: declinesBluetooth, checkCancellation: checkCancellation)
+        report.retried = true
+        report.chosenInputFailed = route.pinned
+      }
       recording = true
       let started = ContinuousClock.now
       // Capture begins about when start returns; drop samples recorded before the deadline.
@@ -275,6 +287,26 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
       stopOnQueue()
       throw error
     }
+  }
+
+  private static let unreadableRoute = AudioInputRoute(
+    deviceID: AudioDeviceID(kAudioObjectUnknown), sampleRate: 0, channels: 0)
+
+  /// The second and last attempt of a start that failed: a new engine that follows the system
+  /// default input. It keeps a dictation going when the chosen microphone can't be opened, or
+  /// when an engine prepared earlier no longer fits the audio hardware.
+  private func startOnDefaultInput(
+    declinesBluetooth: Bool, checkCancellation: @Sendable () throws -> Void
+  ) throws -> CaptureEngineStartSteps {
+    let route = defaultRoute()
+    if declinesBluetooth, route?.isBluetooth != false { throw AudioStartDeclined() }
+    engine?.stop()
+    let replacement = makeEngine(route ?? Self.unreadableRoute)
+    engine = replacement
+    activeRoute = route
+    followsDefaultInput = true
+    observeConfigurationChanges(of: replacement)
+    return try startCapture(replacement, checkCancellation: checkCancellation)
   }
 
   @discardableResult
@@ -302,7 +334,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
   /// Rebuilds capture on the current input while the transcription session stays open.
   private func restartOnQueue() {
     guard let engine else { return }
-    let route = currentRoute()
+    let route = followsDefaultInput ? defaultRoute() : currentRoute()
     if engine.isRunning, route == activeRoute { return }
     guard restartCount < Self.maximumRestarts, let route else {
       interruptOnQueue()
@@ -338,6 +370,7 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
     engine = nil
     preparedRoute = nil
     activeRoute = nil
+    followsDefaultInput = false
     converter = nil
     recording = false
     samplesToDiscard = 0

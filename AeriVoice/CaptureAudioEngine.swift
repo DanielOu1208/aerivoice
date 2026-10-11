@@ -58,9 +58,12 @@ final class SystemCaptureAudioEngine: CaptureAudioEngine, @unchecked Sendable {
     var steps = CaptureEngineStartSteps()
     try checkCancellation()
     var started = clock.now
-    try validateInput()
+    let format = try validateInput()
     try checkCancellation()
-    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, when in
+    // The node took its own format from the system default devices when the engine was
+    // created. A chosen device can differ in rate or channels, and the engine refuses to
+    // start with a tap left in that earlier format, so the tap asks for the device's own.
+    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, when in
       onBuffer(buffer, when.isHostTimeValid ? when.hostTime : nil)
     }
     tapInstalled = true
@@ -71,7 +74,12 @@ final class SystemCaptureAudioEngine: CaptureAudioEngine, @unchecked Sendable {
     steps.prepare = started.duration(to: clock.now)
     try checkCancellation()
     started = clock.now
-    try engine.start()
+    do {
+      try engine.start()
+    } catch {
+      // The audio system's own error names a status code, not something a user can act on.
+      throw AppError.microphoneStartFailed
+    }
     steps.start = started.duration(to: clock.now)
     return steps
   }
@@ -84,12 +92,15 @@ final class SystemCaptureAudioEngine: CaptureAudioEngine, @unchecked Sendable {
     if engine.isRunning { engine.stop() }
   }
 
-  private func validateInput() throws {
+  /// The selected device's own format.
+  @discardableResult
+  private func validateInput() throws -> AVAudioFormat {
     guard !deviceSelectionFailed else { throw AppError.microphoneUnavailable }
     let format = engine.inputNode.inputFormat(forBus: 0)
     guard format.sampleRate > 0, format.channelCount > 0 else {
       throw AppError.microphoneUnavailable
     }
+    return format
   }
 }
 

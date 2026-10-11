@@ -682,6 +682,11 @@ struct AudioStartReport: Equatable, Sendable {
   /// Creating an engine; zero when a prepared one was reused.
   var engineCreation: Duration = .zero
   var engine = CaptureEngineStartSteps()
+  /// The first attempt failed and capture started on a new engine that follows the system
+  /// default input. `engine` then times that second attempt.
+  var retried = false
+  /// The failed attempt was on the microphone chosen in Settings, which is not the one in use.
+  var chosenInputFailed = false
 }
 
 /// A start asked to avoid Bluetooth found a Bluetooth input, or couldn't read the input.
@@ -908,6 +913,8 @@ struct NotchState: Equatable, Sendable {
 enum AppError: LocalizedError {
   case missingCredential(CredentialKind)
   case microphoneUnavailable
+  /// The microphone is there and allowed, and the audio system would not start it.
+  case microphoneStartFailed
   case connectionTimeout
   case finalizeTimeout
   case emptyTranscript
@@ -918,6 +925,7 @@ enum AppError: LocalizedError {
     case .missingCredential(let kind):
       "Add and verify \(kind.indefiniteArticle) \(kind.apiKeyLabel) in Settings."
     case .microphoneUnavailable: "Microphone access is required."
+    case .microphoneStartFailed: "The microphone could not start."
     case .connectionTimeout: "The transcription provider did not connect in time."
     case .finalizeTimeout: "The transcription provider did not finish in time."
     case .emptyTranscript: "No speech detected."

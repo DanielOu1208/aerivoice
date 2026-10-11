@@ -480,6 +480,12 @@ final class DictationCoordinator: ObservableObject {
       muteOutput()
     }
     if report.usedPreparation { benchmark.mark(.preparedAudioEngineUsed) }
+    if report.retried { benchmark.mark(.audioStartRetried) }
+    if report.chosenInputFailed {
+      // The dictation goes on; say that another microphone than the chosen one is listening.
+      captureWarning = "Using the default microphone"
+      state.warning = captureWarning
+    }
     capture.beganRecording()
     benchmark.mark(.captureStarted)
     beginLimitTimer(id: id)
@@ -579,6 +585,7 @@ final class DictationCoordinator: ObservableObject {
       benchmark.recordRawCharacters(raw.count)
       guard sessionID == id else { return }
       let finalText: String
+      var cleanupWarning: String?
       if skipsCleanup {
         finalText = raw
       } else {
@@ -605,8 +612,7 @@ final class DictationCoordinator: ObservableObject {
           guard sessionID == id else { return }
           finalText = raw
           benchmark.recordCleanupFallback(rawCharacters: raw.count, error: error)
-          state.warning = "Cleanup failed—used raw text"
-          notch.present(state: state)
+          cleanupWarning = "Cleanup failed—used raw text"
         }
         benchmark.mark(.cleanupFinished)
       }
@@ -634,11 +640,13 @@ final class DictationCoordinator: ObservableObject {
       switch result {
       case .pasteSent:
         benchmark.finish(.pasteSent, stage: nil, category: nil, httpStatus: nil)
-        phase = .success
+        // The text landed, but raw text from a failed cleanup shows its warning instead of the
+        // check mark.
+        state.warning = cleanupWarning
         state.phase = .success
-        state.warning = nil
+        phase = .success
         notch.present(state: state)
-        notch.hide(after: .milliseconds(700))
+        notch.hide(after: cleanupWarning == nil ? .milliseconds(700) : .seconds(2))
       case .failed(let warning):
         benchmark.finish(.failed, stage: .insertion, category: .unknown, httpStatus: nil)
         phase = .error(warning)

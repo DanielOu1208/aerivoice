@@ -177,6 +177,7 @@ extension DictationCoordinatorTests {
     private var releaseStops: [UInt64] = []
     private var holdsReleaseStop = false
     private var pendingReleaseStop: ReleaseStop?
+    private var chosenInputFailure = false
     private let frameCount: Int
     private let waitsForStartResolution: Bool
     /// Models a Bluetooth input: a start that declines Bluetooth throws.
@@ -217,6 +218,12 @@ extension DictationCoordinatorTests {
     var holdsReleaseStopUntilFinished: Bool {
       get { lock.withLock { holdsReleaseStop } }
       set { lock.withLock { holdsReleaseStop = newValue } }
+    }
+    /// When set, a start reports that the chosen microphone failed and the system default
+    /// input is recording instead.
+    var chosenInputFails: Bool {
+      get { lock.withLock { chosenInputFailure } }
+      set { lock.withLock { chosenInputFailure = newValue } }
     }
 
     func beginStop(atHostTime hostTime: UInt64) -> ReleaseStop {
@@ -280,11 +287,13 @@ extension DictationCoordinatorTests {
       } else {
         deliver()
       }
+      let fellBack = chosenInputFails
       return AudioStartReport(
         usedPreparation: reused, queueWait: .milliseconds(1), routeCheck: .milliseconds(2),
         engineCreation: reused ? .zero : .milliseconds(3),
         engine: CaptureEngineStartSteps(
-          tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6)))
+          tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6)),
+        retried: fellBack, chosenInputFailed: fellBack)
     }
 
     func resolveStart(usedPreparation: Bool = false) {
