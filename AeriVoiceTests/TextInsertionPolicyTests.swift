@@ -166,6 +166,29 @@ final class TextInsertionPolicyTests: XCTestCase {
     XCTAssertEqual(SecureTextStatus.resolve(subrole: nil, result: .failure), .unknown)
   }
 
+  func testEmptyFieldWithoutValueReadsAsEmptyText() {
+    var countReads = 0
+    func resolve(_ value: CFTypeRef?, _ result: AXError, count: Int?) -> String? {
+      FieldText.resolve(value: value, result: result) {
+        countReads += 1
+        return count
+      }
+    }
+    // Notes and Messages: an empty field has no value but a count of 0.
+    XCTAssertEqual(resolve(nil, .noValue, count: 0), "")
+    // No value with text in the field, or with no count, is still unreadable.
+    XCTAssertNil(resolve(nil, .noValue, count: 44))
+    XCTAssertNil(resolve(nil, .noValue, count: nil))
+    XCTAssertEqual(countReads, 3)
+    // A readable value needs no count; a failed read is never empty text.
+    XCTAssertEqual(resolve("Text" as CFString, .success, count: nil), "Text")
+    XCTAssertEqual(resolve("" as CFString, .success, count: nil), "")
+    XCTAssertNil(resolve(42 as NSNumber, .success, count: 0))
+    XCTAssertNil(resolve(nil, .cannotComplete, count: 0))
+    XCTAssertNil(resolve(nil, .attributeUnsupported, count: 0))
+    XCTAssertEqual(countReads, 3)
+  }
+
   func testTargetedPasteEventsCarryCommandVAndSyntheticMarker() throws {
     let events = try XCTUnwrap(TargetedPasteEvent.makePair())
 

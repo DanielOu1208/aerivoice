@@ -60,7 +60,9 @@ allocated by macOS while materializing a single representation.
 When a completed backup is available, an optional Accessibility read captures the
 original editor value and selected range immediately before Paste. The expected
 replacement uses UTF-16 offsets, rejects ranges splitting surrogate pairs, and
-compares actual UTF-16 units without Unicode normalization. Unavailable metadata,
+compares actual UTF-16 units without Unicode normalization. An empty field that
+answers its value with no value but a character count of 0 (Notes, Messages) reads
+as empty text; any other missing value is unavailable. Unavailable metadata,
 fields exceeding one million UTF-16 units, no-op replacements, or insufficient
 insertion time disable restoration without changing the normal Paste operation.
 A probe attempt, including an unsuccessful one, is followed by target revalidation.

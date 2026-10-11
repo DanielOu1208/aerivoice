@@ -20,6 +20,18 @@ enum SecureTextStatus: Equatable {
   }
 }
 
+enum FieldText {
+  /// Notes and Messages answer an empty field's value with no value instead of an empty string,
+  /// while its character count reads 0. The count is read only then.
+  static func resolve(value: CFTypeRef?, result: AXError, characterCount: () -> Int?) -> String? {
+    switch result {
+    case .success: return value as? String
+    case .noValue: return characterCount() == 0 ? "" : nil
+    default: return nil
+    }
+  }
+}
+
 /// Paste eligibility is separate from whether accessibility can mutate text.
 struct TextTargetTraits: Equatable {
   var roles: Set<String> = []
@@ -457,12 +469,19 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
       length.int64Value > TextEditState.maximumUTF16Length
     { return nil }
     guard let selection = selectionRange(editor),
-      let value = stringAttribute(editor, kAXValueAttribute as CFString),
+      let value = textValue(editor),
       value.utf16.count <= TextEditState.maximumUTF16Length,
       let finalSelection = selectionRange(editor), selection == finalSelection, !shouldStop
     else { return nil }
     let state = TextEditState(text: value, selection: selection)
     return state.isValid ? state : nil
+  }
+
+  private func textValue(_ editor: AXUIElement) -> String? {
+    let (result, value) = readAttribute(editor, kAXValueAttribute as CFString)
+    return FieldText.resolve(value: value, result: result) {
+      (self.copyAttribute(editor, kAXNumberOfCharactersAttribute as CFString) as? NSNumber)?.intValue
+    }
   }
 
   private func selectionRange(_ editor: AXUIElement) -> NSRange? {
