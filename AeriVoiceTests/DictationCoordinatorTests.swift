@@ -427,6 +427,9 @@ final class DictationCoordinatorTests: XCTestCase {
     XCTAssertEqual(fixture.benchmark.cleanupMetrics?.selectedProvider, "Test Provider")
     XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
     XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
+    XCTAssertEqual(fixture.notch.presentedStates.last?.phase, .success)
+    XCTAssertNil(fixture.notch.presentedStates.last?.warning)
+    XCTAssertEqual(fixture.notch.hideDelays.last, .milliseconds(700))
   }
 
   func testCleanupFailureRecordsRawFallbackAndStillInsertsRawText() async throws {
@@ -442,6 +445,10 @@ final class DictationCoordinatorTests: XCTestCase {
     XCTAssertEqual(fixture.benchmark.cleanupFallbackStatus, 503)
     XCTAssertEqual(fixture.benchmark.cleanedCharacters, 14)
     XCTAssertEqual(fixture.benchmark.terminalResult, .pasteSent)
+    // The paste succeeded, so the phase is success, but the warning replaces the check mark.
+    XCTAssertEqual(fixture.notch.presentedStates.last?.phase, .success)
+    XCTAssertEqual(fixture.notch.presentedStates.last?.warning, "Cleanup failed—used raw text")
+    XCTAssertEqual(fixture.notch.hideDelays.last, .seconds(2))
   }
 
   func testMissingCredentialRecordsReadinessFailure() async throws {
