@@ -39,18 +39,30 @@ struct TextTargetTraits: Equatable {
   var secureTextStatus: SecureTextStatus = .unknown
   var enabled: Bool?
   var editable: Bool?
+  /// Read only for a web area.
+  var valueSettable: Bool?
 }
 
 enum TextTargetPolicy {
   static let textRoles: Set<String> = [
     kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String,
   ]
+  static let webAreaRole = "AXWebArea"
+  static let textMarkerSelection = "AXSelectedTextMarkerRange"
 
   static func isTextTarget(_ traits: TextTargetTraits) -> Bool {
     guard traits.secureTextStatus == .nonSecure,
       traits.enabled != false, traits.editable != false
     else { return false }
     if !traits.roles.isDisjoint(with: textRoles) { return true }
+    // An editable document, such as Mail's compose body, is a web area with a settable value
+    // and a text-marker selection. A read-only page's value is not settable in WebKit or
+    // Chromium.
+    if traits.roles.contains(webAreaRole), traits.valueSettable == true,
+      traits.supportedAttributes.contains(textMarkerSelection)
+    {
+      return true
+    }
     return traits.editable == true
       && traits.supportedAttributes.contains(kAXSelectedTextAttribute as String)
       && traits.supportedAttributes.contains(kAXSelectedTextRangeAttribute as String)
@@ -604,6 +616,18 @@ private final class AccessibilityPasteWorker: @unchecked Sendable {
     if !TextTargetPolicy.textRoles.contains(role), editable.value == true {
       guard let names = attributeNames(element) else { return TextTargetTraits() }
       evidence.supportedAttributes = names
+    } else if role == TextTargetPolicy.webAreaRole {
+      // A failed query counts as not settable, so it only copies what was copied before; the
+      // walk reaches a text field in a page before the page's web area.
+      var settable = DarwinBoolean(false)
+      evidence.valueSettable =
+        setTimeout(on: element)
+        && AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+          == .success && settable.boolValue
+      if evidence.valueSettable == true {
+        guard let names = attributeNames(element) else { return TextTargetTraits() }
+        evidence.supportedAttributes = names
+      }
     }
     return evidence
   }

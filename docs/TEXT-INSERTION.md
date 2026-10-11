@@ -16,7 +16,12 @@ Standard text-field, text-area, and combo-box roles are eligible for normal
 Paste without requiring accessibility mutation support. This distinction matters
 for terminals such as Ghostty, which expose text areas but do not allow AX text
 writes. Custom editors need an explicit editable flag and selection metadata on
-the same element. Explicit disabled/read-only flags reject the target, including
+the same element. An editable document, such as Mail's compose body, is a web area
+whose value is settable and whose selection is a text-marker range; it reports no
+editable flag or character selection. A read-only page's web area is not settable
+in WebKit or Chromium (probed on macOS 27.0 in a WebKit test window, Mail, Dia and
+Chrome), so it still copies. Its text can't be read by character range, so its
+Paste isn't verified. Explicit disabled/read-only flags reject the target, including
 a read-only focused child beneath an editable ancestor.
 
 Secure-field metadata is checked through every ancestor to the application root.

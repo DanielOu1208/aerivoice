@@ -137,6 +137,33 @@ final class TextInsertionPolicyTests: XCTestCase {
     XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
   }
 
+  func testEditableWebDocumentNeedsSettableValueAndTextMarkerSelection() {
+    // Mail's compose body: a web area with a settable value and a text-marker selection.
+    var traits = TextTargetTraits(roles: ["AXWebArea"], secureTextStatus: .nonSecure)
+    traits.valueSettable = true
+    traits.supportedAttributes = ["AXSelectedTextMarkerRange"]
+    XCTAssertTrue(TextTargetPolicy.isTextTarget(traits))
+    // A read-only page's value is not settable.
+    traits.valueSettable = false
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.valueSettable = nil
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.valueSettable = true
+    traits.supportedAttributes = []
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    // A settable value alone does not make another role a text target.
+    traits.roles = [kAXGroupRole as String]
+    traits.supportedAttributes = ["AXSelectedTextMarkerRange"]
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    // Explicit read-only or secure flags still win.
+    traits.roles = ["AXWebArea"]
+    traits.editable = false
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+    traits.editable = nil
+    traits.secureTextStatus = .unknown
+    XCTAssertFalse(TextTargetPolicy.isTextTarget(traits))
+  }
+
   func testDefinitePolicyRejectionDoesNotActivateOrRetryAccessibility() async {
     let result: Result<Int, PasteBlockReason>? = await FocusedElementRecovery.resolve(
       targetIsCurrent: { true }, readFocus: { .failure(.secureField) },
