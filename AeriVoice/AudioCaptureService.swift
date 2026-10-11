@@ -280,8 +280,9 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
         observeConfigurationChanges(of: engine)
         report.engine = try startCapture(engine, checkCancellation: checkCancellation)
       } catch let error where !(error is CancellationError) {
-        report.engine = try startOnDefaultInput(
-          declinesBluetooth: declinesBluetooth, checkCancellation: checkCancellation)
+        try startOnDefaultInput(
+          timing: &report, declinesBluetooth: declinesBluetooth,
+          checkCancellation: checkCancellation)
         report.retried = true
         report.chosenInputFailed = route.pinned
       }
@@ -344,19 +345,27 @@ final class AudioCaptureService: AudioCapturing, @unchecked Sendable {
 
   /// The second and last attempt of a start that failed: a new engine that follows the system
   /// default input. It keeps a dictation going when the chosen microphone can't be opened, or
-  /// when an engine prepared earlier no longer fits the audio hardware.
+  /// when an engine prepared earlier no longer fits the audio hardware. Its route read, engine
+  /// creation and start replace the first attempt's timings, so the report times the attempt
+  /// that records.
   private func startOnDefaultInput(
-    declinesBluetooth: Bool, checkCancellation: @Sendable () throws -> Void
-  ) throws -> CaptureEngineStartSteps {
+    timing report: inout AudioStartReport, declinesBluetooth: Bool,
+    checkCancellation: @Sendable () throws -> Void
+  ) throws {
+    let clock = ContinuousClock()
+    var step = clock.now
     let route = defaultRoute()
     if declinesBluetooth, route?.isBluetooth != false { throw AudioStartDeclined() }
     engine?.stop()
+    report.routeCheck = step.duration(to: clock.now)
+    step = clock.now
     let replacement = makeEngine(route ?? Self.unreadableRoute)
+    report.engineCreation = step.duration(to: clock.now)
     engine = replacement
     activeRoute = route
     followsDefaultInput = true
     observeConfigurationChanges(of: replacement)
-    return try startCapture(replacement, checkCancellation: checkCancellation)
+    report.engine = try startCapture(replacement, checkCancellation: checkCancellation)
   }
 
   @discardableResult

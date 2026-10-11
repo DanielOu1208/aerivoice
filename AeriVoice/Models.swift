@@ -679,11 +679,11 @@ struct AudioStartReport: Equatable, Sendable {
   var queueWait: Duration = .zero
   /// Reading the input route, and discarding a preparation made for another route.
   var routeCheck: Duration = .zero
-  /// Creating an engine; zero when a prepared one was reused.
+  /// Creating an engine; zero when a prepared one was reused and started.
   var engineCreation: Duration = .zero
   var engine = CaptureEngineStartSteps()
   /// The first attempt failed and capture started on a new engine that follows the system
-  /// default input. `engine` then times that second attempt.
+  /// default input. `routeCheck`, `engineCreation` and `engine` then time that second attempt.
   var retried = false
   /// The failed attempt was on the microphone chosen in Settings, which is not the one in use.
   var chosenInputFailed = false

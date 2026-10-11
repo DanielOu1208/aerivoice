@@ -538,6 +538,30 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(fixture.engines[1].stopCount, 1)
   }
 
+  func testFallbackTimesTheReplacementEngine() async throws {
+    // Only the replacements are slow to create, so a creation time that long is theirs.
+    let fixture = AudioPreparationFixture { index in
+      if index.isMultiple(of: 2) { return FakeCaptureAudioEngine(startFails: true) }
+      Thread.sleep(forTimeInterval: 0.05)
+      return FakeCaptureAudioEngine()
+    }
+    let service = fixture.service()
+    await service.prepare()
+    let prepared = try await service.start()
+    XCTAssertTrue(prepared.usedPreparation)
+    XCTAssertTrue(prepared.retried)
+    XCTAssertGreaterThanOrEqual(prepared.engineCreation, .milliseconds(50))
+    XCTAssertEqual(prepared.engine, FakeCaptureAudioEngine.steps)
+    service.stop()
+
+    let cold = try await service.start()
+    XCTAssertFalse(cold.usedPreparation)
+    XCTAssertTrue(cold.retried)
+    XCTAssertGreaterThanOrEqual(cold.engineCreation, .milliseconds(50))
+    XCTAssertEqual(fixture.engines.count, 4)
+    service.stop()
+  }
+
   func testStartThatFailsOnBothAttemptsThrowsAndLeavesNothingBehind() async throws {
     let fixture = AudioPreparationFixture { index in FakeCaptureAudioEngine(startFails: index < 2) }
     fixture.route = AudioInputRoute(deviceID: 7, sampleRate: 48_000, channels: 2, pinned: true)

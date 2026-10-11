@@ -42,7 +42,7 @@ Turning logging off cancels the idle timer, stops signposts and new collection, 
 | `shortcutEventToActivation` | From the shortcut's key event until activation on the main thread; absent for menu starts and for presses that stop a dictation |
 | `audioQueueWait` | From the capture start request until the audio queue ran it; preparation still running delays it |
 | `audioRouteCheck` | Reading the input route, and discarding a preparation made for another route |
-| `audioEngineCreate` | Creating a fresh engine; absent when a prepared engine was used |
+| `audioEngineCreate` | Creating a fresh engine; absent when a prepared engine was used and started |
 | `audioTapInstall` | Checking the input format and installing the capture tap |
 | `audioEnginePrepare` | Preparing the engine again now that it has a tap |
 | `audioEngineStart` | Starting the hardware |
@@ -52,7 +52,7 @@ Turning logging off cancels the idle timer, stops signposts and new collection, 
 | `prePasteProbe` | The read before Paste that serves clipboard restoration |
 | `pasteRevalidation` | Checking the target again after that read |
 
-The audio steps are timed on the audio queue. When the microphone starts at the shortcut press, `audioEngineStartRequested` precedes `credentialReadStarted`; `earlyAudioStartDeclined` marks a Bluetooth or unreadable input that was started after the checks instead. `audioStartRetried` marks a capture start that failed and then worked on a new engine following the system default input; the audio steps then time that second attempt. When the audio system refuses the second attempt too, the record ends with `failureStage` `audioCapture` and `failureCategory` `microphoneStart`. `stopToOutputMS` ends at insertion completion; when `outcome.terminalResult` is `pasteSent`, that means Paste dispatch, **not confirmed destination consumption**. Interrupted recovery uses the last checkpoint time, not the next launch time.
+The audio steps are timed on the audio queue. When the microphone starts at the shortcut press, `audioEngineStartRequested` precedes `credentialReadStarted`; `earlyAudioStartDeclined` marks a Bluetooth or unreadable input that was started after the checks instead. `audioStartRetried` marks a capture start that failed and then worked on a new engine following the system default input; the audio steps then time that second attempt: `audioRouteCheck` reads the default input and stops the engine that failed, and `audioEngineCreate` is present even when the first attempt used a prepared engine. When the audio system refuses the second attempt too, the record ends with `failureStage` `audioCapture` and `failureCategory` `microphoneStart`. `stopToOutputMS` ends at insertion completion; when `outcome.terminalResult` is `pasteSent`, that means Paste dispatch, **not confirmed destination consumption**. Interrupted recovery uses the last checkpoint time, not the next launch time.
 
 A missing value is unavailable or not reached, never an assumed zero. Keep terminal outcomes and cleanup routing/fallback fields when analyzing timings. Do not compare successful insertion with clipboard-only or failed attempts as though they measured the same operation.
 

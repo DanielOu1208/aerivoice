@@ -288,9 +288,10 @@ extension DictationCoordinatorTests {
         deliver()
       }
       let fellBack = chosenInputFails
+      // Like the real service, a start that fell back created a fresh engine.
       return AudioStartReport(
         usedPreparation: reused, queueWait: .milliseconds(1), routeCheck: .milliseconds(2),
-        engineCreation: reused ? .zero : .milliseconds(3),
+        engineCreation: reused && !fellBack ? .zero : .milliseconds(3),
         engine: CaptureEngineStartSteps(
           tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6)),
         retried: fellBack, chosenInputFailed: fellBack)
