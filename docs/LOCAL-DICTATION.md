@@ -28,6 +28,8 @@ Hybrid remains the default: tap to toggle, or hold at least 350 ms and release t
 
 A modifier-only shortcut also begins ordinary key combinations, such as fn-Delete, fn-arrow or Right ⌘-C. When another key goes down while the shortcut's keys are held, within 350 ms of the press, the combination reaches the app and the dictation that press started ends without a message or cue. This is the one exception to Hold starting immediately: the microphone has already opened, so the dictation is stopped rather than delayed. A key pressed later never ends a dictation.
 
+A press while the last dictation is still refining or pasting starts nothing. The notch shows "Still finishing—press again when done" in place of Refining, and the error sound plays when sound cues are on; press again once the dictation has finished.
+
 **Distinguish left and right keys** optionally matches the exact Command and Option keys. Enabling it asks you to record the shortcut again; cancelling preserves the previous shortcut. Existing shortcuts continue accepting either side. Built-in trackpad gestures are deferred.
 
 ## Integration and versions

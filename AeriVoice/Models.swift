@@ -911,6 +911,8 @@ struct NotchState: Equatable, Sendable {
   var phase: DictationPhase
   var transcript = TranscriptSnapshot()
   var warning: String?
+  /// Shown in place of Refining, such as when a press arrives before the dictation finished.
+  var notice: String?
 }
 
 enum AppError: LocalizedError {

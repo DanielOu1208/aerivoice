@@ -216,6 +216,33 @@ final class DictationCoordinatorTests: XCTestCase {
     }
   }
 
+  func testAPressBeforeTheLastDictationFinishesIsRefusedVisibly() async throws {
+    let refusal = "Still finishing—press again when done"
+    let fixture = makeFixture(cleanupWaitsForCancellation: true, soundCues: true)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .cleaning }
+    for press in ["hold", "tap"] {
+      let cues = fixture.cuePlayer.playedCues.count
+      let presented = fixture.notch.presentedStates.count
+      if press == "hold" {
+        XCTAssertNil(fixture.coordinator.holdShortcutPressed())
+      } else {
+        XCTAssertNil(fixture.coordinator.shortcutPressed())
+      }
+      XCTAssertEqual(fixture.coordinator.phase, .cleaning, press)
+      XCTAssertEqual(Array(fixture.cuePlayer.playedCues.dropFirst(cues)), [.error], press)
+      let shown = fixture.notch.presentedStates.dropFirst(presented)
+      XCTAssertEqual(shown.count, 1, press)
+      XCTAssertEqual(shown.last?.phase, .cleaning, press)
+      XCTAssertEqual(shown.last?.notice, refusal, press)
+    }
+    // Nothing new was recorded.
+    XCTAssertEqual(fixture.audio.startRequestsDecliningBluetooth.count, 1)
+    fixture.coordinator.cancel()
+  }
+
   func testAShortcutChordAbortEndsTheDictationItsPressStartedWithoutATrace() async throws {
     for soundCues in [false, true] {
       let fixture = makeFixture(soundCues: soundCues)

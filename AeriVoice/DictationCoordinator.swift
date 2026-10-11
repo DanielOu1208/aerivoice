@@ -234,8 +234,20 @@ final class DictationCoordinator: ObservableObject {
       }
     case .recording:
       beginStopTask()
-    case .processing, .cleaning, .inserting: break
+    case .processing, .cleaning, .inserting:
+      refuseWhileFinishing()
     }
+  }
+
+  private static let stillFinishingNotice = "Still finishing—press again when done"
+
+  /// A press before the last dictation has finished starts nothing. It says so, with the error
+  /// cue and a line in place of Refining, so the next sentence isn't spoken into nothing.
+  private func refuseWhileFinishing() {
+    play(.error)
+    var refused = state
+    refused.notice = Self.stillFinishingNotice
+    notch.present(state: refused)
   }
 
   /// `eventAge` is how long ago the key event happened, recorded for a press that starts a
@@ -262,7 +274,9 @@ final class DictationCoordinator: ObservableObject {
       // This press takes over a dictation that is already running; it didn't start it.
       shortcutStartedGeneration = nil
       return capture.isOpen ? lifecycleGeneration : nil
-    case .processing, .cleaning, .inserting: return nil
+    case .processing, .cleaning, .inserting:
+      refuseWhileFinishing()
+      return nil
     }
   }
 
