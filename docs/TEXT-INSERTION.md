@@ -3,6 +3,10 @@
 ## Contract
 
 AeriVoice uses the same PID-targeted Command-V operation for every eligible app.
+Apps match Command-V by the character the key types, so the key sent is the one
+that types "v" with Command held in the current keyboard layout (47 on Dvorak, 8 on
+Turkish-F, the QWERTY V key on layouts such as Dvorak – QWERTY ⌘), falling back to
+the QWERTY V key when the layout has none.
 It does not write AXSelectedText or AXValue, search menus, maintain app-name
 exceptions, move focus, or activate a destination. Each transaction can dispatch
 at most once. There is no automatic retry after posting an event.
