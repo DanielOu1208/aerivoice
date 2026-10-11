@@ -24,7 +24,7 @@ The mode cannot change during dictation or while an Apple language download requ
 
 ## Activation shortcuts
 
-Hybrid remains the default: tap to toggle, or hold at least 350 ms and release to finish. Toggle starts and finishes on successive presses. Hold starts immediately and finishes on release, including quick taps. Modifier-only combinations finish when the first required modifier is released; ordinary-key combinations finish when that key is released. Escape cancels; a modifier-only shortcut still held after Escape starts again only once all its keys are up.
+Hybrid remains the default: tap to toggle, or hold at least 350 ms and release to finish. Toggle starts and finishes on successive presses. Hold starts immediately and finishes on release, including quick taps. Modifier-only combinations finish when the first required modifier is released; ordinary-key combinations finish when that key is released, and the key's repeats never reach the app before then, even when its modifiers are let go first. Escape cancels; a modifier-only shortcut still held after Escape starts again only once all its keys are up.
 
 A modifier-only shortcut also begins ordinary key combinations, such as fn-Delete, fn-arrow or Right ⌘-C. When another key goes down while the shortcut's keys are held, within 350 ms of the press, the combination reaches the app and the dictation that press started ends without a message or cue. This is the one exception to Hold starting immediately: the microphone has already opened, so the dictation is stopped rather than delayed. A key pressed later never ends a dictation.
 

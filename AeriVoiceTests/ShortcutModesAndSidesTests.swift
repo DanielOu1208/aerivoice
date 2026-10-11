@@ -152,6 +152,50 @@ final class ShortcutModesAndSidesTests: XCTestCase {
     XCTAssertEqual(aborts, [presses[1]])
   }
 
+  @MainActor
+  func testAKeyedShortcutOwnsItsKeyRepeatsUntilKeyUpWhenItsModifierIsReleasedFirst() {
+    for mode in [ShortcutActivationMode.hold, .hybrid] {
+      let monitor = GlobalShortcutMonitor()
+      monitor.configure(
+        definition: ShortcutDefinition(
+          keyCode: 49, modifiers: UInt(NSEvent.ModifierFlags.control.rawValue),
+          displayName: "⌃Space"),
+        activationMode: mode)
+      var presses: [UUID] = []
+      var releases: [UUID] = []
+      let press: (Duration?) -> UUID? = { _ in
+        presses.append(UUID())
+        return presses.last
+      }
+      monitor.onHoldPress = press
+      monitor.onPress = press
+      monitor.onHoldRelease = { releases.append($0) }
+
+      XCTAssertTrue(
+        monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: .maskControl, at: 0)),
+        "\(mode)")
+      // Control goes up first; Space is still held and repeats.
+      XCTAssertFalse(monitor.handle(type: .flagsChanged, event: flagsEvent([], at: 100)), "\(mode)")
+      for repeatAt: UInt64 in [500, 533] {
+        XCTAssertTrue(
+          monitor.handle(
+            type: .keyDown, event: keyEvent(49, down: true, flags: [], at: repeatAt, autorepeat: 1)),
+          "\(mode) repeat at \(repeatAt)")
+      }
+      XCTAssertTrue(
+        monitor.handle(type: .keyUp, event: keyEvent(49, down: false, flags: [], at: 600)), "\(mode)")
+      // Ownership ends at key-up: Space typed afterwards goes through.
+      XCTAssertFalse(
+        monitor.handle(
+          type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 700, autorepeat: 1)),
+        "\(mode)")
+      XCTAssertFalse(
+        monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 800)), "\(mode)")
+      XCTAssertEqual(presses.count, 1, "\(mode)")
+      XCTAssertEqual(releases, presses, "\(mode)")
+    }
+  }
+
   /// Event times are in nanoseconds; `ms` keeps the tests readable.
   private func flagsEvent(_ flags: CGEventFlags, at ms: UInt64) -> CGEvent {
     let event = CGEvent(source: nil)!

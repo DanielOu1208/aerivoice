@@ -306,10 +306,13 @@ final class GlobalShortcutMonitor {
       }
     }
     guard !definition.isModifierOnly else { return false }
+    let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+    // The pressed key's repeats are the shortcut's until its key-up, even after its modifiers
+    // are released first.
     if type == .keyDown, keyCode == definition.keyCode,
-      definition.matchesModifiers(event.flags)
+      definition.matchesModifiers(event.flags) || (isRepeat && pressTracker.isPressed)
     {
-      if event.getIntegerValueField(.keyboardEventAutorepeat) == 0, !pressTracker.isPressed {
+      if !isRepeat, !pressTracker.isPressed {
         press(at: event.timestamp, age: Self.age(of: event))
       }
       return true
