@@ -2,7 +2,7 @@
 
 ## Choosing an input
 
-Pick an input in **Settings → Dictation → Microphone**. **System default** follows the input selected in macOS and is the default. If a chosen microphone is disconnected, AeriVoice falls back to the system default.
+Pick an input in **Settings → Dictation → Microphone**. **System default** follows the input selected in macOS and is the default. If a chosen microphone is disconnected, AeriVoice falls back to the system default. If it is connected but cannot be started, the dictation runs on the system default instead and shows "Using the default microphone".
 
 Using AirPods or another Bluetooth headset as the microphone switches it to a lower-quality call profile, which also degrades playback. Choosing the built-in microphone avoids this.
 

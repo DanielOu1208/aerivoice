@@ -17,6 +17,8 @@ enum BenchmarkMilestone: String, Codable, CaseIterable, Sendable {
   /// includes them.
   case earlyAudioStartDeclined
   case preparedAudioEngineUsed
+  /// The first capture start failed and a second one, on the system default input, worked.
+  case audioStartRetried
   case captureStarted
   case sttConfigured
   case firstAudioCaptured
@@ -85,6 +87,7 @@ enum BenchmarkFailureCategory: String, Codable, Sendable {
   case targetChanged, modifiersHeld, shortcutUnavailable, clipboardChanged
   case missingCredential
   case microphonePermission
+  case microphoneStart
   case accessibilityPermission
   case connectionTimeout
   case finalizeTimeout
@@ -114,6 +117,7 @@ extension BenchmarkFailureCategory {
       switch error {
       case .missingCredential: return (.missingCredential, nil)
       case .microphoneUnavailable: return (.microphonePermission, nil)
+      case .microphoneStartFailed: return (.microphoneStart, nil)
       case .connectionTimeout: return (.connectionTimeout, nil)
       case .finalizeTimeout: return (.finalizeTimeout, nil)
       case .emptyTranscript: return (.emptyTranscript, nil)

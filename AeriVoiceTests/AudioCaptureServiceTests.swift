@@ -327,6 +327,86 @@ final class AudioCaptureServiceTests: XCTestCase {
     service.stop()
   }
 
+  func testChosenInputThatCannotStartFallsBackToTheSystemDefault() async throws {
+    let fixture = AudioPreparationFixture { index in FakeCaptureAudioEngine(startFails: index == 0) }
+    fixture.route = AudioInputRoute(deviceID: 7, sampleRate: 48_000, channels: 2, pinned: true)
+    let service = fixture.service()
+    let report = try await service.start()
+    XCTAssertTrue(report.retried)
+    XCTAssertTrue(report.chosenInputFailed)
+    XCTAssertEqual(fixture.requestedRoutes, [fixture.route, fixture.defaultRoute])
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(fixture.engines[1].startCount, 1)
+
+    // The recording stays on the default input instead of going back to the one that failed.
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[1].notificationObject)
+    try await Task.sleep(for: .milliseconds(60))
+    XCTAssertEqual(fixture.engines.count, 2)
+    fixture.defaultRoute = AudioInputRoute(deviceID: 2, sampleRate: 44_100, channels: 1)
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[1].notificationObject)
+    try await waitUntil { fixture.engines.count == 3 && fixture.engines[2].startCount == 1 }
+    XCTAssertEqual(fixture.requestedRoutes.last, fixture.defaultRoute)
+    service.stop()
+
+    // The next dictation tries the chosen input again.
+    _ = try await service.start()
+    XCTAssertEqual(fixture.requestedRoutes.last, fixture.route)
+    service.stop()
+  }
+
+  func testPreparedEngineThatCannotStartIsReplacedByAFreshOne() async throws {
+    let fixture = AudioPreparationFixture { index in FakeCaptureAudioEngine(startFails: index == 0) }
+    let service = fixture.service()
+    await service.prepare()
+    let report = try await service.start()
+    XCTAssertTrue(report.usedPreparation)
+    XCTAssertTrue(report.retried)
+    XCTAssertFalse(report.chosenInputFailed)
+    XCTAssertEqual(fixture.engines.count, 2)
+    XCTAssertEqual(fixture.engines[0].stopCount, 1)
+    XCTAssertEqual(fixture.engines[1].startCount, 1)
+    service.stop()
+    XCTAssertEqual(fixture.engines[1].stopCount, 1)
+  }
+
+  func testStartThatFailsOnBothAttemptsThrowsAndLeavesNothingBehind() async throws {
+    let fixture = AudioPreparationFixture { index in FakeCaptureAudioEngine(startFails: index < 2) }
+    fixture.route = AudioInputRoute(deviceID: 7, sampleRate: 48_000, channels: 2, pinned: true)
+    let service = fixture.service()
+    do {
+      _ = try await service.start()
+      XCTFail("A start succeeded with no engine able to start")
+    } catch AppError.microphoneUnavailable {}
+    XCTAssertEqual(fixture.engines.map(\.stopCount), [1, 1])
+
+    let report = try await service.start()
+    XCTAssertFalse(report.retried)
+    XCTAssertEqual(fixture.engines.count, 3)
+    service.stop()
+  }
+
+  func testFallbackDecliningBluetoothOpensNoHeadsetMicrophone() async throws {
+    let fixture = AudioPreparationFixture { index in FakeCaptureAudioEngine(startFails: index < 2) }
+    fixture.route = AudioInputRoute(deviceID: 7, sampleRate: 48_000, channels: 2, pinned: true)
+    fixture.defaultRoute = AudioInputRoute(
+      deviceID: 3, sampleRate: 24_000, channels: 1, isBluetooth: true)
+    let service = fixture.service()
+    do {
+      _ = try await service.start(discardingAudioBefore: nil, declinesBluetooth: true)
+      XCTFail("A start declining Bluetooth fell back to a Bluetooth input")
+    } catch is AudioStartDeclined {}
+    XCTAssertEqual(fixture.requestedRoutes, [fixture.route])
+
+    // Once the session's checks have passed, the headset may be opened.
+    let report = try await service.start()
+    XCTAssertTrue(report.chosenInputFailed)
+    XCTAssertEqual(fixture.requestedRoutes, [fixture.route, fixture.route, fixture.defaultRoute])
+    XCTAssertEqual(fixture.engines[2].startCount, 1)
+    service.stop()
+  }
+
   func testAudioRecordedBeforeTheDeadlineIsDropped() async throws {
     let fixture = AudioPreparationFixture()
     let service = fixture.service()
@@ -653,7 +733,9 @@ private final class AudioPreparationFixture: @unchecked Sendable {
   private let lock = NSLock()
   private var inputRoute: AudioInputRoute? = AudioInputRoute(
     deviceID: 1, sampleRate: 48_000, channels: 1)
+  private var systemDefaultRoute = AudioInputRoute(deviceID: 1, sampleRate: 48_000, channels: 1)
   private var created: [FakeCaptureAudioEngine] = []
+  private var requested: [AudioInputRoute] = []
   private let factory: @Sendable (Int) -> FakeCaptureAudioEngine
 
   init(
@@ -671,20 +753,29 @@ private final class AudioPreparationFixture: @unchecked Sendable {
     get { lock.withLock { inputRoute } }
     set { lock.withLock { inputRoute = newValue } }
   }
+  /// The system default input, which a start that failed falls back to.
+  var defaultRoute: AudioInputRoute {
+    get { lock.withLock { systemDefaultRoute } }
+    set { lock.withLock { systemDefaultRoute = newValue } }
+  }
   var engines: [FakeCaptureAudioEngine] { lock.withLock { created } }
+  /// The route each engine was created for, in order.
+  var requestedRoutes: [AudioInputRoute] { lock.withLock { requested } }
 
   func service(
     restartDebounce: DispatchTimeInterval = .milliseconds(10),
     releaseBlockTimeout: DispatchTimeInterval = .seconds(5)
   ) -> AudioCaptureService {
     AudioCaptureService(
-      makeEngine: { _ in
+      makeEngine: { route in
         self.lock.withLock {
           let engine = self.factory(self.created.count)
           self.created.append(engine)
+          self.requested.append(route)
           return engine
         }
-      }, currentRoute: { self.optionalRoute }, restartDebounce: restartDebounce,
+      }, currentRoute: { self.optionalRoute }, defaultRoute: { self.defaultRoute },
+      restartDebounce: restartDebounce,
       releaseBlockTimeout: releaseBlockTimeout)
   }
 }

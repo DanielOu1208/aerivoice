@@ -480,6 +480,12 @@ final class DictationCoordinator: ObservableObject {
       muteOutput()
     }
     if report.usedPreparation { benchmark.mark(.preparedAudioEngineUsed) }
+    if report.retried { benchmark.mark(.audioStartRetried) }
+    if report.chosenInputFailed {
+      // The dictation goes on; say that another microphone than the chosen one is listening.
+      captureWarning = "Using the default microphone"
+      state.warning = captureWarning
+    }
     capture.beganRecording()
     benchmark.mark(.captureStarted)
     beginLimitTimer(id: id)

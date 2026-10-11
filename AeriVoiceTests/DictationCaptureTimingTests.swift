@@ -92,6 +92,19 @@ extension DictationCoordinatorTests {
     XCTAssertNil(fixture.inserter.insertedText)
   }
 
+  func testChosenMicrophoneThatCannotStartIsNamedWhileTheDefaultRecords() async throws {
+    let fixture = makeFixture()
+    fixture.audio.chosenInputFails = true
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    XCTAssertEqual(fixture.notch.presentedStates.last?.warning, "Using the default microphone")
+    XCTAssertTrue(fixture.benchmark.milestones.contains(.audioStartRetried))
+
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .success }
+    XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
+  }
+
   func testInterruptedCaptureFinishesWithTheAudioAlreadyRecorded() async throws {
     let fixture = makeFixture()
     fixture.coordinator.toggle()
