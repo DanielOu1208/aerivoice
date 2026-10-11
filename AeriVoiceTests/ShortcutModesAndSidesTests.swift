@@ -196,6 +196,61 @@ final class ShortcutModesAndSidesTests: XCTestCase {
     }
   }
 
+  @MainActor
+  func testAFreshPressOfTheShortcutKeyEndsAPressWhoseKeyUpWasMissed() {
+    for mode in [ShortcutActivationMode.hold, .hybrid, .toggle] {
+      for again in ["key alone", "shortcut"] {
+        let monitor = GlobalShortcutMonitor()
+        monitor.configure(
+          definition: ShortcutDefinition(
+            keyCode: 49, modifiers: UInt(NSEvent.ModifierFlags.control.rawValue),
+            displayName: "⌃Space"),
+          activationMode: mode)
+        var presses: [UUID] = []
+        var releases: [UUID] = []
+        let press: (Duration?) -> UUID? = { _ in
+          presses.append(UUID())
+          return presses.last
+        }
+        monitor.onHoldPress = press
+        monitor.onPress = press
+        monitor.onHoldRelease = { releases.append($0) }
+        let label = "\(mode), then the \(again)"
+
+        XCTAssertTrue(
+          monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: .maskControl, at: 0)),
+          label)
+        // Its key-up never arrives, as while secure input hides keys from event taps.
+        if again == "key alone" {
+          // A plain Space goes to the app, repeats and all; the missed release ends the press.
+          XCTAssertFalse(
+            monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 1_000)),
+            label)
+          XCTAssertFalse(
+            monitor.handle(
+              type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 1_500, autorepeat: 1)),
+            label)
+          XCTAssertFalse(
+            monitor.handle(type: .keyUp, event: keyEvent(49, down: false, flags: [], at: 1_600)),
+            label)
+          XCTAssertEqual(presses.count, 1, label)
+          XCTAssertEqual(releases, mode == .toggle ? [] : presses, label)
+        } else {
+          // The shortcut again is the next press, as usual.
+          XCTAssertTrue(
+            monitor.handle(
+              type: .keyDown, event: keyEvent(49, down: true, flags: .maskControl, at: 1_000)),
+            label)
+          XCTAssertTrue(
+            monitor.handle(type: .keyUp, event: keyEvent(49, down: false, flags: [], at: 1_500)),
+            label)
+          XCTAssertEqual(presses.count, 2, label)
+          XCTAssertEqual(releases, mode == .toggle ? [] : Array(presses.dropFirst()), label)
+        }
+      }
+    }
+  }
+
   /// Event times are in nanoseconds; `ms` keeps the tests readable.
   private func flagsEvent(_ flags: CGEventFlags, at ms: UInt64) -> CGEvent {
     let event = CGEvent(source: nil)!

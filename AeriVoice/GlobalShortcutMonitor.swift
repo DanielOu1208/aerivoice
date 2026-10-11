@@ -307,6 +307,17 @@ final class GlobalShortcutMonitor {
     }
     guard !definition.isModifierOnly else { return false }
     let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+    if type == .keyDown, keyCode == definition.keyCode, !isRepeat, pressTracker.isPressed {
+      // A fresh press of the key means the last press's key-up was missed, as when secure
+      // input hides keys from event taps. The shortcut again is simply the next press; the
+      // key alone ends the last press as its key-up would have, and goes to the app.
+      if definition.matchesModifiers(event.flags) {
+        pressTracker.reset()
+        heldLifecycleGeneration = nil
+      } else {
+        release(at: event.timestamp)
+      }
+    }
     // The pressed key's repeats are the shortcut's until its key-up, even after its modifiers
     // are released first.
     if type == .keyDown, keyCode == definition.keyCode,
