@@ -190,6 +190,24 @@ struct CleanupSettingsPage: View {
 
   var body: some View {
     Form {
+      Section {
+        SettingsControlRow(
+          title: "AI cleanup",
+          message:
+            "When on, fixes the transcript with the style and model below before pasting. When off, pastes it as transcribed and sends it to no cleanup provider."
+        ) {
+          Toggle(
+            "AI cleanup",
+            isOn: Binding(
+              get: { preferences.cleanupEnabled && !preferences.offlineMode },
+              set: { preferences.cleanupEnabled = $0 })
+          )
+          .disabled(model.coordinator.canCancel)
+        }
+        if !preferences.cleanupEnabled && !preferences.offlineMode {
+          Text(cleanupOffNote).font(.caption).foregroundStyle(.secondary)
+        }
+      }
       Section("Cleanup style") {
         SettingsControlRow(title: "Style", message: preferences.cleanupMode.summary) {
           CleanupStylePicker(selection: $preferences.cleanupMode)
@@ -201,6 +219,7 @@ struct CleanupSettingsPage: View {
           CleanupInstructionsEditor(preferences: preferences)
         }
       }
+      .disabled(!preferences.cleanupEnabled)
       Section("Provider") {
         ProviderSelectionRow(
           model: model, kind: preferences.cleanupProvider.credentialKind, showsProviderIcon: false
@@ -280,6 +299,7 @@ struct CleanupSettingsPage: View {
           )
         }
       }
+      .disabled(!preferences.cleanupEnabled)
     }
     .disabled(preferences.offlineMode || model.changingOfflineMode)
     .safeAreaInset(edge: .top) {
@@ -299,6 +319,13 @@ struct CleanupSettingsPage: View {
         await catalog.refresh()
       }
     }
+  }
+
+  private var cleanupOffNote: String {
+    let note = "Transcripts paste as transcribed and go to no cleanup provider."
+    return preferences.effectiveTranscriptionProvider == .soniox
+      ? note + " Soniox writes spoken punctuation and commands, such as \u{201C}period\u{201D} and \u{201C}new line\u{201D}, as words."
+      : note
   }
 
   private var selectedModelName: String {

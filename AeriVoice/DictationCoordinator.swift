@@ -59,6 +59,8 @@ final class DictationCoordinator: ObservableObject {
   private var targetCaptureTask: Task<TextInsertionTarget?, Never>?
   private var stopTaskID: UUID?
   private var drainTaskID: UUID?
+  /// The dictation a shortcut press started, as opposed to one a hold press took over.
+  private var shortcutStartedGeneration: UUID?
   var onSuccessfulSessionCompletion: (() -> Void)?
   /// Closed before an updater restart; all start paths converge on toggle().
   var acceptsNewSessions = true
@@ -158,7 +160,7 @@ final class DictationCoordinator: ObservableObject {
     let credentials = self.credentials
     let audio = self.audio
     let transcriptionKind = preferences.effectiveTranscriptionProvider.credentialKind
-    let cleanupKind: CredentialKind? = preferences.offlineMode ? nil : preferences.cleanupProvider.credentialKind
+    let cleanupKind: CredentialKind? = preferences.skipsCleanup ? nil : preferences.cleanupProvider.credentialKind
     let runtime = runtimeDiagnostics
     let preparationToken = runtime?.beginPreparation()
     let work = observeWork("launchPreparation")
@@ -199,7 +201,7 @@ final class DictationCoordinator: ObservableObject {
     case .idle, .success, .error:
       guard acceptsNewSessions, startTask == nil else { return }
       let transcriptionConfiguration = preferences.transcriptionConfiguration
-      skipsCleanup = preferences.offlineMode
+      skipsCleanup = preferences.skipsCleanup
       let cleanupConfiguration = preferences.cleanupConfiguration
       let cleanupMode = preferences.cleanupMode
       benchmark.begin(
@@ -232,8 +234,20 @@ final class DictationCoordinator: ObservableObject {
       }
     case .recording:
       beginStopTask()
-    case .processing, .cleaning, .inserting: break
+    case .processing, .cleaning, .inserting:
+      refuseWhileFinishing()
     }
+  }
+
+  private static let stillFinishingNotice = "Still finishing—press again when done"
+
+  /// A press before the last dictation has finished starts nothing. It says so, with the error
+  /// cue and a line in place of Refining, so the next sentence isn't spoken into nothing.
+  private func refuseWhileFinishing() {
+    play(.error)
+    var refused = state
+    refused.notice = Self.stillFinishingNotice
+    notch.present(state: refused)
   }
 
   /// `eventAge` is how long ago the key event happened, recorded for a press that starts a
@@ -249,15 +263,32 @@ final class DictationCoordinator: ObservableObject {
     toggle()
     guard wasStartable, phase == .starting else { return nil }
     if let eventAge { benchmark.recordStep(.shortcutEventToActivation, eventAge) }
+    shortcutStartedGeneration = lifecycleGeneration
     return lifecycleGeneration
   }
 
   func holdShortcutPressed(eventAge: Duration? = nil) -> UUID? {
     switch phase {
     case .idle, .success, .error: return shortcutPressed(eventAge: eventAge)
-    case .starting, .recording: return capture.isOpen ? lifecycleGeneration : nil
-    case .processing, .cleaning, .inserting: return nil
+    case .starting, .recording:
+      // This press takes over a dictation that is already running; it didn't start it.
+      shortcutStartedGeneration = nil
+      return capture.isOpen ? lifecycleGeneration : nil
+    case .processing, .cleaning, .inserting:
+      refuseWhileFinishing()
+      return nil
     }
+  }
+
+  /// The shortcut press that started this dictation began an ordinary key combination
+  /// instead, such as fn-Delete with an fn shortcut: the dictation ends without a notch,
+  /// cue or Cancelled message. A dictation the press only took over is left alone.
+  func abortShortcutActivation(lifecycleGeneration: UUID) {
+    guard self.lifecycleGeneration == lifecycleGeneration,
+      shortcutStartedGeneration == lifecycleGeneration,
+      phase == .starting || phase == .recording
+    else { return }
+    cancel(preparingNext: true, silently: true)
   }
 
   func finishForUpdateRestart() async {
@@ -299,7 +330,8 @@ final class DictationCoordinator: ObservableObject {
   /// engine, prepared or not.
   func cancelForSuspension() { cancel(preparingNext: false) }
 
-  private func cancel(preparingNext: Bool) {
+  /// `silently` ends the dictation without the Cancelled message: the notch just goes.
+  private func cancel(preparingNext: Bool, silently: Bool = false) {
     invalidatePreparedConnection()
     inserter.invalidatePendingRestoration()
     if !preparingNext {
@@ -336,6 +368,12 @@ final class DictationCoordinator: ObservableObject {
     runtimeDiagnostics?.sessionCleanupFinished()
     activeTranscriptionConfiguration = nil
     activeCleanupSettings = nil
+    guard !silently else {
+      phase = .idle
+      state = NotchState(phase: .idle)
+      notch.hide(after: .zero)
+      return
+    }
     phase = .error("Cancelled")
     state.phase = phase
     state.warning = nil
@@ -428,7 +466,7 @@ final class DictationCoordinator: ObservableObject {
       }
     }
 
-    state = NotchState(phase: .starting)
+    state = NotchState(phase: .starting, skipsCleanup: skipsCleanup)
     notch.present(state: state)
     let id = DictationSessionID()
     sessionID = id
@@ -876,7 +914,29 @@ final class DictationCoordinator: ObservableObject {
     transcriber.cancel()
     stopAudioIfNeeded(playCue: false)
     play(.error)
-    showTerminal(error.localizedDescription, id: id, delay: .seconds(2))
+    if copyTranscriptShown(after: stage) {
+      state.warning = Self.transcriptCutOffMessage
+      showTerminal(Self.transcriptCutOffMessage, id: id, delay: .seconds(2))
+    } else {
+      showTerminal(error.localizedDescription, id: id, delay: .seconds(2))
+    }
+  }
+
+  private static let transcriptCutOffMessage = "Transcription was cut off—copied what was heard"
+
+  /// A transcription that fails keeps the text the notch already showed. It's copied, not
+  /// pasted, because it may stop mid-sentence. A microphone failure shows its own message.
+  private func copyTranscriptShown(after stage: BenchmarkFailureStage) -> Bool {
+    switch stage {
+    case .sttSetup, .sttStream, .sttFinalize: break
+    case .readiness, .audioCapture, .cleanup, .insertion, .lifecycle: return false
+    }
+    switch phase {
+    case .starting, .recording, .processing: break
+    case .idle, .cleaning, .inserting, .success, .error: return false
+    }
+    let text = state.transcript.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !text.isEmpty && inserter.copy(text)
   }
 
   private func showTerminal(_ message: String, id: DictationSessionID, delay: Duration) {

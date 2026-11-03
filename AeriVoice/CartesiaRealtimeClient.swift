@@ -141,6 +141,11 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
   private var audioBudget = CartesiaRealtimeClient.burstNanoseconds
   private var budgetRefilledAt: ContinuousClock.Instant?
   private var isFinishing = false
+  /// `finalize` and `close` have been written. Only then is a normal close the end of the
+  /// transcript, rather than a connection that ended before the server got them.
+  private var endOfAudioSent = false
+  /// A normal close that arrived while they were still being written; the writes decide.
+  private var closedBeforeEndOfAudio = false
   /// The connection whose handshake is still in flight; only that one can time out.
   private var openingConnection: UUID?
   private var timedOutConnection: UUID?
@@ -269,6 +274,11 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
           // session: the server sends `done` once all audio has been transcribed.
           try await transport.send(.string("finalize"))
           try await transport.send(.string("close"))
+          guard let self, self.generation == finishGeneration, self.transport === transport,
+            self.finishContinuation != nil
+          else { return }
+          self.endOfAudioSent = true
+          if self.closedBeforeEndOfAudio { self.completeAfterNormalClose() }
         } catch {
           guard let self, self.generation == finishGeneration, self.transport === transport else {
             return
@@ -304,6 +314,8 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
     audioBudget = Self.burstNanoseconds
     budgetRefilledAt = nil
     isFinishing = false
+    endOfAudioSent = false
+    closedBeforeEndOfAudio = false
     openingConnection = nil
     timedOutConnection = nil
   }
@@ -324,8 +336,11 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
       }
       // The server closes normally only after it has transcribed everything it was sent.
       if (error as? CartesiaTransportError)?.isNormalClosure == true {
-        logger.info("Cartesia closed before done; using the transcript received so far")
-        complete(transcriptResult())
+        if endOfAudioSent {
+          completeAfterNormalClose()
+        } else {
+          closedBeforeEndOfAudio = true
+        }
       } else {
         complete(.failure(error))
       }
@@ -363,6 +378,11 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
     }
   }
 
+  private func completeAfterNormalClose() {
+    logger.info("Cartesia closed before done; using the transcript received so far")
+    complete(transcriptResult())
+  }
+
   private func transcriptResult() -> Result<String, Error> {
     let text = snapshot.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
     return text.isEmpty ? .failure(AppError.emptyTranscript) : .success(text)
@@ -372,6 +392,8 @@ final class CartesiaRealtimeClient: RealtimeTranscribing {
     guard let continuation = finishContinuation else { return }
     finishContinuation = nil
     isFinishing = false
+    endOfAudioSent = false
+    closedBeforeEndOfAudio = false
     finalizationTimeoutTask?.cancel()
     finalizationTimeoutTask = nil
     receiveTask?.cancel()

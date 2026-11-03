@@ -78,7 +78,10 @@ and the hardware start, plus the delay from the shortcut's key event to activati
 [Performance logging](PERFORMANCE-LOGGING.md)). `scripts/summarize-latency.swift` prints
 them split by prepared and fresh engines.
 
-`preparedAudioEngineUsed` is present when preparation was reused. For new records
+`preparedAudioEngineUsed` is present when preparation was reused. A start that failed
+and fell back to the system default input (`audioStartRetried`) keeps that milestone
+from its first attempt, and its steps, engine creation included, time the replacement
+engine. For new records
 with both `audioEngineStartRequested` and `captureStarted`, its absence means a
 fresh engine was used. Failed or cancelled startups cannot establish reuse. Older
 records lack these new milestones and cannot establish preparation status.

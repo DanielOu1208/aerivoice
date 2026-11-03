@@ -164,6 +164,9 @@ final class AppModel: ObservableObject {
     shortcutMonitor.onHoldRelease = { [weak coordinator] lifecycleGeneration in
       coordinator?.finishHeldDictation(lifecycleGeneration: lifecycleGeneration)
     }
+    shortcutMonitor.onAbort = { [weak coordinator] lifecycleGeneration in
+      coordinator?.abortShortcutActivation(lifecycleGeneration: lifecycleGeneration)
+    }
     shortcutMonitor.onCancel = { [weak coordinator] in coordinator?.cancel() }
     shortcutMonitor.shouldCancel = { [weak coordinator] in coordinator?.canCancel == true }
     preferences.$shortcut.combineLatest(preferences.$shortcutActivationMode)

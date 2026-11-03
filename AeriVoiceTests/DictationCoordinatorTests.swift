@@ -153,8 +153,9 @@ final class DictationCoordinatorTests: XCTestCase {
   }
 
   func testNoSpeechAndFinalizationFailureDiscardClipboardBackup() async throws {
+    // Nothing was shown before either failure, so nothing is recovered.
     for error in [AppError.emptyTranscript, AppError.connectionTimeout] {
-      let fixture = makeFixture()
+      let fixture = makeFixture(provisionalText: "")
       fixture.transcriber.finishError = error
       fixture.coordinator.toggle()
       try await waitUntil { fixture.coordinator.phase == .recording }
@@ -167,8 +168,144 @@ final class DictationCoordinatorTests: XCTestCase {
       XCTAssertEqual(fixture.inserter.invalidations, initial + 1)
       XCTAssertEqual(fixture.inserter.captureCount, 1)
       XCTAssertNil(fixture.inserter.insertedText)
+      XCTAssertNil(fixture.inserter.copiedText)
       fixture.coordinator.cancel()
     }
+  }
+
+  func testStreamFailureKeepsTheTranscriptAlreadyShown() async throws {
+    enum Failure: CaseIterable { case streamError, confirmedThenStreamError, finalizeTimeout }
+    let recovered = "Transcription was cut off—copied what was heard"
+    for failure in Failure.allCases {
+      let fixture = makeFixture(provisionalText: "Send the report by Friday")
+      fixture.coordinator.toggle()
+      try await waitUntil {
+        fixture.coordinator.phase == .recording && !fixture.transcriber.sentFrames.isEmpty
+      }
+      // FakeTranscriber.send shows the provisional text with the first frame.
+      var shown = "Send the report by Friday"
+      switch failure {
+      case .streamError:
+        fixture.transcriber.emitError(AppError.provider("socket closed"))
+      case .confirmedThenStreamError:
+        shown = "Kept"
+        fixture.transcriber.onTranscript?(
+          RealtimeTranscriptUpdate(
+            snapshot: TranscriptSnapshot(confirmed: "Kept"), hasFinalText: true,
+            finalAudioProcessedMS: 100, totalAudioProcessedMS: 100))
+        fixture.transcriber.emitError(AppError.provider("socket closed"))
+      case .finalizeTimeout:
+        fixture.transcriber.finishError = .finalizeTimeout
+        fixture.coordinator.toggle()
+      }
+      XCTAssertTrue(
+        fixture.notch.presentedStates.contains { $0.transcript.displayText == shown }, "\(failure)")
+      try await waitUntil { fixture.inserter.copiedText != nil }
+      // Copied, not pasted: the text may stop mid-sentence.
+      XCTAssertEqual(fixture.inserter.copiedText, shown, "\(failure)")
+      XCTAssertNil(fixture.inserter.insertedText, "\(failure)")
+      try await waitUntil {
+        if case .error = fixture.coordinator.phase { return true }
+        return false
+      }
+      XCTAssertEqual(fixture.coordinator.phase, .error(recovered), "\(failure)")
+      XCTAssertEqual(fixture.notch.presentedStates.last?.phase, .error(recovered), "\(failure)")
+      XCTAssertEqual(fixture.notch.presentedStates.last?.warning, recovered, "\(failure)")
+      XCTAssertEqual(fixture.benchmark.terminalResult, .failed, "\(failure)")
+      fixture.coordinator.cancel()
+    }
+  }
+
+  func testAPressBeforeTheLastDictationFinishesIsRefusedVisibly() async throws {
+    let refusal = "Still finishing—press again when done"
+    let fixture = makeFixture(cleanupWaitsForCancellation: true, soundCues: true)
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .cleaning }
+    for press in ["hold", "tap"] {
+      let cues = fixture.cuePlayer.playedCues.count
+      let presented = fixture.notch.presentedStates.count
+      if press == "hold" {
+        XCTAssertNil(fixture.coordinator.holdShortcutPressed())
+      } else {
+        XCTAssertNil(fixture.coordinator.shortcutPressed())
+      }
+      XCTAssertEqual(fixture.coordinator.phase, .cleaning, press)
+      XCTAssertEqual(Array(fixture.cuePlayer.playedCues.dropFirst(cues)), [.error], press)
+      let shown = fixture.notch.presentedStates.dropFirst(presented)
+      XCTAssertEqual(shown.count, 1, press)
+      XCTAssertEqual(shown.last?.phase, .cleaning, press)
+      XCTAssertEqual(shown.last?.notice, refusal, press)
+    }
+    // Nothing new was recorded.
+    XCTAssertEqual(fixture.audio.startRequestsDecliningBluetooth.count, 1)
+    fixture.coordinator.cancel()
+  }
+
+  func testAShortcutChordAbortEndsTheDictationItsPressStartedWithoutATrace() async throws {
+    for soundCues in [false, true] {
+      let fixture = makeFixture(soundCues: soundCues)
+      fixture.preferences.muteOutput = true
+      let generation = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+      try await waitUntil { fixture.coordinator.phase == .recording }
+      let presented = fixture.notch.presentedStates.count
+      let cues = fixture.cuePlayer.playedCues
+      fixture.coordinator.abortShortcutActivation(lifecycleGeneration: generation)
+      XCTAssertEqual(fixture.coordinator.phase, .idle)
+      XCTAssertTrue(fixture.audio.didStop)
+      XCTAssertTrue(fixture.transcriber.didCancel)
+      XCTAssertEqual(fixture.muter.restoreCount, 1)
+      // No Cancelled notch and no cue: the notch just goes.
+      XCTAssertEqual(fixture.notch.presentedStates.count, presented)
+      XCTAssertEqual(fixture.notch.hideDelays.last, .zero)
+      XCTAssertEqual(fixture.cuePlayer.playedCues, cues)
+      XCTAssertEqual(fixture.benchmark.terminalResult, .cancelled)
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertNil(fixture.inserter.insertedText)
+      XCTAssertNil(fixture.inserter.copiedText)
+      // The next press starts a dictation.
+      XCTAssertNotNil(fixture.coordinator.shortcutPressed())
+      fixture.coordinator.cancel()
+    }
+  }
+
+  func testAShortcutChordAbortLeavesADictationThePressDidNotStart() async throws {
+    let fixture = makeFixture()
+    // Started from the menu; a hold press takes it over.
+    fixture.coordinator.toggle()
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    let adopted = try XCTUnwrap(fixture.coordinator.holdShortcutPressed())
+    fixture.coordinator.abortShortcutActivation(lifecycleGeneration: adopted)
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    // A stale generation aborts nothing either.
+    fixture.coordinator.cancel()
+    try await waitUntil { fixture.coordinator.phase == .idle }
+    let started = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    fixture.coordinator.abortShortcutActivation(lifecycleGeneration: UUID())
+    XCTAssertEqual(fixture.coordinator.phase, .recording)
+    XCTAssertNotEqual(started, adopted)
+    fixture.coordinator.cancel()
+  }
+
+  func testStreamFailureSaysSoWhenTheShownTranscriptCannotBeCopied() async throws {
+    let fixture = makeFixture(provisionalText: "Send the report by Friday")
+    fixture.inserter.copySucceeds = false
+    fixture.coordinator.toggle()
+    try await waitUntil {
+      fixture.coordinator.phase == .recording && !fixture.transcriber.sentFrames.isEmpty
+    }
+    fixture.transcriber.emitError(AppError.provider("socket closed"))
+    try await waitUntil {
+      if case .error = fixture.coordinator.phase { return true }
+      return false
+    }
+    // A copy that didn't happen is never claimed: the failure itself is shown.
+    XCTAssertEqual(fixture.coordinator.phase, .error("socket closed"))
+    XCTAssertNil(fixture.inserter.copiedText)
+    XCTAssertNil(fixture.inserter.insertedText)
+    fixture.coordinator.cancel()
   }
 
   func testTerminalFailureDiscardsClipboardBackupButPasteSentPreservesVerifier() async throws {

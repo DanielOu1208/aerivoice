@@ -305,7 +305,10 @@ extension LatencyBenchmarkRecording {
   func recordSteps(_ report: AudioStartReport) {
     recordStep(.audioQueueWait, report.queueWait)
     recordStep(.audioRouteCheck, report.routeCheck)
-    if !report.usedPreparation { recordStep(.audioEngineCreate, report.engineCreation) }
+    // A start that fell back created a fresh engine, even when it first tried a prepared one.
+    if !report.usedPreparation || report.retried {
+      recordStep(.audioEngineCreate, report.engineCreation)
+    }
     recordStep(.audioTapInstall, report.engine.tapInstall)
     recordStep(.audioEnginePrepare, report.engine.prepare)
     recordStep(.audioEngineStart, report.engine.start)

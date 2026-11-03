@@ -62,7 +62,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox:
       Descriptor(
-        displayName: "Soniox", modelDisplayName: "Soniox Realtime", modelID: "stt-rt-v5",
+        displayName: "Soniox", modelDisplayName: "Soniox Realtime v6", modelID: "stt-rt-v6",
         credentialKind: .soniox, connectedBufferLimitBytes: 512_000,
         prewarmHost: "stt-rt.soniox.com")
     case .meta:
@@ -679,11 +679,11 @@ struct AudioStartReport: Equatable, Sendable {
   var queueWait: Duration = .zero
   /// Reading the input route, and discarding a preparation made for another route.
   var routeCheck: Duration = .zero
-  /// Creating an engine; zero when a prepared one was reused.
+  /// Creating an engine; zero when a prepared one was reused and started.
   var engineCreation: Duration = .zero
   var engine = CaptureEngineStartSteps()
   /// The first attempt failed and capture started on a new engine that follows the system
-  /// default input. `engine` then times that second attempt.
+  /// default input. `routeCheck`, `engineCreation` and `engine` then time that second attempt.
   var retried = false
   /// The failed attempt was on the microphone chosen in Settings, which is not the one in use.
   var chosenInputFailed = false
@@ -847,6 +847,9 @@ protocol TextInserting: Sendable {
   /// Begins acquisition immediately at stop; callers cancel this task with the session.
   func captureTarget() -> Task<TextInsertionTarget?, Never>
   func insert(_ text: String, into target: TextInsertionTarget?) async -> InsertionResult
+  /// Puts text on the clipboard without pasting it, unless the clipboard changed since the
+  /// dictation stopped or another paste is finishing. Returns whether it was copied.
+  func copy(_ text: String) -> Bool
   func invalidatePendingRestoration()
   func prepareForNextDictation()
   func finishPendingRestoration() async
@@ -908,6 +911,10 @@ struct NotchState: Equatable, Sendable {
   var phase: DictationPhase
   var transcript = TranscriptSnapshot()
   var warning: String?
+  /// Shown in place of Refining, such as when a press arrives before the dictation finished.
+  var notice: String?
+  /// A dictation that skips cleanup has nothing to refine, so the notch doesn't say it does.
+  var skipsCleanup = false
 }
 
 enum AppError: LocalizedError {

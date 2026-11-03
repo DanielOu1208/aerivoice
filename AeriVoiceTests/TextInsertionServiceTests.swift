@@ -198,6 +198,30 @@ final class TextInsertionServiceTests: XCTestCase {
     XCTAssertEqual(board.string(forType: .string), "new user copy")
   }
 
+  func testCopyKeepsAUserCopyMadeSinceTheDictationStopped() async {
+    let board = board()
+    board.setString("before stop", forType: .string)
+    let service = TextInsertionService(
+      pasteboard: board, capture: { Task { TextInsertionTarget.rejected(.targetUnavailable) } })
+    // While recording, nothing is newer than the recovered text.
+    service.prepareForNextDictation()
+    XCTAssertTrue(service.copy("heard while recording"))
+    XCTAssertEqual(board.string(forType: .string), "heard while recording")
+    // After the stop, an unchanged clipboard takes it.
+    service.prepareForNextDictation()
+    _ = await service.captureTarget().value
+    XCTAssertTrue(service.copy("heard before finishing"))
+    XCTAssertEqual(board.string(forType: .string), "heard before finishing")
+    // A copy made since the stop is kept.
+    service.prepareForNextDictation()
+    _ = await service.captureTarget().value
+    board.clearContents()
+    board.setString("new user copy", forType: .string)
+    XCTAssertFalse(service.copy("heard before finishing"))
+    XCTAssertEqual(board.string(forType: .string), "new user copy")
+    service.invalidatePendingRestoration()
+  }
+
   func testPasteCanOnlyDispatchOnceAndWorksWithInitiallyEmptyClipboard() async {
     let board = board()
     board.clearContents()

@@ -62,9 +62,9 @@ does not request or claim a zero-data-retention guarantee for this provider.
 ### OpenRouter, Groq, or Cerebras
 
 After the selected transcription provider finalizes a transcript, AeriVoice
-sends that transcript to the selected cleanup provider. The request includes
-the selected model, reasoning level, cleanup instructions, and the provider API
-key.
+sends that transcript to the selected cleanup provider, unless AI cleanup is
+turned off in Settings. The request includes the selected model, reasoning
+level, cleanup instructions, and the provider API key.
 
 OpenRouter can route requests to an underlying model provider. AeriVoice asks
 OpenRouter for zero-data-retention routing for its Gemini and GPT-OSS choices,

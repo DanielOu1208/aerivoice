@@ -209,6 +209,173 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(fixture.engines[1].stopCount, 1)
   }
 
+  func testAnEngineThatStopsWhileItStartsIsReplaced() async throws {
+    for announced in [true, false] {
+      let fixture = AudioPreparationFixture { index in
+        FakeCaptureAudioEngine(stopsWhileStarting: index == 0, announcesStop: announced)
+      }
+      let service = fixture.service()
+      let interrupted = LockedFlag()
+      service.onCaptureInterrupted = { interrupted.set() }
+      let delivered = LockedBytes()
+      service.onAudio = { delivered.append($0) }
+      // Not prepared first, as a Bluetooth input never is.
+      _ = try await service.start()
+      try await waitUntil { fixture.engines.count == 2 && fixture.engines[1].startCount == 1 }
+      XCTAssertEqual(fixture.engines.count, 2, "announced: \(announced)")
+      XCTAssertFalse(interrupted.value, "announced: \(announced)")
+      fixture.engines.last?.emit(try makeBuffer(sampleRate: 48_000, frameCount: block))
+      _ = service.isWaitingForReleaseBlock
+      XCTAssertGreaterThan(samples(delivered), 0, "announced: \(announced)")
+      service.stop()
+    }
+  }
+
+  func testARestartAfterTheCueDeadlineKeepsTheNewEnginesAudio() async throws {
+    // Audio a fresh engine delivers when nothing is discarded.
+    let control = AudioPreparationFixture()
+    let controlService = control.service()
+    let controlDelivered = LockedBytes()
+    controlService.onAudio = { controlDelivered.append($0) }
+    _ = try await controlService.start()
+    control.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: mach_absolute_time())
+    // Read at the same point as below, before stop() flushes what the resampler holds.
+    _ = controlService.isWaitingForReleaseBlock
+    let expected = samples(controlDelivered)
+    controlService.stop()
+    XCTAssertGreaterThan(expected, 0)
+
+    let entered = expectation(description: "Replacement starting")
+    let gate = DispatchSemaphore(value: 0)
+    let fixture = AudioPreparationFixture { index in
+      index == 1 ? FakeCaptureAudioEngine(startEntered: entered, startGate: gate)
+        : FakeCaptureAudioEngine()
+    }
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+    _ = try await service.start(discardingAudioBefore: deadline)
+    guard ContinuousClock.now < deadline.advanced(by: .milliseconds(-500)) else {
+      gate.signal()
+      service.stop()
+      throw XCTSkip("Start took too long to restart before the deadline")
+    }
+    // The input changes before any audio arrives; the replacement starts after the deadline.
+    fixture.route = AudioInputRoute(deviceID: 2, sampleRate: 48_000, channels: 1)
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    await fulfillment(of: [entered], timeout: 2)
+    try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)))
+    gate.signal()
+    try await waitUntil { fixture.engines.count == 2 && fixture.engines[1].startCount == 1 }
+    fixture.engines[1].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: mach_absolute_time())
+    _ = service.isWaitingForReleaseBlock
+    XCTAssertGreaterThanOrEqual(samples(delivered), expected * 9 / 10)
+    service.stop()
+  }
+
+  /// Audio a fresh engine delivers for one 100 ms, 48 kHz block when nothing is discarded, read
+  /// before stop() flushes what the resampler holds.
+  private func undiscardedSamples() async throws -> Int {
+    let control = AudioPreparationFixture()
+    let service = control.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    _ = try await service.start()
+    control.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: mach_absolute_time())
+    _ = service.isWaitingForReleaseBlock
+    defer { service.stop() }
+    return samples(delivered)
+  }
+
+  /// The host time of a clock instant, as the capture service reckons it.
+  private func hostTime(at instant: ContinuousClock.Instant) -> UInt64 {
+    host(mach_absolute_time(), plus: Double(ContinuousClock.now.duration(to: instant) / .milliseconds(1)))
+  }
+
+  func testAReplacementStartedBeforeTheDeadlineKeepsSpeechCapturedAfterIt() async throws {
+    let expected = try await undiscardedSamples()
+    XCTAssertGreaterThan(expected, 0)
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    let deadline = ContinuousClock.now.advanced(by: .milliseconds(400))
+    _ = try await service.start(discardingAudioBefore: deadline)
+    fixture.route = AudioInputRoute(deviceID: 2, sampleRate: 48_000, channels: 1)
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    try await waitUntil { fixture.engines.count == 2 && fixture.engines[1].startCount == 1 }
+    guard ContinuousClock.now < deadline.advanced(by: .milliseconds(-100)) else {
+      service.stop()
+      throw XCTSkip("The replacement started too late to start before the deadline")
+    }
+    // Its hardware delivers its first block only after the deadline, all of it captured then.
+    try await Task.sleep(until: deadline.advanced(by: .milliseconds(150)))
+    fixture.engines[1].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: host(mach_absolute_time(), plus: -100))
+    _ = service.isWaitingForReleaseBlock
+    XCTAssertGreaterThanOrEqual(samples(delivered), expected * 9 / 10)
+    service.stop()
+  }
+
+  func testCueAudioDroppedBeforeARestartNeverReachesTheReplacementsAudio() async throws {
+    let entered = expectation(description: "Replacement starting")
+    let gate = DispatchSemaphore(value: 0)
+    let fixture = AudioPreparationFixture { index in
+      index == 1 ? FakeCaptureAudioEngine(startEntered: entered, startGate: gate)
+        : FakeCaptureAudioEngine()
+    }
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    let deadline = ContinuousClock.now.advanced(by: .milliseconds(600))
+    _ = try await service.start(discardingAudioBefore: deadline)
+    // A loud block recorded wholly before the deadline: the start cue.
+    fixture.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: host(mach_absolute_time(), plus: -100))
+    _ = service.isWaitingForReleaseBlock
+    XCTAssertEqual(samples(delivered), 0)
+    fixture.route = AudioInputRoute(deviceID: 2, sampleRate: 48_000, channels: 1)
+    NotificationCenter.default.post(
+      name: .AVAudioEngineConfigurationChange, object: fixture.engines[0].notificationObject)
+    await fulfillment(of: [entered], timeout: 2)
+    try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)))
+    gate.signal()
+    try await waitUntil { fixture.engines.count == 2 && fixture.engines[1].startCount == 1 }
+    // The replacement hears silence; nothing of the cue may come out with it.
+    let silence = try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 0, offset: 0)
+    fixture.engines[1].emit(silence, hostTime: mach_absolute_time())
+    service.stop()
+    let pcm = delivered.bytes.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+    XCTAssertGreaterThan(pcm.count, 0)
+    XCTAssertLessThanOrEqual(pcm.map { abs(Int($0)) }.max() ?? 0, 2)
+  }
+
+  func testABlockThatCrossesTheDeadlineKeepsOnlyItsLaterPart() async throws {
+    let fixture = AudioPreparationFixture()
+    let service = fixture.service()
+    let delivered = LockedBytes()
+    service.onAudio = { delivered.append($0) }
+    let deadline = ContinuousClock.now.advanced(by: .milliseconds(300))
+    _ = try await service.start(discardingAudioBefore: deadline)
+    // 100 ms captured from 50 ms before the deadline: the last 50 ms, 800 samples, are kept.
+    fixture.engines[0].emit(
+      try makeBuffer(sampleRate: 48_000, frameCount: block, frequency: 440, offset: 0),
+      hostTime: host(hostTime(at: deadline), plus: -50))
+    service.stop()
+    XCTAssertEqual(samples(delivered), 800, accuracy: 60)
+  }
+
   func testRunningEngineOnUnchangedRouteIsNotRestarted() async throws {
     let fixture = AudioPreparationFixture()
     let service = fixture.service()
@@ -369,6 +536,30 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertEqual(fixture.engines[1].startCount, 1)
     service.stop()
     XCTAssertEqual(fixture.engines[1].stopCount, 1)
+  }
+
+  func testFallbackTimesTheReplacementEngine() async throws {
+    // Only the replacements are slow to create, so a creation time that long is theirs.
+    let fixture = AudioPreparationFixture { index in
+      if index.isMultiple(of: 2) { return FakeCaptureAudioEngine(startFails: true) }
+      Thread.sleep(forTimeInterval: 0.05)
+      return FakeCaptureAudioEngine()
+    }
+    let service = fixture.service()
+    await service.prepare()
+    let prepared = try await service.start()
+    XCTAssertTrue(prepared.usedPreparation)
+    XCTAssertTrue(prepared.retried)
+    XCTAssertGreaterThanOrEqual(prepared.engineCreation, .milliseconds(50))
+    XCTAssertEqual(prepared.engine, FakeCaptureAudioEngine.steps)
+    service.stop()
+
+    let cold = try await service.start()
+    XCTAssertFalse(cold.usedPreparation)
+    XCTAssertTrue(cold.retried)
+    XCTAssertGreaterThanOrEqual(cold.engineCreation, .milliseconds(50))
+    XCTAssertEqual(fixture.engines.count, 4)
+    service.stop()
   }
 
   func testStartThatFailsOnBothAttemptsThrowsAndLeavesNothingBehind() async throws {
@@ -659,6 +850,72 @@ final class AudioCaptureServiceTests: XCTestCase {
     XCTAssertGreaterThan(rms(data), 1_000)
   }
 
+  func testConverterMixesEveryChannelOfADiscreteOrUnknownLayout() throws {
+    // Multi-input interfaces and aggregate devices label their inputs this way; the converter's
+    // own mix handles only positional layouts.
+    let layouts: [(String, AVAudioChannelLayout, UInt32)] = [
+      ("DiscreteInOrder|2", try tagged(kAudioChannelLayoutTag_DiscreteInOrder | 2), 2),
+      ("DiscreteInOrder|4", try tagged(kAudioChannelLayoutTag_DiscreteInOrder | 4), 4),
+      ("Unknown|4", try tagged(kAudioChannelLayoutTag_Unknown | 4), 4),
+      ("Unknown labels", described(Array(repeating: kAudioChannelLabel_Unknown, count: 4)), 4),
+      ("Discrete labels",
+       described([kAudioChannelLabel_Discrete_0, kAudioChannelLabel_Discrete_1,
+                  kAudioChannelLabel_Discrete_2, kAudioChannelLabel_Discrete_3]), 4),
+    ]
+    for (name, layout, channels) in layouts {
+      let format = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, interleaved: false,
+        channelLayout: layout)
+      XCTAssertEqual(format.channelCount, channels, name)
+      XCTAssertEqual(format.channelLayout?.layoutTag, layout.layoutTag, name)
+      XCTAssertEqual(
+        format.channelLayout?.layout.pointee.mNumberChannelDescriptions,
+        layout.layout.pointee.mNumberChannelDescriptions, name)
+      for active in 0..<Int(channels) {
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800))
+        buffer.frameLength = 4_800
+        let data = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<Int(channels) {
+          for frame in 0..<4_800 {
+            data[channel][frame] =
+              channel == active ? 0.5 * sin(2 * Float.pi * 440 * Float(frame) / 48_000) : 0
+          }
+        }
+        let converter = try XCTUnwrap(PCM16AudioConverter())
+        let converted = converter.convert(buffer)
+        XCTAssertNotNil(converted, "\(name) input \(active + 1)")
+        XCTAssertGreaterThan(
+          (converted?.count ?? 0) / MemoryLayout<Int16>.size, 1_000, "\(name) input \(active + 1)")
+        XCTAssertGreaterThan(rms(converted ?? Data()), 1_000, "\(name) input \(active + 1)")
+      }
+    }
+  }
+
+  private func tagged(_ tag: AudioChannelLayoutTag) throws -> AVAudioChannelLayout {
+    try XCTUnwrap(AVAudioChannelLayout(layoutTag: tag))
+  }
+
+  /// A layout that lists each channel's label. The C struct holds one description inline, so
+  /// storage for all of them is allocated.
+  private func described(_ labels: [AudioChannelLabel]) -> AVAudioChannelLayout {
+    let descriptionsOffset = MemoryLayout<AudioChannelLayout>.offset(
+      of: \AudioChannelLayout.mChannelDescriptions)!
+    let size = descriptionsOffset + labels.count * MemoryLayout<AudioChannelDescription>.stride
+    let raw = UnsafeMutableRawPointer.allocate(
+      byteCount: size, alignment: MemoryLayout<AudioChannelLayout>.alignment)
+    defer { raw.deallocate() }
+    raw.initializeMemory(as: UInt8.self, repeating: 0, count: size)
+    let layout = raw.bindMemory(to: AudioChannelLayout.self, capacity: 1)
+    layout.pointee.mChannelLayoutTag = kAudioChannelLayoutTag_UseChannelDescriptions
+    layout.pointee.mNumberChannelDescriptions = UInt32(labels.count)
+    let descriptions = (raw + descriptionsOffset).assumingMemoryBound(
+      to: AudioChannelDescription.self)
+    for (index, label) in labels.enumerated() {
+      descriptions[index].mChannelLabel = label
+    }
+    return AVAudioChannelLayout(layout: layout)
+  }
+
   func testHighPassRemovesRumbleAndKeepsSpeechBand() throws {
     func level(frequency: Float) throws -> Float {
       let converter = try XCTUnwrap(PCM16AudioConverter())
@@ -790,6 +1047,11 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   private let prepareGate: DispatchSemaphore?
   private let startEntered: XCTestExpectation?
   private let startGate: DispatchSemaphore?
+  /// Models an engine whose own start changes the device's format, as opening a Bluetooth
+  /// headset's microphone does: it stops, and AVAudioEngine posts a configuration change
+  /// unless `announcesStop` is false.
+  private let stopsWhileStarting: Bool
+  private let announcesStop: Bool
   private var preparations = 0
   private var starts = 0
   private var stops = 0
@@ -797,7 +1059,8 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
   init(
     prepareFails: Bool = false, startFails: Bool = false, prepareEntered: XCTestExpectation? = nil,
     prepareGate: DispatchSemaphore? = nil, startEntered: XCTestExpectation? = nil,
-    startGate: DispatchSemaphore? = nil
+    startGate: DispatchSemaphore? = nil, stopsWhileStarting: Bool = false,
+    announcesStop: Bool = true
   ) {
     self.prepareFails = prepareFails
     self.startFails = startFails
@@ -805,6 +1068,8 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
     self.prepareGate = prepareGate
     self.startEntered = startEntered
     self.startGate = startGate
+    self.stopsWhileStarting = stopsWhileStarting
+    self.announcesStop = announcesStop
   }
 
   var notificationObject: AnyObject { object }
@@ -830,7 +1095,11 @@ private final class FakeCaptureAudioEngine: CaptureAudioEngine, @unchecked Senda
     if startFails { throw AppError.microphoneUnavailable }
     lock.withLock {
       starts += 1
+      if stopsWhileStarting { stops += 1 }
       bufferHandler = onBuffer
+    }
+    if stopsWhileStarting, announcesStop {
+      NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: object)
     }
     return Self.steps
   }
@@ -858,6 +1127,7 @@ private final class LockedBytes: @unchecked Sendable {
   private var data = Data()
   private var appended = 0
   var count: Int { lock.withLock { data.count } }
+  var bytes: Data { lock.withLock { data } }
   /// How many deliveries arrived.
   var chunks: Int { lock.withLock { appended } }
   func append(_ chunk: Data) {

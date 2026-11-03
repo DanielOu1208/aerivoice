@@ -355,7 +355,12 @@ private struct NotchContentView: View {
         LiveTranscriptLine(snapshot: model.state.transcript)
       }
     case .processing, .cleaning, .inserting:
-      PulsingEllipsisLabel(label: "Refining", isPresented: model.isPresented)
+      if let notice = model.state.notice {
+        WarningLine(message: notice)
+      } else {
+        PulsingEllipsisLabel(
+          label: model.state.skipsCleanup ? "Finishing" : "Refining", isPresented: model.isPresented)
+      }
     case .success:
       // The text landed; a warning (raw text after a failed cleanup) replaces the check mark.
       if let warning = model.state.warning {

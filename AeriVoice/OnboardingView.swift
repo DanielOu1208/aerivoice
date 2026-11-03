@@ -28,7 +28,7 @@ struct OnboardingReadiness: Equatable, Sendable {
   ) -> OnboardingReadiness {
     OnboardingReadiness(
       isTranscriptionReady: preferences.effectiveTranscriptionProvider.credentialKind.map(hasCredential) ?? localModelReady,
-      hasCleanupCredential: preferences.offlineMode || hasCredential(preferences.cleanupProvider.credentialKind),
+      hasCleanupCredential: preferences.skipsCleanup || hasCredential(preferences.cleanupProvider.credentialKind),
       hasPermissions: hasPermissions,
       hasShortcut: preferences.shortcut != nil)
   }

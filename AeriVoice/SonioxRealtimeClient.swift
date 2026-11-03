@@ -5,7 +5,7 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
   var onTranscript: ((RealtimeTranscriptUpdate) -> Void)?
   var onError: ((Error) -> Void)?
 
-  private let makeTransport: (URL) -> RealtimeWebSocketTransport
+  private let makeTransport: (URLRequest) -> RealtimeWebSocketTransport
   private var session: RealtimeWebSocketTransport?
   private var task: RealtimeWebSocketTransport?
   private var receiveTask: Task<Void, Never>?
@@ -14,8 +14,8 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
   private var finishContinuation: CheckedContinuation<String, Error>?
   private var generation = UUID()
 
-  init(makeTransport: @escaping (URL) -> RealtimeWebSocketTransport = {
-    URLSessionRealtimeTransport(url: $0, keepsSession: true) { $0.thrown }
+  init(makeTransport: @escaping (URLRequest) -> RealtimeWebSocketTransport = {
+    URLSessionRealtimeTransport(request: $0, keepsSession: true) { $0.thrown }
   }) {
     self.makeTransport = makeTransport
     super.init()
@@ -34,14 +34,16 @@ final class SonioxRealtimeClient: NSObject, RealtimeTranscribing {
     }
     let connectionGeneration = UUID()
     generation = connectionGeneration
-    let task = makeTransport(URL(string: "wss://stt-rt.soniox.com/transcribe-websocket")!)
+    var request = URLRequest(url: URL(string: "wss://stt-rt.soniox.com/transcribe-websocket")!)
+    // Soniox refuses a key in the start message from 2027-01-15.
+    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    let task = makeTransport(request)
     self.session = task
     self.task = task
     task.resume()
 
     let context: [String: Any]? = vocabulary.isEmpty ? nil : ["terms": vocabulary]
     var payload: [String: Any] = [
-      "api_key": apiKey,
       "model": configuration.modelID,
       "audio_format": "pcm_s16le",
       "sample_rate": 16_000,

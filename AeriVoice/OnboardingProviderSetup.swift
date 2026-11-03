@@ -58,18 +58,22 @@ struct OnboardingProviderSetup: View {
       }
       if !preferences.offlineMode {
         Section("AI cleanup") {
-          ProviderSelectionRow(
-            model: model, kind: preferences.cleanupProvider.credentialKind, allowsRemoval: false
-          ) {
-            Picker("Provider", selection: $preferences.cleanupProvider) {
-              ForEach(CleanupProvider.allCases, id: \.self) { provider in
-                Text(provider.displayName + (provider.isExperimental ? " (Experimental)" : ""))
-                  .tag(provider)
+          Toggle("AI cleanup", isOn: $preferences.cleanupEnabled)
+            .disabled(model.changingOfflineMode || model.coordinator.canCancel)
+          if preferences.cleanupEnabled {
+            ProviderSelectionRow(
+              model: model, kind: preferences.cleanupProvider.credentialKind, allowsRemoval: false
+            ) {
+              Picker("Provider", selection: $preferences.cleanupProvider) {
+                ForEach(CleanupProvider.allCases, id: \.self) { provider in
+                  Text(provider.displayName + (provider.isExperimental ? " (Experimental)" : ""))
+                    .tag(provider)
+                }
               }
             }
+            .id(preferences.cleanupProvider)
+            .disabled(model.changingOfflineMode || model.coordinator.canCancel)
           }
-          .id(preferences.cleanupProvider)
-          .disabled(model.changingOfflineMode || model.coordinator.canCancel)
         }
       }
     }

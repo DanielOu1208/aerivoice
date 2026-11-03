@@ -1,4 +1,5 @@
 import ApplicationServices
+import Carbon
 import XCTest
 
 @testable import AeriVoice
@@ -217,13 +218,69 @@ final class TextInsertionPolicyTests: XCTestCase {
   }
 
   func testTargetedPasteEventsCarryCommandVAndSyntheticMarker() throws {
-    let events = try XCTUnwrap(TargetedPasteEvent.makePair())
+    for keyCode: CGKeyCode in [9, 47] {
+      let events = try XCTUnwrap(TargetedPasteEvent.makePair(keyCode: keyCode))
+      for event in [events.down, events.up] {
+        XCTAssertEqual(event.getIntegerValueField(.keyboardEventKeycode), Int64(keyCode))
+        XCTAssertTrue(event.flags.contains(.maskCommand))
+        XCTAssertEqual(
+          event.getIntegerValueField(.eventSourceUserData), TargetedPasteEvent.marker)
+      }
+    }
+    XCTAssertEqual(TargetedPasteEvent.keyCode(forLayoutData: nil), 9)
+  }
 
-    for event in [events.down, events.up] {
-      XCTAssertEqual(event.getIntegerValueField(.keyboardEventKeycode), 9)
-      XCTAssertTrue(event.flags.contains(.maskCommand))
-      XCTAssertEqual(
-        event.getIntegerValueField(.eventSourceUserData), TargetedPasteEvent.marker)
+  // Command-V is matched by the character the key types with Command held, so the paste key
+  // follows the layout. Layout data is read only; the selected input source never changes.
+  @MainActor
+  func testPasteKeyTypesVWithCommandOnUS() throws {
+    try assertPasteKey(inLayout: "com.apple.keylayout.US", is: 9)
+  }
+
+  @MainActor
+  func testPasteKeyTypesVWithCommandOnDvorak() throws {
+    try assertPasteKey(inLayout: "com.apple.keylayout.Dvorak", is: 47)
+  }
+
+  @MainActor
+  func testPasteKeyTypesVWithCommandOnTurkishF() throws {
+    try assertPasteKey(inLayout: "com.apple.keylayout.Turkish", is: 8)
+  }
+
+  @MainActor
+  func testPasteKeyTypesVWithCommandOnDvorakQwertyCommand() throws {
+    try assertPasteKey(inLayout: "com.apple.keylayout.DVORAK-QWERTYCMD", is: 9)
+  }
+
+  @MainActor
+  private func assertPasteKey(inLayout id: String, is expected: CGKeyCode) throws {
+    let filter = [kTISPropertyInputSourceID as String: id] as CFDictionary
+    guard
+      let sources = TISCreateInputSourceList(filter, true)?.takeRetainedValue()
+        as? [TISInputSource],
+      let source = sources.first,
+      let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
+    else { throw XCTSkip("\(id) is not installed") }
+    let data = Unmanaged<CFData>.fromOpaque(property).takeUnretainedValue() as Data
+    let keyCode = TargetedPasteEvent.keyCode(forLayoutData: data)
+    XCTAssertEqual(keyCode, expected, id)
+    XCTAssertEqual(Self.commandCharacter(of: keyCode, in: data), "v", id)
+  }
+
+  /// What a key types with Command held, translated here independently of the app's code.
+  private static func commandCharacter(of keyCode: CGKeyCode, in data: Data) -> String? {
+    data.withUnsafeBytes { buffer -> String? in
+      guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self)
+      else { return nil }
+      var deadKeyState: UInt32 = 0
+      var length = 0
+      var characters = [UniChar](repeating: 0, count: 4)
+      let status = UCKeyTranslate(
+        layout, keyCode, UInt16(kUCKeyActionDown), UInt32((cmdKey >> 8) & 0xFF),
+        UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysMask), &deadKeyState,
+        characters.count, &length, &characters)
+      guard status == noErr, length > 0 else { return nil }
+      return String(utf16CodeUnits: characters, count: length)
     }
   }
 

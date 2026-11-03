@@ -60,6 +60,216 @@ final class ShortcutModesAndSidesTests: XCTestCase {
     XCTAssertEqual(definition.removingModifierSideDistinction().displayName, "⌘")
   }
 
+  @MainActor
+  func testEscapeWhileAModifierOnlyShortcutIsHeldWaitsForAFullReleaseBeforeTheNextPress() {
+    let held: CGEventFlags = [.maskControl, .maskAlternate]
+    let monitor = GlobalShortcutMonitor()
+    monitor.configure(
+      definition: ShortcutDefinition(
+        keyCode: 0, modifiers: UInt(NSEvent.ModifierFlags([.control, .option]).rawValue),
+        displayName: "⌃⌥", isModifierOnly: true),
+      activationMode: .hold)
+    var presses: [UUID] = []
+    var releases: [UUID] = []
+    var cancels = 0
+    monitor.onHoldPress = { _ in
+      presses.append(UUID())
+      return presses.last
+    }
+    monitor.onHoldRelease = { releases.append($0) }
+    monitor.onCancel = { cancels += 1 }
+    monitor.shouldCancel = { true }
+
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent(held, at: 0)))
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent(held.union(.maskShift), at: 100)))
+    XCTAssertTrue(
+      monitor.handle(
+        type: .keyDown, event: keyEvent(53, down: true, flags: held.union(.maskShift), at: 200)))
+    // Releasing Shift, or tapping Caps Lock, with the shortcut still held.
+    _ = monitor.handle(type: .flagsChanged, event: flagsEvent(held, at: 300))
+    _ = monitor.handle(type: .flagsChanged, event: flagsEvent(held.union(.maskAlphaShift), at: 400))
+    _ = monitor.handle(type: .flagsChanged, event: flagsEvent(held, at: 500))
+    XCTAssertEqual(presses.count, 1)
+    XCTAssertEqual(cancels, 1)
+    XCTAssertEqual(releases, [])
+
+    // A deliberate new press after a full release still starts.
+    _ = monitor.handle(type: .flagsChanged, event: flagsEvent([], at: 600))
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent(held, at: 700)))
+    XCTAssertEqual(presses.count, 2)
+  }
+
+  @MainActor
+  func testAModifierOnlyPressThatBeginsAChordAbortsItsDictation() {
+    let monitor = GlobalShortcutMonitor()
+    monitor.configure(
+      definition: ShortcutDefinition(
+        keyCode: 0, modifiers: UInt(NSEvent.ModifierFlags.function.rawValue),
+        displayName: "fn", isModifierOnly: true),
+      activationMode: .hybrid)
+    var presses: [UUID] = []
+    var releases: [UUID] = []
+    var aborts: [UUID] = []
+    monitor.onPress = { _ in
+      presses.append(UUID())
+      return presses.last
+    }
+    monitor.onHoldRelease = { releases.append($0) }
+    monitor.onAbort = { aborts.append($0) }
+
+    // A bare tap is a press, and nothing is aborted.
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent(.maskSecondaryFn, at: 1_000)))
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent([], at: 1_120)))
+    XCTAssertEqual(presses.count, 1)
+    XCTAssertEqual(aborts, [])
+
+    // fn-Delete (forward delete) reaches the app and aborts the dictation fn started; the
+    // release after the hold threshold finishes nothing.
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent(.maskSecondaryFn, at: 2_000)))
+    XCTAssertFalse(
+      monitor.handle(type: .keyDown, event: keyEvent(117, down: true, flags: .maskSecondaryFn, at: 2_050)))
+    XCTAssertFalse(
+      monitor.handle(type: .keyUp, event: keyEvent(117, down: false, flags: .maskSecondaryFn, at: 2_100)))
+    _ = monitor.handle(type: .flagsChanged, event: flagsEvent([], at: 2_400))
+    XCTAssertEqual(presses.count, 2)
+    XCTAssertEqual(aborts, [presses[1]])
+    XCTAssertEqual(releases, [])
+
+    // A key pressed after the threshold never ends a dictation held longer.
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent(.maskSecondaryFn, at: 3_000)))
+    XCTAssertFalse(
+      monitor.handle(type: .keyDown, event: keyEvent(117, down: true, flags: .maskSecondaryFn, at: 3_400)))
+    _ = monitor.handle(type: .flagsChanged, event: flagsEvent([], at: 3_600))
+    XCTAssertEqual(presses.count, 3)
+    XCTAssertEqual(aborts, [presses[1]])
+    XCTAssertEqual(releases, [presses[2]])
+
+    // A key after a quick tap is not a chord: the tap's hands-free dictation goes on.
+    XCTAssertTrue(monitor.handle(type: .flagsChanged, event: flagsEvent(.maskSecondaryFn, at: 4_000)))
+    _ = monitor.handle(type: .flagsChanged, event: flagsEvent([], at: 4_100))
+    XCTAssertFalse(monitor.handle(type: .keyDown, event: keyEvent(0, down: true, flags: [], at: 4_200)))
+    XCTAssertEqual(presses.count, 4)
+    XCTAssertEqual(aborts, [presses[1]])
+  }
+
+  @MainActor
+  func testAKeyedShortcutOwnsItsKeyRepeatsUntilKeyUpWhenItsModifierIsReleasedFirst() {
+    for mode in [ShortcutActivationMode.hold, .hybrid] {
+      let monitor = GlobalShortcutMonitor()
+      monitor.configure(
+        definition: ShortcutDefinition(
+          keyCode: 49, modifiers: UInt(NSEvent.ModifierFlags.control.rawValue),
+          displayName: "⌃Space"),
+        activationMode: mode)
+      var presses: [UUID] = []
+      var releases: [UUID] = []
+      let press: (Duration?) -> UUID? = { _ in
+        presses.append(UUID())
+        return presses.last
+      }
+      monitor.onHoldPress = press
+      monitor.onPress = press
+      monitor.onHoldRelease = { releases.append($0) }
+
+      XCTAssertTrue(
+        monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: .maskControl, at: 0)),
+        "\(mode)")
+      // Control goes up first; Space is still held and repeats.
+      XCTAssertFalse(monitor.handle(type: .flagsChanged, event: flagsEvent([], at: 100)), "\(mode)")
+      for repeatAt: UInt64 in [500, 533] {
+        XCTAssertTrue(
+          monitor.handle(
+            type: .keyDown, event: keyEvent(49, down: true, flags: [], at: repeatAt, autorepeat: 1)),
+          "\(mode) repeat at \(repeatAt)")
+      }
+      XCTAssertTrue(
+        monitor.handle(type: .keyUp, event: keyEvent(49, down: false, flags: [], at: 600)), "\(mode)")
+      // Ownership ends at key-up: Space typed afterwards goes through.
+      XCTAssertFalse(
+        monitor.handle(
+          type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 700, autorepeat: 1)),
+        "\(mode)")
+      XCTAssertFalse(
+        monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 800)), "\(mode)")
+      XCTAssertEqual(presses.count, 1, "\(mode)")
+      XCTAssertEqual(releases, presses, "\(mode)")
+    }
+  }
+
+  @MainActor
+  func testAFreshPressOfTheShortcutKeyEndsAPressWhoseKeyUpWasMissed() {
+    for mode in [ShortcutActivationMode.hold, .hybrid, .toggle] {
+      for again in ["key alone", "shortcut"] {
+        let monitor = GlobalShortcutMonitor()
+        monitor.configure(
+          definition: ShortcutDefinition(
+            keyCode: 49, modifiers: UInt(NSEvent.ModifierFlags.control.rawValue),
+            displayName: "⌃Space"),
+          activationMode: mode)
+        var presses: [UUID] = []
+        var releases: [UUID] = []
+        let press: (Duration?) -> UUID? = { _ in
+          presses.append(UUID())
+          return presses.last
+        }
+        monitor.onHoldPress = press
+        monitor.onPress = press
+        monitor.onHoldRelease = { releases.append($0) }
+        let label = "\(mode), then the \(again)"
+
+        XCTAssertTrue(
+          monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: .maskControl, at: 0)),
+          label)
+        // Its key-up never arrives, as while secure input hides keys from event taps.
+        if again == "key alone" {
+          // A plain Space goes to the app, repeats and all; the missed release ends the press.
+          XCTAssertFalse(
+            monitor.handle(type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 1_000)),
+            label)
+          XCTAssertFalse(
+            monitor.handle(
+              type: .keyDown, event: keyEvent(49, down: true, flags: [], at: 1_500, autorepeat: 1)),
+            label)
+          XCTAssertFalse(
+            monitor.handle(type: .keyUp, event: keyEvent(49, down: false, flags: [], at: 1_600)),
+            label)
+          XCTAssertEqual(presses.count, 1, label)
+          XCTAssertEqual(releases, mode == .toggle ? [] : presses, label)
+        } else {
+          // The shortcut again is the next press, as usual.
+          XCTAssertTrue(
+            monitor.handle(
+              type: .keyDown, event: keyEvent(49, down: true, flags: .maskControl, at: 1_000)),
+            label)
+          XCTAssertTrue(
+            monitor.handle(type: .keyUp, event: keyEvent(49, down: false, flags: [], at: 1_500)),
+            label)
+          XCTAssertEqual(presses.count, 2, label)
+          XCTAssertEqual(releases, mode == .toggle ? [] : Array(presses.dropFirst()), label)
+        }
+      }
+    }
+  }
+
+  /// Event times are in nanoseconds; `ms` keeps the tests readable.
+  private func flagsEvent(_ flags: CGEventFlags, at ms: UInt64) -> CGEvent {
+    let event = CGEvent(source: nil)!
+    event.type = .flagsChanged
+    event.flags = flags
+    event.timestamp = ms * 1_000_000
+    return event
+  }
+
+  private func keyEvent(
+    _ keyCode: CGKeyCode, down: Bool, flags: CGEventFlags, at ms: UInt64, autorepeat: Int64 = 0
+  ) -> CGEvent {
+    let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)!
+    event.flags = flags
+    event.timestamp = ms * 1_000_000
+    event.setIntegerValueField(.keyboardEventAutorepeat, value: autorepeat)
+    return event
+  }
+
   func testLegacyDecodeAndSideMetadataRoundTrip() throws {
     let old = Data(#"{"keyCode":40,"modifiers":1048576,"displayName":"⌘K"}"#.utf8)
     let legacy = try JSONDecoder().decode(ShortcutDefinition.self, from: old)

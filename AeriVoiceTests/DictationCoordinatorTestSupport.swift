@@ -288,9 +288,10 @@ extension DictationCoordinatorTests {
         deliver()
       }
       let fellBack = chosenInputFails
+      // Like the real service, a start that fell back created a fresh engine.
       return AudioStartReport(
         usedPreparation: reused, queueWait: .milliseconds(1), routeCheck: .milliseconds(2),
-        engineCreation: reused ? .zero : .milliseconds(3),
+        engineCreation: reused && !fellBack ? .zero : .milliseconds(3),
         engine: CaptureEngineStartSteps(
           tapInstall: .milliseconds(4), prepare: .milliseconds(5), start: .milliseconds(6)),
         retried: fellBack, chosenInputFailed: fellBack)
@@ -504,12 +505,13 @@ extension DictationCoordinatorTests {
 
   final class FakeMuter: OutputMuting, @unchecked Sendable {
     private(set) var didMute = false
+    private(set) var restoreCount = 0
 
     func mute() -> Bool {
       didMute = true
       return true
     }
-    func restore() {}
+    func restore() { restoreCount += 1 }
   }
 
   @MainActor
@@ -569,6 +571,14 @@ extension DictationCoordinatorTests {
       defer { didReturn = true }
       insertedText = text
       return result
+    }
+    /// Text put on the clipboard without a paste.
+    var copiedText: String?
+    var copySucceeds = true
+    func copy(_ text: String) -> Bool {
+      guard copySucceeds else { return false }
+      copiedText = text
+      return true
     }
   }
 

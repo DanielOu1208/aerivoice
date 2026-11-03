@@ -477,6 +477,20 @@ extension DictationCoordinatorTests {
     try await waitUntil { fixture.coordinator.phase == .success }
   }
 
+  func testPreparedStartThatFellBackRecordsTheReplacementEngineCreation() async throws {
+    let fixture = makeFixture(audioStartWaitsForResolution: true)
+    fixture.audio.chosenInputFails = true
+    let generation = try XCTUnwrap(fixture.coordinator.shortcutPressed())
+    try await waitUntil { fixture.audio.hasPendingStart }
+    fixture.audio.resolveStart(usedPreparation: true)
+    try await waitUntil { fixture.coordinator.phase == .recording }
+    XCTAssertTrue(fixture.benchmark.milestones.contains(.preparedAudioEngineUsed))
+    XCTAssertTrue(fixture.benchmark.milestones.contains(.audioStartRetried))
+    XCTAssertEqual(fixture.benchmark.steps[.audioEngineCreate], .milliseconds(3))
+    fixture.coordinator.finishHeldDictation(lifecycleGeneration: generation)
+    try await waitUntil { fixture.coordinator.phase == .success }
+  }
+
   private func assertMicrophoneStoppedAndNothingSent(
     _ fixture: CoordinatorFixture, file: StaticString = #filePath, line: UInt = #line
   ) async throws {

@@ -4,7 +4,7 @@ Choose transcription and cleanup separately in Settings. Cloud providers use you
 
 | Stage | Provider | Models |
 | --- | --- | --- |
-| Live transcription | **Soniox** (default) | Soniox Realtime |
+| Live transcription | **Soniox** (default) | Soniox Realtime v6 |
 | Live transcription | **Grok (xAI)** | Grok Voice Transcribe 2.0 |
 | Live transcription | **Meta** | Muse Voice Transcribe 1.0 |
 | Live transcription | **Cartesia** | Ink 2, Ink Preview |
@@ -17,6 +17,10 @@ Choose transcription and cleanup separately in Settings. Cloud providers use you
 **Speed setup:** Soniox + Qwen 3.8 27B via direct Cerebras, reasoning None.
 
 For on-device transcription and Offline mode, see [Local dictation](LOCAL-DICTATION.md).
+
+## Soniox output
+
+Soniox Realtime v6 uses the `stt-rt-v6` model. It writes prices and codes as spoken: "15 dollars and 20 cents", with hyphens in codes only when you say them. It writes spoken punctuation and commands such as "period", "new line" and "scratch that" as words for AI cleanup to apply. How reliably they are applied depends on the [cleanup style](CLEANUP-STYLES.md) and model; if cleanup is off or fails and the raw transcript is pasted, they appear as words.
 
 ## Spoken language
 
