@@ -2,6 +2,8 @@
 
 Choose a style under **AI Cleanup → Cleanup style**. Offline mode skips all cleanup.
 
+To skip cleanup without going offline, turn off **AI Cleanup → AI cleanup**. Dictations then paste the transcript as transcribed, send nothing to a cleanup provider and need no cleanup key. Spoken punctuation and commands aren't applied: Soniox writes "period" and "new line" as words. A change made while recording applies to the next dictation.
+
 | Style | What it does |
 | --- | --- |
 | **Faithful** | Removes speech clutter and fixes punctuation while staying close to your wording. |

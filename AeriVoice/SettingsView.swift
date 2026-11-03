@@ -59,7 +59,7 @@ enum SettingsDestination: String, CaseIterable, Hashable, Identifiable {
   @MainActor static func recommended(for model: AppModel) -> Self {
     if model.preferences.shortcut == nil { return .general }
     if !model.transcriptionReady
-      || (!model.preferences.offlineMode && !model.hasCredential(model.preferences.cleanupProvider.credentialKind))
+      || (!model.preferences.skipsCleanup && !model.hasCredential(model.preferences.cleanupProvider.credentialKind))
     {
       return .providers
     }

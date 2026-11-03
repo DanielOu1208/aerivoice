@@ -160,7 +160,7 @@ final class DictationCoordinator: ObservableObject {
     let credentials = self.credentials
     let audio = self.audio
     let transcriptionKind = preferences.effectiveTranscriptionProvider.credentialKind
-    let cleanupKind: CredentialKind? = preferences.offlineMode ? nil : preferences.cleanupProvider.credentialKind
+    let cleanupKind: CredentialKind? = preferences.skipsCleanup ? nil : preferences.cleanupProvider.credentialKind
     let runtime = runtimeDiagnostics
     let preparationToken = runtime?.beginPreparation()
     let work = observeWork("launchPreparation")
@@ -201,7 +201,7 @@ final class DictationCoordinator: ObservableObject {
     case .idle, .success, .error:
       guard acceptsNewSessions, startTask == nil else { return }
       let transcriptionConfiguration = preferences.transcriptionConfiguration
-      skipsCleanup = preferences.offlineMode
+      skipsCleanup = preferences.skipsCleanup
       let cleanupConfiguration = preferences.cleanupConfiguration
       let cleanupMode = preferences.cleanupMode
       benchmark.begin(

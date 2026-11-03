@@ -45,6 +45,7 @@ final class AppPreferences: ObservableObject {
     static let transcriptionProvider = "transcriptionProvider"
     static let cartesiaTranscriptionModel = "cartesiaTranscriptionModel"
     static let transcriptionLanguage = "transcriptionLanguage"
+    static let cleanupEnabled = "cleanupEnabled"
     static let cleanupMode = "cleanupMode"
     static let cleanupCustomInstructions = "cleanupCustomInstructions"
     static let cleanupProvider = "cleanupProvider"
@@ -118,6 +119,11 @@ final class AppPreferences: ObservableObject {
       else if !offlineMode { RealtimeTranscriptionPrewarmer.prewarm(provider: transcriptionProvider) }
     }
   }
+  @Published var cleanupEnabled: Bool {
+    didSet { defaults.set(cleanupEnabled, forKey: Key.cleanupEnabled) }
+  }
+  /// Offline mode never cleans up, whatever `cleanupEnabled` says; its choice returns afterward.
+  var skipsCleanup: Bool { offlineMode || !cleanupEnabled }
   @Published var cleanupMode: CleanupMode {
     didSet { defaults.set(cleanupMode.rawValue, forKey: Key.cleanupMode) }
   }
@@ -301,6 +307,7 @@ final class AppPreferences: ObservableObject {
     self.defaults = defaults
     self.loginItemManager = loginItemManager
     offlineMode = defaults.bool(forKey: Key.offlineMode)
+    cleanupEnabled = defaults.object(forKey: Key.cleanupEnabled) as? Bool ?? true
     localTranscriptionModel = LocalTranscriptionModel(rawValue: defaults.string(forKey: Key.localTranscriptionModel) ?? "") ?? .nemotron
     appleSpeechLocale = defaults.string(forKey: Key.appleSpeechLocale) ?? ""
     cartesiaTranscriptionModel = CartesiaTranscriptionModel(

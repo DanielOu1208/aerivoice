@@ -190,6 +190,15 @@ struct CleanupSettingsPage: View {
 
   var body: some View {
     Form {
+      Section {
+        SettingsControlRow(title: "AI cleanup", message: cleanupToggleMessage) {
+          Toggle(
+            "AI cleanup",
+            isOn: Binding(
+              get: { preferences.cleanupEnabled && !preferences.offlineMode },
+              set: { preferences.cleanupEnabled = $0 }))
+        }
+      }
       Section("Cleanup style") {
         SettingsControlRow(title: "Style", message: preferences.cleanupMode.summary) {
           CleanupStylePicker(selection: $preferences.cleanupMode)
@@ -201,6 +210,7 @@ struct CleanupSettingsPage: View {
           CleanupInstructionsEditor(preferences: preferences)
         }
       }
+      .disabled(!preferences.cleanupEnabled)
       Section("Provider") {
         ProviderSelectionRow(
           model: model, kind: preferences.cleanupProvider.credentialKind, showsProviderIcon: false
@@ -280,6 +290,7 @@ struct CleanupSettingsPage: View {
           )
         }
       }
+      .disabled(!preferences.cleanupEnabled)
     }
     .disabled(preferences.offlineMode || model.changingOfflineMode)
     .safeAreaInset(edge: .top) {
@@ -299,6 +310,16 @@ struct CleanupSettingsPage: View {
         await catalog.refresh()
       }
     }
+  }
+
+  private var cleanupToggleMessage: String {
+    guard !preferences.skipsCleanup else {
+      let raw = "Pastes the transcript as transcribed, and sends it to no cleanup provider."
+      return preferences.effectiveTranscriptionProvider == .soniox
+        ? raw + " Soniox writes spoken punctuation and commands, such as \u{201C}period\u{201D} and \u{201C}new line\u{201D}, as words."
+        : raw
+    }
+    return "Fixes the transcript with the style and model below before pasting."
   }
 
   private var selectedModelName: String {
