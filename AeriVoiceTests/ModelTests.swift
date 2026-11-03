@@ -87,7 +87,7 @@ final class ModelTests: XCTestCase {
     // The Cartesia model never changes another provider's model.
     let soniox = TranscriptionConfiguration(provider: .soniox, cartesiaModel: .inkPreview)
     XCTAssertEqual(soniox.modelID, "stt-rt-v6")
-    XCTAssertEqual(soniox.modelDisplayName, "Soniox Realtime")
+    XCTAssertEqual(soniox.modelDisplayName, "Soniox Realtime v6")
   }
 
   @MainActor
