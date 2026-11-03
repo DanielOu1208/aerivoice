@@ -466,7 +466,7 @@ final class DictationCoordinator: ObservableObject {
       }
     }
 
-    state = NotchState(phase: .starting)
+    state = NotchState(phase: .starting, skipsCleanup: skipsCleanup)
     notch.present(state: state)
     let id = DictationSessionID()
     sessionID = id

@@ -7,7 +7,7 @@ Soniox v6
 Soniox transcription now uses its new v6 model, named Soniox Realtime v6 in Settings. Your key, Dictionary and spoken language carry over.
 
 Turn AI cleanup off
-Switch off AI Cleanup > AI cleanup in Settings to paste the transcript as transcribed. Nothing goes to a cleanup provider, and no cleanup key is needed. Cleanup stays on unless you change it.
+Switch off AI Cleanup > AI cleanup in Settings to paste the transcript as transcribed. Nothing goes to a cleanup provider, and no cleanup key is needed, so you can also turn it off during setup. Cleanup stays on unless you change it.
 
 What looks different with Soniox v6
 Prices are written as spoken, such as "15 dollars and 20 cents" instead of "$15.20". Hyphens in codes appear only when you say them. Spoken punctuation and commands such as "period" and "new line" reach cleanup as words, and AI cleanup applies them; how reliably depends on the style and model. With cleanup off they stay as words.

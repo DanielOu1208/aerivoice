@@ -358,7 +358,8 @@ private struct NotchContentView: View {
       if let notice = model.state.notice {
         WarningLine(message: notice)
       } else {
-        PulsingEllipsisLabel(label: "Refining", isPresented: model.isPresented)
+        PulsingEllipsisLabel(
+          label: model.state.skipsCleanup ? "Finishing" : "Refining", isPresented: model.isPresented)
       }
     case .success:
       // The text landed; a warning (raw text after a failed cleanup) replaces the check mark.

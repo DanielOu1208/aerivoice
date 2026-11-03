@@ -67,7 +67,12 @@ extension DictationCoordinatorTests {
     XCTAssertEqual(fixture.inserter.insertedText, "Raw transcript")
     XCTAssertEqual(fixture.credentials.readKinds, [.soniox])
     XCTAssertNil(fixture.cleaner.lastConfiguration)
-    XCTAssertFalse(fixture.notch.presentedStates.contains { $0.phase == .cleaning }, "Never shows Refining")
+    XCTAssertFalse(fixture.notch.presentedStates.contains { $0.phase == .cleaning })
+    let working = fixture.notch.presentedStates.filter {
+      $0.phase == .processing || $0.phase == .inserting
+    }
+    XCTAssertFalse(working.isEmpty)
+    XCTAssertTrue(working.allSatisfy(\.skipsCleanup), "Nothing is refined, so the notch doesn't say so")
     XCTAssertNil(fixture.notch.presentedStates.last?.warning)
     XCTAssertFalse(fixture.cleaner.didRequestWarmUp, "No connection is warmed for cleanup")
   }
@@ -81,5 +86,6 @@ extension DictationCoordinatorTests {
     try await waitUntil { fixture.coordinator.phase == .success }
     XCTAssertNotNil(fixture.cleaner.lastConfiguration, "The dictation under way keeps cleanup")
     XCTAssertEqual(fixture.inserter.insertedText, "Cleaned text.")
+    XCTAssertFalse(fixture.notch.presentedStates.contains(where: \.skipsCleanup))
   }
 }

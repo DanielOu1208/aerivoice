@@ -913,6 +913,8 @@ struct NotchState: Equatable, Sendable {
   var warning: String?
   /// Shown in place of Refining, such as when a press arrives before the dictation finished.
   var notice: String?
+  /// A dictation that skips cleanup has nothing to refine, so the notch doesn't say it does.
+  var skipsCleanup = false
 }
 
 enum AppError: LocalizedError {
