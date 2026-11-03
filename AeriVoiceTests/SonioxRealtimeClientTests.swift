@@ -18,7 +18,7 @@ final class SonioxRealtimeClientTests: XCTestCase {
 
   func testAutoDetectSendsNoLanguageHints() async throws {
     let message = try await configurationMessage(language: nil)
-    XCTAssertEqual(message["model"] as? String, "stt-rt-v5")
+    XCTAssertEqual(message["model"] as? String, "stt-rt-v6")
     XCTAssertEqual(message["enable_language_identification"] as? Bool, true)
     XCTAssertNil(message["language_hints"])
     XCTAssertNil(message["language_hints_strict"])

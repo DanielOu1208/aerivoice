@@ -62,7 +62,7 @@ enum TranscriptionProvider: String, CaseIterable, Codable, Identifiable, Sendabl
     switch self {
     case .soniox:
       Descriptor(
-        displayName: "Soniox", modelDisplayName: "Soniox Realtime", modelID: "stt-rt-v5",
+        displayName: "Soniox", modelDisplayName: "Soniox Realtime", modelID: "stt-rt-v6",
         credentialKind: .soniox, connectedBufferLimitBytes: 512_000,
         prewarmHost: "stt-rt.soniox.com")
     case .meta:

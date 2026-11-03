@@ -43,7 +43,7 @@ final class ModelTests: XCTestCase {
 
   func testTranscriptionProviderCatalogAndCapabilities() {
     XCTAssertEqual(TranscriptionProvider.allCases, [.soniox, .meta, .grok, .cartesia, .local])
-    XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v5")
+    XCTAssertEqual(TranscriptionProvider.soniox.modelID, "stt-rt-v6")
     XCTAssertEqual(TranscriptionProvider.meta.modelID, "muse-voice-transcribe-1.0")
     XCTAssertEqual(TranscriptionProvider.grok.modelID, "grok-voice-transcribe-2.0")
     XCTAssertEqual(TranscriptionProvider.cartesia.modelID, "ink-2")
@@ -86,7 +86,7 @@ final class ModelTests: XCTestCase {
     XCTAssertNil(preview.zeroDataRetentionRequired)
     // The Cartesia model never changes another provider's model.
     let soniox = TranscriptionConfiguration(provider: .soniox, cartesiaModel: .inkPreview)
-    XCTAssertEqual(soniox.modelID, "stt-rt-v5")
+    XCTAssertEqual(soniox.modelID, "stt-rt-v6")
     XCTAssertEqual(soniox.modelDisplayName, "Soniox Realtime")
   }
 
