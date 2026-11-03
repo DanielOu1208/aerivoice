@@ -18,6 +18,10 @@ Choose transcription and cleanup separately in Settings. Cloud providers use you
 
 For on-device transcription and Offline mode, see [Local dictation](LOCAL-DICTATION.md).
 
+## Soniox output
+
+Soniox Realtime uses the `stt-rt-v6` model. It writes prices and codes as spoken: "15 dollars and 20 cents", with hyphens in codes only when you say them. It writes spoken punctuation and commands such as "period", "new line" and "scratch that" as words for AI cleanup to apply. How reliably they are applied depends on the [cleanup style](CLEANUP-STYLES.md) and model; if cleanup fails and the raw transcript is pasted, they appear as words.
+
 ## Spoken language
 
 **Dictation → Transcription → Spoken language** defaults to Auto-detect, which sends no language to any provider. A chosen language is saved once for every cloud provider; the menu lists the languages the selected provider supports.

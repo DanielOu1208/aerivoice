@@ -1,0 +1,34 @@
+AeriVoice 0.2.6
+
+Update before January 15, 2027 if you use Soniox
+From that date Soniox refuses the way earlier versions of AeriVoice send your API key, and dictation through Soniox stops working on them.
+
+Soniox v6
+Soniox transcription now uses its new v6 model. Your key, Dictionary and spoken language carry over.
+
+What looks different with Soniox v6
+Prices are written as spoken, such as "15 dollars and 20 cents" instead of "$15.20". Hyphens in codes appear only when you say them. Spoken punctuation and commands such as "period" and "new line" reach cleanup as words, and AI cleanup applies them; how reliably depends on the style and model.
+
+Text survives a failed transcription
+If the connection drops or a provider doesn't finish in time, the text already shown is copied to the clipboard and the notch says so.
+
+A modifier-only shortcut starts only when you mean it
+Using its key for an ordinary combination ends the dictation that press started, and pressing Escape while holding the shortcut no longer starts another one.
+
+Paste works on every keyboard layout
+Dvorak and Turkish-F now paste instead of sending Command-K or Command-C.
+
+A press too early says so
+Pressing the shortcut while the last dictation is finishing plays the error sound and shows "Still finishing—press again when done".
+
+Key repeats stay out of your app
+Holding a shortcut's key after releasing its modifier no longer types that key into the focused app.
+
+Microphones that change during start-up
+A microphone that stops as it starts, as opening a Bluetooth headset's can, is now replaced, and a restart just after the start cue keeps your speech.
+
+Multi-input audio interfaces are heard
+A microphone on an interface with an unknown channel layout was converted to silence. All inputs are now averaged into mono.
+
+Cartesia no longer passes off provisional text as final
+If the connection closed before AeriVoice could send the end of the dictation, the partial transcript was pasted as though it were complete. It now counts as a failure, and the text already shown is copied instead.
