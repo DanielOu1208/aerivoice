@@ -60,20 +60,21 @@ final class URLSessionRealtimeTransport: NSObject, RealtimeWebSocketTransport,
   private var end: (closeCode: Int?, error: Error?)?
   private var endWaiters: [CheckedContinuation<Void, Never>] = []
 
-  /// - Parameters:
-  ///   - keepsSession: `cancel` closes the socket and keeps the URL session until
-  ///     `invalidate`, as Soniox does between dictations.
-  ///   - makeError: the provider's error for a failure.
-  convenience init(
-    url: URL, keepsSession: Bool = false, makeError: @escaping (RealtimeSocketFailure) -> Error
-  ) {
-    self.init(keepsSession: keepsSession, makeError: makeError) { $0.webSocketTask(with: url) }
+  /// - Parameter makeError: the provider's error for a failure.
+  convenience init(url: URL, makeError: @escaping (RealtimeSocketFailure) -> Error) {
+    self.init(keepsSession: false, makeError: makeError) { $0.webSocketTask(with: url) }
   }
 
-  /// - Parameter makeError: the provider's error for a failure. A URL that carries dictionary
-  ///   terms must not survive in it: Foundation keeps the URL in the errors it throws.
-  convenience init(request: URLRequest, makeError: @escaping (RealtimeSocketFailure) -> Error) {
-    self.init(keepsSession: false, makeError: makeError) { $0.webSocketTask(with: request) }
+  /// - Parameters:
+  ///   - keepsSession: `cancel` closes the socket and keeps the URL session until `invalidate`,
+  ///     as Soniox does between dictations.
+  ///   - makeError: the provider's error for a failure. A URL that carries dictionary terms must
+  ///     not survive in it: Foundation keeps the URL in the errors it throws.
+  convenience init(
+    request: URLRequest, keepsSession: Bool = false,
+    makeError: @escaping (RealtimeSocketFailure) -> Error
+  ) {
+    self.init(keepsSession: keepsSession, makeError: makeError) { $0.webSocketTask(with: request) }
   }
 
   private init(

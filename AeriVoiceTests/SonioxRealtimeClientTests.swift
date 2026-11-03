@@ -31,6 +31,29 @@ final class SonioxRealtimeClientTests: XCTestCase {
     XCTAssertEqual(message["enable_language_identification"] as? Bool, true)
     XCTAssertEqual((message["context"] as? [String: [String]])?["terms"], ["AeriVoice"])
   }
+
+  func testTheKeyTravelsWithTheConnectionAndNotInTheStartMessage() async throws {
+    let socket = SonioxTestSocket()
+    var requests: [URLRequest] = []
+    let client = SonioxRealtimeClient(makeTransport: { request in
+      requests.append(request)
+      return socket
+    })
+    try await client.connect(
+      configuration: TranscriptionConfiguration(provider: .soniox),
+      apiKey: "test-key", vocabulary: [], sessionID: DictationSessionID())
+    client.cancel()
+
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(requests.count, 1)
+    XCTAssertEqual(request.url?.absoluteString, "wss://stt-rt.soniox.com/transcribe-websocket")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+    let text = try XCTUnwrap(socket.sentText.first)
+    XCTAssertFalse(text.contains("test-key"), "The start message must not repeat the key")
+    let message = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+    XCTAssertNil(message["api_key"])
+  }
 }
 
 @MainActor
